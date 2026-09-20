@@ -278,6 +278,17 @@ else
       c_bad "语义自校验失败（零误报 / 还原 / 类型不变式 三者之一）"
       grep -E '✘|违反|不一致|误报' "$SLOG" | head -8 | sed 's/^/      /'
     fi
+    # ②b ★ 证明检查器不是"永远说 OK"：四处**定向人为破坏**必须逐条报红。
+    #     这是 S01 留下的教训 —— 自校验脚本必须先证明它抓得住错，
+    #     否则"490 个文件全过"可能只是因为它什么都没查。
+    if [ -x "$TOOLS/selftest/check_sema_probe.py" ]; then
+      if python3 "$TOOLS/selftest/check_sema_probe.py" >"$WORK/semaprobe.log" 2>&1; then
+        c_ok "语义检查器反证：四处人为破坏被逐条报红（不是永远说 OK）"
+      else
+        c_bad "语义检查器抓不住人为破坏 —— 它的\"全过\"不可信"
+        grep -E '✘|没抓到|判定' "$WORK/semaprobe.log" | head -6 | sed 's/^/      /'
+      fi
+    fi
   else
     c_skip "check_sema.py 未实现（S03 的交付物）"
   fi

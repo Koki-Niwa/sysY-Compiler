@@ -9,6 +9,8 @@
 540  compiler/tools/selftest/check_lexer.py
 128  compiler/tools/selftest/check_line_budget.py
 357  compiler/tools/selftest/check_parser.py
+707  compiler/tools/selftest/check_sema.py
+224  compiler/tools/selftest/check_sema_probe.py
 177  compiler/tools/selftest/check_tokens_meta.py
 171  compiler/tools/selftest/gen_manifest.py
 976  compiler/tools/selftest/independent_parser_check.py
@@ -16,10 +18,13 @@
 16  compiler/tools/selftest/probe.c
 78  compiler/tools/selftest/proto_kindseq.py
 132  compiler/tools/selftest/run.sh
+207  compiler/tools/selftest/run_sema_cases.py
+257  compiler/tools/selftest/sema_dump_format.py
 82  compiler/tools/selftest/unit/bench_lexer.cpp
 99  compiler/tools/selftest/unit/run.sh
 215  compiler/tools/selftest/unit/test_diagnostic.cpp
 496  compiler/tools/selftest/unit/test_lexer.cpp
 798  compiler/tools/selftest/unit/test_parser.cpp
+414  compiler/tools/selftest/unit/test_sema.cpp
 135  compiler/tools/selftest/unit/test_sourcefile.cpp
-368  compiler/tools/verify.sh
+379  compiler/tools/verify.sh

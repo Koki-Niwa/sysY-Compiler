@@ -1,0 +1,17 @@
+# ── 构建产物 ──
+build/
+*.o
+*.a
+*.so
+*.d
+
+# ── 编辑器 / 系统 ──
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# ── 临时文件 ──
+*.tmp
+*.log
+__pycache__/

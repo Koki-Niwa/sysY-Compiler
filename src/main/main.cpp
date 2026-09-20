@@ -8,8 +8,8 @@
 //     -S                 比赛调用形式，必须接受；本阶段忽略其含义
 //     -h, --help / -v, --version
 //
-// 【S00 的成功标准】解析命令行 → 读文件 → 按 --emit 输出。
-// llvm-ir 暂时只输出占位注释（S05 起才有真 IR）。前端一行都还没有。
+// 【S00】解析命令行 → 读文件 → 按 --emit 输出。
+// 【S01】--emit=tokens 已是【真实实现】（词法器）；其余 emit 仍是占位。
 //
 // 铁律 4：编译器本体不调用任何外部程序（这里没有 system/exec/fork）。
 // ============================================================================
@@ -19,8 +19,11 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
+#include "frontend/Lexer.h"
+#include "frontend/Token.h"
 #include "support/Diagnostic.h"
 #include "support/Errors.h"
 #include "support/SourceFile.h"
@@ -34,8 +37,11 @@ namespace {
 using sysy::DiagnosticEngine;
 using sysy::DiagLevel;
 using sysy::IOError;
+using sysy::Lexer;
 using sysy::SourceFile;
 using sysy::SourceLoc;
+using sysy::Token;
+using sysy::TokKind;
 using sysy::UsageError;
 
 // 退出码约定（run_tests.sh 依赖 0/非 0 区分；1 专指"编译错误"）
@@ -117,7 +123,7 @@ bool parseCommandLine(int argc, char** argv, Options& opts) {
     }
     if (a == "-v" || a == "--version") {
       std::cout << "sysy-compiler " << SYSY_COMPILER_VERSION
-                << " (front/middle end; stage S00)\n";
+                << " (front/middle end; stage S01 — lexer)\n";
       return false;
     }
     if (a == "-o") {
@@ -188,10 +194,55 @@ void writeWholeFile(const std::string& path, const std::string& content) {
   if (!out) throw IOError("error while closing '" + path + "'");
 }
 
-// —— 各 emit 模式的本阶段产物（全部是占位，不含任何真实编译逻辑）——
+// ============================================================================
+// --emit=tokens 的转储格式（phases/S01-lexer.md §4，**机器可校验，必须严格**）
+//
+//   <行>\t<列>\t<种类>\t<原文或长度>
+//
+//   * 每行一个 token，制表符分隔，最后一行固定是 `<行>\t<列>\tEOF\t-`
+//   * 第 4 列放【原文】而不是"长度"：这样 check_lexer.py 能直接做
+//     "第 4 列按顺序拼接 == 原文去空白去注释" 的逐字节自校验，不需要理解语义
+//   * **不写任何注释头/统计行** —— 拼接不变式要求每一行都是 token
+//
+// ⚠️ Invalid token【不输出】：它的原文正是"非法字符"（`@` / `"` …），
+//    与"去空白去注释"的期望串对不上。它已经通过诊断（stderr）报出来了。
+// ============================================================================
+std::string renderTokens(const SourceFile& src, DiagnosticEngine& diags) {
+  Lexer lexer(src, diags);
+  const std::vector<Token> tokens = lexer.tokenize();
+
+  std::string out;
+  // 粗估：平均每行 24 字节（86 KB 单行也不会有几万 token 以外的意外）
+  out.reserve(tokens.size() * 24 + 16);
+  char buf[32];
+  for (const Token& tok : tokens) {
+    // 行号
+    std::snprintf(buf, sizeof(buf), "%u", tok.loc.line);
+    out += buf;
+    out += '\t';
+    // 列号
+    std::snprintf(buf, sizeof(buf), "%u", tok.loc.col);
+    out += buf;
+    out += '\t';
+    // 种类
+    out += tokKindDumpName(tok.kind);
+    out += '\t';
+    // 原文
+    if (tok.kind == TokKind::EndOfFile) {
+      out += '-';
+    } else {
+      const std::string_view text = tokenText(tok, src);
+      out.append(text.data(), text.size());
+    }
+    out += '\n';
+  }
+  return out;
+}
+
+// —— 尚未实现的 emit 模式的占位产物 ——
 std::string renderPlaceholder(EmitKind kind, const Options& opts, const SourceFile& src) {
   std::string out;
-  out += "; SysY compiler (front/middle end) —— stage S00 skeleton\n";
+  out += "; SysY compiler (front/middle end) —— stage S01 (lexer)\n";
   out += "; input:  " + src.path() + "\n";
   out += "; emit:   " + std::string(toString(kind)) + "\n";
   out += "; lines:  " + std::to_string(src.lineCount()) + "\n";
@@ -199,7 +250,8 @@ std::string renderPlaceholder(EmitKind kind, const Options& opts, const SourceFi
          (opts.optLevel >= 1 ? "requested (not implemented yet)" : "off") + "\n";
   out += std::string("; structured IR layer: ") + (opts.structured ? "on" : "off") + "\n";
   out += ";\n";
-  out += "; 本阶段不实现任何前端/IR（见 phases/P00-skeleton.md §七）。\n";
+  out += "; 本阶段只有词法器是真实的（--emit=tokens 可用）；\n";
+  out += "; 语法/语义/IR 尚未实现（见 phases/S01-lexer.md §八）。\n";
   out += "; 交给后端的 .ll 契约（TESTING-GUIDE §3.3）：目标无关 ——\n";
   out += ";   不带 target triple、不带 target datalayout、\n";
   out += ";   函数属性里不带 target-cpu / target-features。\n";
@@ -208,7 +260,7 @@ std::string renderPlaceholder(EmitKind kind, const Options& opts, const SourceFi
 }
 
 void ensureReadable(const SourceFile& src) {
-  // 只做 I/O（读文件 + CRLF 规范化）。不解析、不分析 —— 那是 S01 之后的事。
+  // 只做 I/O（读文件 + CRLF 规范化）。不解析、不分析 —— 那是 S02 之后的事。
   (void)src.text();
 }
 
@@ -245,8 +297,11 @@ int main(int argc, char** argv) {
     if (opts.emit != EmitKind::Nothing) {
       std::string artifact;
       switch (opts.emit) {
-        case EmitKind::LlvmIr:
         case EmitKind::Tokens:
+          // ★ S01 的真实产物：词法分析（Token 转储，机器可校验）
+          artifact = renderTokens(src, diags);
+          break;
+        case EmitKind::LlvmIr:
         case EmitKind::Ast:
         case EmitKind::StructuredIr:
           artifact = renderPlaceholder(opts.emit, opts, src);
@@ -254,6 +309,8 @@ int main(int argc, char** argv) {
         case EmitKind::Nothing:
           break;
       }
+      // 【即使有词法错误也照常写出产物】：dump 是"可诊断的中间结果"，
+      // 丢掉它反而让 check_lexer.py 无从定位；错误通过 stderr + 退出码表达。
       writeWholeFile(opts.output, artifact);
     }
   } catch (const IOError& e) {

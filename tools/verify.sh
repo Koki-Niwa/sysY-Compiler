@@ -133,6 +133,32 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
+hdr "C2. 词法自校验（若 check_lexer.py 已实现 —— S01 起）"
+# ─────────────────────────────────────────────────────────────────────────────
+if [ -x "$TOOLS/selftest/check_lexer.py" ] && [ -x "$COMPILER" ]; then
+  LOG="$WORK/lex.log"
+  if python3 "$TOOLS/selftest/check_lexer.py" --compiler "$COMPILER" \
+        --jobs "$(nproc)" >"$LOG" 2>&1; then
+    SUM=$(grep -E '不变式成立|范围内验证' "$LOG" | tr -s ' ' | tr '\n' ' ')
+    c_ok "词法自校验：不变式成立 ${SUM:-通过}"
+  else
+    c_bad "词法自校验失败（词法器有 bug —— 拼接对不上原文）"
+    grep -E '失败|首处差异|✘' "$LOG" | head -8 | sed 's/^/      /'
+  fi
+  # 附带：540 个文件在 --emit=tokens 下不崩（退出码 0 或 1 均可，但不能是信号/超时）
+  CRASH=0
+  for f in $(find "$ROOT/tests" -name '*.sy' 2>/dev/null); do
+    "$COMPILER" "$f" --emit=tokens -o /dev/null >/dev/null 2>&1
+    rc=$?
+    [ "$rc" -gt 1 ] && CRASH=$((CRASH+1))
+  done
+  [ "$CRASH" = "0" ] && c_ok "540 个 .sy 在 --emit=tokens 下无一崩溃" \
+                     || c_bad "$CRASH 个文件在 --emit=tokens 下异常退出（>1 或信号）"
+else
+  c_skip "check_lexer.py 未实现（S01 的交付物）"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
 hdr "D. 全量回归（若 run_tests.sh 已实现）"
 # ─────────────────────────────────────────────────────────────────────────────
 # ── 门槛：编译器还产不出真实 IR 时，端到端必然失败，不应计为回归 ──

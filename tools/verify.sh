@@ -1,0 +1,213 @@
+#!/usr/bin/env bash
+# ============================================================================
+# verify.sh —— 会话交付质量关卡（由【用户】运行，不由开发 agent 运行）
+#
+# 设计意图：
+#   开发 agent 的报告是"自述"，本脚本是"事实核查"。两者独立，才能发现虚报与回归。
+#   agent 看不到本脚本的内容，所以它无法针对本脚本做应付。
+#
+# 用法：
+#   bash compiler/tools/verify.sh              # 自动探测当前能力，跑到能跑的程度
+#   bash compiler/tools/verify.sh --stage S11  # 指定阶段，启用该阶段的硬门禁
+#
+# 退出码：0 = 全部通过；1 = 有失败项
+# ============================================================================
+set -uo pipefail
+
+ROOT="/home/koki1/try"
+COMPILER="$ROOT/compiler/build/compiler"
+TESTS="$ROOT/tests"
+RUNTIME="$ROOT/runtime"
+TOOLS="$ROOT/compiler/tools"
+LLVM_BIN="/usr/lib/llvm-18/bin"
+WORK="${TMPDIR:-/tmp}/verify_$$"
+STAGE=""
+FAIL=0
+PASS=0
+SKIP=0
+
+mkdir -p "$WORK"
+trap 'rm -rf "$WORK"' EXIT
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --stage) STAGE="$2"; shift 2 ;;
+    *) echo "未知参数: $1"; exit 2 ;;
+  esac
+done
+
+c_ok()   { printf '  \033[32m✔\033[0m %s\n' "$1"; PASS=$((PASS+1)); }
+c_bad()  { printf '  \033[31m✘\033[0m %s\n' "$1"; FAIL=$((FAIL+1)); }
+c_skip() { printf '  \033[33m−\033[0m %s\n' "$1"; SKIP=$((SKIP+1)); }
+hdr()    { printf '\n\033[1m═══ %s ═══\033[0m\n' "$1"; }
+
+echo "════════════════════════════════════════════════════════════════"
+echo " 会话交付质量关卡    $(date '+%Y-%m-%d %H:%M:%S')   阶段=${STAGE:-自动}"
+echo "════════════════════════════════════════════════════════════════"
+
+# ─────────────────────────────────────────────────────────────────────────────
+hdr "A. 构建（零警告是硬要求）"
+# ─────────────────────────────────────────────────────────────────────────────
+if [ ! -f "$ROOT/compiler/CMakeLists.txt" ]; then
+  c_skip "尚无 CMakeLists.txt —— 【还没开工】（S00 完成后本项应通过）"
+else
+  BUILD_LOG="$WORK/build.log"
+  if cmake -S "$ROOT/compiler" -B "$ROOT/compiler/build" -G Ninja >"$BUILD_LOG" 2>&1 \
+     && cmake --build "$ROOT/compiler/build" >>"$BUILD_LOG" 2>&1; then
+    c_ok "cmake --build 退出码 0"
+    WARN=$(grep -ciE '\bwarning:' "$BUILD_LOG" || true)
+    if [ "$WARN" = "0" ]; then c_ok "零警告"
+    else c_bad "有 $WARN 条编译警告（要求零警告）"; grep -iE '\bwarning:' "$BUILD_LOG" | head -5 | sed 's/^/      /'; fi
+  else
+    c_bad "构建失败"; tail -20 "$BUILD_LOG" | sed 's/^/      /'
+  fi
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+hdr "B. 合规自查（对应铁律 2/3/4 —— 违反会被取消资格）"
+# ─────────────────────────────────────────────────────────────────────────────
+if [ -d "$ROOT/compiler/src" ]; then
+  EXT=$(grep -rnE '\b(system|popen|execv?p?|fork)\s*\(' "$ROOT/compiler/src" 2>/dev/null | grep -v '^\s*//' || true)
+  [ -z "$EXT" ] && c_ok "编译器本体没有调用外部程序" || { c_bad "发现外部进程调用"; echo "$EXT" | head -3 | sed 's/^/      /'; }
+
+  # 识别函数名/用例名做特判（运行时库签名表允许出现这些名字，故排除表所在文件）
+  HARD=$(grep -rniE '"(getint|getch|getfloat|getarray|getfarray|putint|putch|putfloat|putarray|putfarray|putf|matmul|transpose|fft|shuffle|crypto|huffman|sl1)"' \
+           "$ROOT/compiler/src" 2>/dev/null | grep -viE 'RuntimeLib|runtime_lib|RuntimeLibrary|Signature' || true)
+  [ -z "$HARD" ] && c_ok "没有识别函数名/用例名的特判" || { c_bad "疑似特判"; echo "$HARD" | head -3 | sed 's/^/      /'; }
+
+  CASE=$(grep -rniE '\.(sy|in|out)"|tests/' "$ROOT/compiler/src" 2>/dev/null || true)
+  [ -z "$CASE" ] && c_ok "没有引用测试用例路径" || { c_bad "引用了测试用例"; echo "$CASE" | head -3 | sed 's/^/      /'; }
+else
+  c_skip "compiler/src 不存在"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+hdr "C. 基础功能（编译 → 跑 → 比对 .out）"
+# ─────────────────────────────────────────────────────────────────────────────
+if [ ! -x "$COMPILER" ]; then
+  c_skip "编译器未构建，跳过功能验证"
+else
+  # 取一个最简单的用例探路
+  PROBE="$TESTS/final_arm/functional/00_main.sy"
+  if [ ! -f "$PROBE" ]; then
+    c_skip "找不到探路用例"
+  else
+    if "$COMPILER" "$PROBE" -o "$WORK/probe.ll" >"$WORK/c.log" 2>&1; then
+      c_ok "编译器能产出 .ll"
+      if [ -x "$LLVM_BIN/llvm-as" ]; then
+        if "$LLVM_BIN/llvm-as" "$WORK/probe.ll" -o /dev/null 2>"$WORK/as.log"; then
+          c_ok "llvm-as 通过（IR 合法）"
+          # 指令集封闭性检查
+          if [ -f "$ROOT/docs/handoff/iset.txt" ]; then
+            ALLOWED=$(grep -v '^#' "$ROOT/docs/handoff/iset.txt" | tr ' ' '\n' | grep -v '^$' | sort -u)
+            USED=$(grep -oE '^\s+%?[A-Za-z0-9_.]+\s*=\s*(tail\s+)?[a-z][a-z0-9.]*' "$WORK/probe.ll" \
+                   | grep -oE '[a-z][a-z0-9.]*$' | sort -u)
+            TERM=$(grep -oE '^\s+(ret|br|unreachable|call)\b' "$WORK/probe.ll" | awk '{print $1}' | sort -u)
+            BAD=$(printf '%s\n%s\n' "$USED" "$TERM" | sort -u | grep -v '^$' | while read -r i; do
+                    echo "$ALLOWED" | grep -qx "$i" || echo "$i"; done | tr '\n' ' ')
+            [ -z "$BAD" ] && c_ok "指令集封闭（无声明外指令）" || c_bad "出现声明外指令: $BAD"
+          fi
+          # alloca 位置检查（不变量 2）
+          if grep -q 'alloca' "$WORK/probe.ll"; then
+            BADALLOC=$(awk '/^define/{fn=1;blk=0} /^[a-zA-Z_.][^:]*:$/{blk++} /alloca/{if(blk>1) print FILENAME": "$0}' "$WORK/probe.ll" | head -3)
+            [ -z "$BADALLOC" ] && c_ok "alloca 全在入口块" || { c_bad "alloca 出现在非入口块"; echo "$BADALLOC" | sed 's/^/      /'; }
+          fi
+          # 禁止项
+          # 注意：只检查【非注释行】（LLVM 注释以 ; 开头）——避免误报文档性注释
+          NOWS=$(grep -v '^\s*;' "$WORK/probe.ll")
+          echo "$NOWS" | grep -qE '^target (triple|datalayout)|"target-(cpu|features)"' \
+            && c_bad "出现了 target 信息（契约要求目标无关）" || c_ok "目标无关（无 triple/datalayout/target-*）"
+          echo "$NOWS" | grep -qE '\binbounds\b' && c_bad "出现了 inbounds（策略是默认不加）" || c_ok "无 inbounds"
+          echo "$NOWS" | grep -qE '\b(nsw|nuw)\b'  && c_bad "出现 nsw/nuw（违反 D6）" || c_ok "无 nsw/nuw"
+          echo "$NOWS" | grep -qE '\bfcmp\s+one\b' && c_bad "fcmp 用了 one（应为 une）" || c_ok "fcmp 谓词正确"
+        else
+          c_bad "llvm-as 失败（IR 非法）"; head -5 "$WORK/as.log" | sed 's/^/      /'
+        fi
+      else
+        c_skip "llvm-as 不可用"
+      fi
+    else
+      c_bad "编译器执行失败"; tail -10 "$WORK/c.log" | sed 's/^/      /'
+    fi
+  fi
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+hdr "D. 全量回归（若 run_tests.sh 已实现）"
+# ─────────────────────────────────────────────────────────────────────────────
+# ── 门槛：编译器还产不出真实 IR 时，端到端必然失败，不应计为回归 ──
+#    判据不写死阶段号，而是**探测能力**：能否产出带函数定义的 .ll
+CAN_E2E=0
+if [ -x "$COMPILER" ]; then
+  PROBE_SY="$TESTS/final_arm/functional/00_main.sy"
+  if [ -f "$PROBE_SY" ] && "$COMPILER" "$PROBE_SY" -o "$WORK/gate.ll" >/dev/null 2>&1; then
+    # 至少要有一个 define 才算产出了真实 IR
+    grep -q '^define ' "$WORK/gate.ll" && CAN_E2E=1
+  fi
+fi
+
+if [ -x "$TOOLS/run_tests.sh" ] && [ "$CAN_E2E" = "0" ]; then
+  c_skip "端到端回归跳过：编译器尚未产出真实 IR（无 'define'）—— IRGen 在 S05–S07"
+elif [ -x "$TOOLS/run_tests.sh" ]; then
+  for T in x86 aarch64 riscv64; do
+    case "$T" in
+      aarch64) command -v qemu-aarch64 >/dev/null || { c_skip "$T：无 qemu"; continue; } ;;
+      riscv64) command -v qemu-riscv64 >/dev/null || { c_skip "$T：无 qemu"; continue; } ;;
+    esac
+    LOG="$WORK/rt_$T.log"
+    if bash "$TOOLS/run_tests.sh" --target "$T" --jobs "$(nproc)" >"$LOG" 2>&1; then
+      SUM=$(grep -E '^总计' "$LOG" | tail -1)
+      c_ok "回归 $T：${SUM:-通过}"
+    else
+      SUM=$(grep -E '^总计' "$LOG" | tail -1)
+      c_bad "回归 $T 有失败：${SUM:-见日志}"
+      grep -A 15 '失败的用例' "$LOG" | head -12 | sed 's/^/      /'
+    fi
+  done
+  # 结构化层开关一致性
+  if bash "$TOOLS/run_tests.sh" --no-structured --target x86 --jobs "$(nproc)" >"$WORK/rt_ns.log" 2>&1; then
+    c_ok "回归 --no-structured：通过"
+  else
+    c_bad "回归 --no-structured 有失败"
+  fi
+else
+  c_skip "run_tests.sh 未实现（S00 的交付物之一）"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+hdr "E. 契约验证（若玩具后端已实现 —— S11b）"
+# ─────────────────────────────────────────────────────────────────────────────
+if [ -x "$TOOLS/toy_backend" ] && [ "$CAN_E2E" = "1" ]; then
+  if bash "$TOOLS/run_tests.sh" --toy-backend --target x86 --jobs "$(nproc)" >"$WORK/rt_toy.log" 2>&1; then
+    c_ok "经【自研降级器】回归通过（契约真的够后端用）"
+  else
+    c_bad "自研降级器路径失败 —— 契约有缺口"
+    grep -A 15 '失败的用例' "$WORK/rt_toy.log" | head -12 | sed 's/^/      /'
+  fi
+else
+  c_skip "toy_backend 未实现（S11b 的交付物）"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+hdr "F. 阶段硬门禁"
+# ─────────────────────────────────────────────────────────────────────────────
+case "$STAGE" in
+  S11|S11b|S1[2-9]|S2[0-8])
+    echo "  本阶段要求：所有回归 100% 通过（245 个用例输出与 .out 逐字节相同）"
+    if [ "$FAIL" != "0" ]; then c_bad "有失败项 → 未达 S11 之后的硬门禁"; else c_ok "硬门禁满足"; fi
+    ;;
+  "") echo "  （未指定 --stage，跳过阶段门禁）" ;;
+  *)  echo "  阶段 $STAGE 的门禁：人工对照 SESSION-PLAN.md 的验收列" ;;
+esac
+
+# ─────────────────────────────────────────────────────────────────────────────
+echo
+echo "════════════════════════════════════════════════════════════════"
+printf " 结果：\033[32m%d 通过\033[0m  \033[31m%d 失败\033[0m  \033[33m%d 跳过\033[0m\n" "$PASS" "$FAIL" "$SKIP"
+if [ "$FAIL" = "0" ]; then
+  echo " 判定：✔ 可以进入下一个会话"
+else
+  echo " 判定：✘ 【不要进入下一个会话】—— 把上面的红项连同 agent 的报告一起贴给我"
+fi
+echo "════════════════════════════════════════════════════════════════"
+exit $([ "$FAIL" = "0" ] && echo 0 || echo 1)

@@ -1,0 +1,60 @@
+(CompUnit
+  (Decl :const :int
+    (VarDef N
+      (InitVal
+        (IntLit 2))))
+  (Decl :int
+    (VarDef g
+      (Dim
+        (IntLit 2))
+      (InitVal
+        (InitVal
+          (IntLit 1))
+        (InitVal
+          (IntLit 2)))))
+  (FuncDef f :float
+    (params
+      (Param a
+        (Dim))
+      (Param n))
+    (Block
+      (Decl :float
+        (VarDef s
+          (InitVal
+            (FloatLit 0.0))))
+      (Decl :int
+        (VarDef i
+          (InitVal
+            (IntLit 0))))
+      (While
+        (<
+          (LVal i)
+          (LVal n))
+        (Block
+          (=
+            (LVal s)
+            (+
+              (LVal s)
+              (LVal a
+                (LVal i))))
+          (=
+            (LVal i)
+            (+
+              (LVal i)
+              (IntLit 1)))))
+      (Return
+        (LVal s))))
+  (FuncDef main :int
+    (params)
+    (Block
+      (Decl :int
+        (VarDef x
+          (InitVal
+            (LVal N))))
+      (=
+        (LVal x)
+        (Call f
+          (LVal g)
+          (LVal x)))
+      (Return
+        (LVal x)))))

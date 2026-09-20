@@ -240,6 +240,63 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
+hdr "C4. 语义自校验（若 --emit=sema 已实现 —— S03 起）"
+# ─────────────────────────────────────────────────────────────────────────────
+# ⚠️ 探测判据不能只看"退出码 0"：现阶段 `--emit=sema` 会被当成未知取值而**回落到默认转储**，
+#    于是探测会误判成"已实现"，接着拿纯 AST 去比注解样例、报出假红。
+#    真正的能力信号是**输出里有没有 `(RuntimeLib` 头**（S03 格式契约的第一行）。
+CAN_SEMA=0
+if [ -x "$COMPILER" ] && [ -f "$TESTS/final_arm/functional/00_main.sy" ]; then
+  if "$COMPILER" --emit=sema "$TESTS/final_arm/functional/00_main.sy" -o "$WORK/sema_probe.txt" \
+        >/dev/null 2>&1 && grep -q '^(RuntimeLib' "$WORK/sema_probe.txt" 2>/dev/null; then
+    CAN_SEMA=1
+  fi
+fi
+if [ "$CAN_SEMA" = "0" ]; then
+  c_skip "语义转储跳过：--emit=sema 尚未实现（S03 的交付物）"
+else
+  # ① 规范样例对：转储必须与仓库里那份"已验证过能还原"的样例逐字节相同。
+  #    这是 §五 格式契约的可执行版本 —— 纯文字描述产生过歧义（记号该放前面还是后面、
+  #    下标换不换行），样例把歧义消掉了。
+  EX="$TOOLS/selftest/sema_dump_example"
+  if [ -f "$EX/example.sy" ] && [ -f "$EX/example.emit-sema.txt" ]; then
+    if "$COMPILER" --emit=sema "$EX/example.sy" -o "$WORK/ex.sema" >/dev/null 2>&1 \
+       && cmp -s "$WORK/ex.sema" "$EX/example.emit-sema.txt"; then
+      c_ok "语义转储：与规范样例逐字节相同"
+    else
+      c_bad "语义转储与规范样例不一致（违反 §五 的格式契约）"
+      diff "$EX/example.emit-sema.txt" "$WORK/ex.sema" 2>/dev/null | head -8 | sed 's/^/      /'
+    fi
+  fi
+  # ② 独立不变式检查器（轨 A 零误报 + 去注解还原 + 16 条类型不变式，一次扫描）
+  if [ -x "$TOOLS/selftest/check_sema.py" ]; then
+    SLOG="$WORK/sema.log"
+    if python3 "$TOOLS/selftest/check_sema.py" --compiler "$COMPILER" \
+          --jobs "$(nproc)" >"$SLOG" 2>&1; then
+      c_ok "语义自校验：零误报 + 去注解还原 + 类型不变式"
+    else
+      c_bad "语义自校验失败（零误报 / 还原 / 类型不变式 三者之一）"
+      grep -E '✘|违反|不一致|误报' "$SLOG" | head -8 | sed 's/^/      /'
+    fi
+  else
+    c_skip "check_sema.py 未实现（S03 的交付物）"
+  fi
+  # ③ 最小对照用例集
+  if [ -x "$TOOLS/selftest/run_sema_cases.py" ]; then
+    CLOG="$WORK/semacases.log"
+    if python3 "$TOOLS/selftest/run_sema_cases.py" --compiler "$COMPILER" >"$CLOG" 2>&1; then
+      SUM=$(grep -E '通过|总计' "$CLOG" | tail -1)
+      c_ok "最小对照用例集：${SUM:-全过}"
+    else
+      c_bad "最小对照用例集有失败"
+      grep -E '✘|失败|FAIL' "$CLOG" | head -8 | sed 's/^/      /'
+    fi
+  else
+    c_skip "run_sema_cases.py 未实现（S03 的交付物）"
+  fi
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
 hdr "D. 全量回归（若 run_tests.sh 已实现）"
 # ─────────────────────────────────────────────────────────────────────────────
 CAN_E2E="$CAN_IR"

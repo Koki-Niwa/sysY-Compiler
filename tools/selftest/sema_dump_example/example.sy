@@ -1,0 +1,16 @@
+const int N = 2;
+int g[2] = {1, 2};
+float f(int a[], int n) {
+  float s = 0.0;
+  int i = 0;
+  while (i < n) {
+    s = s + a[i];
+    i = i + 1;
+  }
+  return s;
+}
+int main() {
+  int x = N;
+  x = f(g, x);
+  return x;
+}

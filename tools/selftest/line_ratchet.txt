@@ -22,4 +22,4 @@
 496  compiler/tools/selftest/unit/test_lexer.cpp
 798  compiler/tools/selftest/unit/test_parser.cpp
 135  compiler/tools/selftest/unit/test_sourcefile.cpp
-311  compiler/tools/verify.sh
+368  compiler/tools/verify.sh

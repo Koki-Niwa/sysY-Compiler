@@ -1,0 +1,56 @@
+(CompUnit
+  (Decl :int
+    (VarDef g
+      (InitVal
+        (IntLit 0))))
+  (FuncDef main :int
+    (params)
+    (Block
+      (Decl :int
+        (VarDef i
+          (InitVal
+            (IntLit 0))))
+      (Decl :int
+        (VarDef s
+          (InitVal
+            (IntLit 0))))
+      (Decl :float
+        (VarDef f
+          (InitVal
+            (FloatLit 0.5))))
+      (While
+        (<
+          (LVal i)
+          (IntLit 10))
+        (Block
+          (=
+            (LVal f)
+            (+
+              (LVal f)
+              (LVal i)))
+          (=
+            (LVal s)
+            (%
+              (LVal s)
+              (IntLit 3)))
+          (=
+            (LVal i)
+            (+
+              (LVal i)
+              (IntLit 1)))))
+      (If
+        (LVal f)
+        (Block
+          (=
+            (LVal g)
+            (IntLit 1))))
+      (While
+        (LVal f)
+        (Block
+          (=
+            (LVal f)
+            (-
+              (LVal f)
+              (FloatLit 1.0)))))
+      (Return
+        (LVal s)))))

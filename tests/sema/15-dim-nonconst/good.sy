@@ -1,0 +1,5 @@
+int main() {
+  const int n = 4;
+  int a[n];
+  return 0;
+}

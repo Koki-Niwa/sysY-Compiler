@@ -44,6 +44,7 @@
 #include <vector>
 
 #include "frontend/Token.h"
+#include "frontend/Type.h"
 #include "support/SourceLoc.h"
 
 namespace sysy {
@@ -139,7 +140,19 @@ struct TypeSpec : Node {
 // ============================================================================
 // 表达式基类。**显式析构**（各语句/声明节点也各自实现了析构），
 // 理由见文件末尾的 destroyTree()。
+//
+// ★ S03 新增字段 `type`：**Sema 填写的值类型**（nullptr = 尚未分析）。
+//   * 为什么挂在节点上而不是放在一张旁表里：SemaDump 要把类型打印出来，
+//     而类型本身是 interned 的 `const Type*`（TypeContext 保证同构唯一），
+//     挂指针**零拷贝、无所有权问题**；旁表则要处理"哪棵树的哪个节点"的
+//     身份问题（指针在 Cast 插入后就变了）。
+//   * 对 `LVal` 来说这个字段是**值类型**（`a[i]` → int），它所指**对象**的
+//     类型另有 `objType` —— 两者不同，SemaDump 两个都要打（prompt §五(c)）。
+//   * 只增字段（带默认值），不改已有语义 ⇒ 不破坏 S02 的冻结契约：
+//     `--emit=ast` 的打印器根本不读这个字段。
 struct Expr : Node {
+  const Type* type = nullptr;
+
   Expr() = default;
   explicit Expr(SourceLoc l) : Node(l) {}
   ~Expr() override = default;
@@ -182,6 +195,10 @@ struct LVal : Expr {
   std::vector<std::unique_ptr<Expr>> indices;   // a[i][j] → 2 个下标
   // 赋值语句左侧标记（仅供 S03 判断"可否被赋值"；不影响树形与打印）
   bool isAssignTarget = false;
+  // ★ S03：LVal **所指对象**的类型（`int[2][3]` 之类），区别于继承来的
+  //   值类型 `type`（`a[i][j]` → `int`）。prompt §五(c) 要求两者都能从转储里
+  //   机械读出，**不许让检查器去查符号表**（那要处理遮蔽，容易出错）。
+  const Type* objType = nullptr;
 
   LVal() = default;
   explicit LVal(SourceLoc l) : Expr(l) {}
@@ -221,6 +238,35 @@ struct Binary : Expr {
   Binary(SourceLoc l, TokKind o, std::unique_ptr<Expr> a, std::unique_ptr<Expr> b)
       : Expr(l), op(o), lhs(std::move(a)), rhs(std::move(b)) {}
   const char* nodeKind() const override { return "Binary"; }
+};
+
+// ============================================================================
+// ★ S03 新增：隐式转换节点（规范 §3 Implicit Type Conversions）
+//
+//   SysY **没有**显式 cast 语法（规范 §1），但有 int ⇄ float 的隐式转换。
+//   决策（prompt §3.3）：**Sema 就地改写 AST，把转换物化成显式节点**，
+//   于是 IRGen 永远不需要"猜"类型，只需要按 `kind` 选
+//   `sitofp` / `fptosi` / `icmp ne`（ToBool）。
+//
+//   * `target` 既是"目标类型"，也 == 本节点的 `type`（值类型），
+//     两者必须相同 —— §七 的独立检查器会机械核对这一条。
+//   * `ToBool` 的语义是**值 ≠ 0**，不是"截断成 int"：
+//     `(int)0.5 == 0` 但 `if (0.5)` 必须为真 ⇒ IR 层是 `fcmp une x, 0.0`。
+//     ★ int 位置**不插** ToBool（多余转换会让 IR 变脏）。
+//
+//   ⚠️ 新增"持有 Expr 子节点"的节点类型 ⇒ **必须**在文件末尾的 destroyTree
+//      里登记它（S02 报告 §5 明确警告过这是唯一维护点）。否则 `1+1+…` 那种
+//      深链在析构时会栈溢出（S02 实测的 SIGSEGV）。
+// ============================================================================
+struct Cast : Expr {
+  CastKind kind = CastKind::IntToFloat;
+  const Type* target = nullptr;
+  std::unique_ptr<Expr> operand;
+
+  Cast() = default;
+  Cast(SourceLoc l, CastKind k, const Type* t, std::unique_ptr<Expr> e)
+      : Expr(l), kind(k), target(t), operand(std::move(e)) {}
+  const char* nodeKind() const override { return "Cast"; }
 };
 
 // ============================================================================
@@ -281,6 +327,10 @@ struct VarDef : Node {
   std::string name;
   std::vector<Dim> dims;
   std::unique_ptr<InitVal> init;   // nullptr = 没有初始化器
+  // ★ S03：Sema 解析出的**声明类型**（标量 / 数组），`--emit=sema` 打印成 `:t`。
+  //   与 `Decl::base` 的区别：这里已经把每一维的**长度**求值出来，
+  //   并区分"标量"与"数组"（`int[2]` vs `int`）。
+  const Type* semType = nullptr;
 
   VarDef() = default;
   explicit VarDef(SourceLoc l) : Node(l) {}
@@ -406,6 +456,8 @@ struct ReturnStmt : Stmt {
 struct Param : Node {
   std::string name;
   TypeSpec type;   // type.isFuncParam = true 恒成立（在形参位置上）
+  // ★ S03：Sema 解析出的形参类型（数组形参第 0 维是"未知"），`--emit=sema` 打印成 `:t`
+  const Type* semType = nullptr;
 
   Param() = default;
   explicit Param(SourceLoc l) : Node(l) {}
@@ -487,6 +539,9 @@ inline void destroyTree(Expr* root) {
     } else if (k == "Call") {
       auto* p = static_cast<Call*>(n);
       for (auto& c : p->args) stack.push_back(c.release());
+    } else if (k == "Cast") {
+      auto* p = static_cast<Cast*>(n);
+      stack.push_back(p->operand.release());
     }
     delete n;   // 到这一步 n 已无子节点 ⇒ 析构不会向下递归
   }

@@ -1,0 +1,72 @@
+(RuntimeLib
+  (RuntimeFunc getint :int)
+  (RuntimeFunc getch :int)
+  (RuntimeFunc getarray :int (Param a :t int[] (Dim)))
+  (RuntimeFunc getfloat :float)
+  (RuntimeFunc getfarray :int (Param a :t float[] (Dim)))
+  (RuntimeFunc putint :void (Param a :t int))
+  (RuntimeFunc putch :void (Param a :t int))
+  (RuntimeFunc putarray :void (Param n :t int) (Param a :t int[] (Dim)))
+  (RuntimeFunc putfloat :void (Param a :t float))
+  (RuntimeFunc putfarray :void (Param n :t int) (Param a :t float[] (Dim)))
+  (RuntimeFunc putf :void :uncallable)
+  (RuntimeFunc starttime :void)
+  (RuntimeFunc stoptime :void))
+(CompUnit
+  (Decl :int
+    (VarDef g :t int
+      (InitVal
+        (IntLit 0 :int))))
+  (FuncDef main :int
+    (params)
+    (Block
+      (Decl :int
+        (VarDef i :t int
+          (InitVal
+            (IntLit 0 :int))))
+      (Decl :int
+        (VarDef s :t int
+          (InitVal
+            (IntLit 0 :int))))
+      (Decl :float
+        (VarDef f :t float
+          (InitVal
+            (FloatLit 0.5 :float))))
+      (While
+        (< :int
+          (LVal i :obj int :int)
+          (IntLit 10 :int))
+        (Block
+          (=
+            (LVal f :obj float :float)
+            (+ :float
+              (LVal f :obj float :float)
+              (LVal i :obj int :int)))
+          (=
+            (LVal s :obj int :int)
+            (% :int
+              (LVal s :obj int :int)
+              (IntLit 3 :int)))
+          (=
+            (LVal i :obj int :int)
+            (+ :int
+              (LVal i :obj int :int)
+              (IntLit 1 :int)))))
+      (If
+        (Cast :ToBool :int
+          (LVal f :obj float :float))
+        (Block
+          (=
+            (LVal g :obj int :int)
+            (IntLit 1 :int))))
+      (While
+        (Cast :ToBool :int
+          (LVal f :obj float :float))
+        (Block
+          (=
+            (LVal f :obj float :float)
+            (- :float
+              (LVal f :obj float :float)
+              (FloatLit 1.0 :float)))))
+      (Return
+        (LVal s :obj int :int)))))

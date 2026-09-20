@@ -1,0 +1,3 @@
+int N = 4;
+int a[N];
+int main() { return 0; }

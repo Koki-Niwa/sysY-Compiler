@@ -1,0 +1,5 @@
+int f(int a[]) { return a[0]; }
+int main() {
+  int b[2][3];
+  return f(b);
+}

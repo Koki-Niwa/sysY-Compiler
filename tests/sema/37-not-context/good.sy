@@ -1,0 +1,6 @@
+int main() {
+  int b = 1;
+  if (!b) return 1;
+  int a = b;
+  return a;
+}

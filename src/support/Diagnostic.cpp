@@ -61,6 +61,18 @@ void DiagnosticEngine::report(DiagLevel level, SourceLoc loc, const std::string&
   if (level == DiagLevel::Warning) ++warningCount_;
 }
 
+void DiagnosticEngine::report(DiagLevel level, SourceLoc loc, const char* code,
+                             const std::string& msg) {
+  Diagnostic d;
+  d.level = level;
+  d.loc = loc;
+  d.message = msg;
+  if (code != nullptr) d.code = code;
+  diags_.push_back(std::move(d));
+  if (level == DiagLevel::Error) ++errorCount_;
+  if (level == DiagLevel::Warning) ++warningCount_;
+}
+
 void DiagnosticEngine::reportWithSnippet(DiagLevel level, SourceLoc loc,
                                          const std::string& msg) {
   Diagnostic d;
@@ -86,6 +98,12 @@ std::string DiagnosticEngine::renderHeader(const Diagnostic& d) const {
   }
   out += toString(d.level);
   out += ": ";
+  // ★ S03：编号插在 `error:` **之后**（见 Diagnostic.h 的 code 字段注释）。
+  if (!d.code.empty()) {
+    out += '[';
+    out += d.code;
+    out += "] ";
+  }
   out += d.message;
   return out;
 }

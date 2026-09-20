@@ -46,6 +46,13 @@ add_executable(compiler
   src/frontend/ParserStmtExpr.cpp
   src/frontend/AstPrinter.cpp
   src/frontend/AstReader.cpp
+  src/frontend/ConstEval.cpp
+  src/frontend/RuntimeLib.cpp
+  src/frontend/Sema.cpp
+  src/frontend/SemaStmt.cpp
+  src/frontend/SemaExpr.cpp
+  src/frontend/SemaDecl.cpp
+  src/frontend/SemaDump.cpp
 )
 
 target_include_directories(compiler PRIVATE src)

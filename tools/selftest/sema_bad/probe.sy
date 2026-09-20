@@ -1,0 +1,23 @@
+// 探针源：给 §七 的"人为改坏输入"提供一份真实的 --emit=sema 转储。
+//   * f = f + i;   → 生成 (Cast :IntToFloat :float (LVal i))  ⇒ 可用来违反 #2
+//   * s = s % 3;   → 生成 (% :int ... (IntLit 3 :int))        ⇒ 可用来违反 #3
+//   * if (f)       → 生成 (Cast :ToBool :int (LVal f))        ⇒ 可用来违反 #10
+//   * while (f)    → 条件被 ToBool 包住                        ⇒ 可用来违反 #11
+int g = 0;
+int main() {
+  int i = 0;
+  int s = 0;
+  float f = 0.5;
+  while (i < 10) {
+    f = f + i;
+    s = s % 3;
+    i = i + 1;
+  }
+  if (f) {
+    g = 1;
+  }
+  while (f) {
+    f = f - 1.0;
+  }
+  return s;
+}

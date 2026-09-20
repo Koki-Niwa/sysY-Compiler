@@ -1,0 +1,5 @@
+int main() {
+  const int N = 1;
+  int M = 2;
+  return N;
+}

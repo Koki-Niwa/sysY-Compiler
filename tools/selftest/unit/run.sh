@@ -4,11 +4,10 @@
 #   test_sourcefile  P00 验证标准 §6.8（CRLF 行列号一致性）
 #   test_diagnostic  P00 验证标准 §6.7（诊断输出格式）
 #   test_lexer       S01 验证标准 §7.9（13 个边界用例 + 转储格式 + 拼接不变式）
-#   test_parser      S02 验证标准 §10 第 4/6/9 项（★轨 B 的 34 条树形断言 + §5 例子
-#                    逐字节 + 内部往返 + 错误恢复 + CLI 往返冒烟）
-#
-# 用 clang++ --std=c++17（与 CMake 构建同一套标准）直接编译，不需要任何测试框架。
-# 通过标准：每个测试程序都退出 0。退出码：0 = 全通过，1 = 有失败。
+#   test_parser      S02 §10 第 4/6/9 项（34 条树形断言 + §5 例子逐字节 + 往返 + 恢复）
+#   test_sema        S03 §10 第 ⑨ 项（转换插入的节点形状、作用域遮蔽、★诊断条数探针、
+#                    3 万个 `+` / 4000 层块 / 2000 层花括号不崩）
+# 用 clang++ --std=c++17 直接编译，无第三方框架；每个程序退出 0 即通过。
 #
 # 用法: bash compiler/tools/selftest/unit/run.sh [--keep]
 # ============================================================================
@@ -23,16 +22,17 @@ KEEP=0
 [ "${1:-}" = "--keep" ] && KEEP=1
 mkdir -p "$WORK"
 
-# clang++ 会因 "unused command line argument" 对 mingw 目标告警，与本项目无关；
-# 这里只加项目自己的严格开关（-Werror 保证零警告是硬门禁）。
+# -Werror：零警告是硬门禁（clang++ 对 mingw 目标的告警与本项目无关，已避开）。
 FLAGS=(--std=c++17 -Wall -Wextra -Wpedantic -Werror -O1 -I"$SRC")
 SUPPORT=("$SRC/support/SourceFile.cpp" "$SRC/support/Diagnostic.cpp")
 FRONTEND=("$SRC/frontend/Lexer.cpp" "$SRC/frontend/Parser.cpp"
           "$SRC/frontend/ParserStmtExpr.cpp" "$SRC/frontend/AstPrinter.cpp"
-          "$SRC/frontend/AstReader.cpp")
-# ⚠️ 上面这一行必须与 CMakeLists.txt 的源文件列表一致：前端现在有四个 .cpp
-#    （Parser 拆成 Parser.cpp + ParserStmtExpr.cpp，打印器拆成
-#      AstPrinter.cpp + AstReader.cpp），少一个就是链接期的 undefined reference。
+          "$SRC/frontend/AstReader.cpp"
+          "$SRC/frontend/ConstEval.cpp" "$SRC/frontend/RuntimeLib.cpp"
+          "$SRC/frontend/Sema.cpp" "$SRC/frontend/SemaStmt.cpp"
+          "$SRC/frontend/SemaExpr.cpp" "$SRC/frontend/SemaDecl.cpp"
+          "$SRC/frontend/SemaDump.cpp")
+# ⚠️ 上面必须与 CMakeLists.txt 的源文件列表一致，少一个就是 undefined reference。
 
 # 每个测试：名字 | 需要的源文件（--bench 条目只构建，不参与"通过"判定）
 TESTS=(
@@ -40,7 +40,7 @@ TESTS=(
   "test_diagnostic|${SUPPORT[*]}"
   "test_lexer|${SUPPORT[*]} ${FRONTEND[*]}"
   "test_parser|${SUPPORT[*]} ${FRONTEND[*]}"
-)
+  "test_sema|${SUPPORT[*]} ${FRONTEND[*]}")
 BENCHES=(
   "bench_lexer|${SUPPORT[*]} ${FRONTEND[*]}"
 )

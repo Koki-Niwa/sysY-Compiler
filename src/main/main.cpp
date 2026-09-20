@@ -28,6 +28,8 @@
 #include "frontend/AstPrinter.h"
 #include "frontend/Lexer.h"
 #include "frontend/Parser.h"
+#include "frontend/Sema.h"
+#include "frontend/SemaDump.h"
 #include "frontend/Token.h"
 #include "support/Diagnostic.h"
 #include "support/Errors.h"
@@ -60,13 +62,14 @@ enum ExitCode {
   kInterrupted = 130,
 };
 
-enum class EmitKind { LlvmIr, Tokens, Ast, StructuredIr, Nothing };
+enum class EmitKind { LlvmIr, Tokens, Ast, Sema, StructuredIr, Nothing };
 
 const char* toString(EmitKind k) {
   switch (k) {
     case EmitKind::LlvmIr:       return "llvm-ir";
     case EmitKind::Tokens:       return "tokens";
     case EmitKind::Ast:          return "ast";
+    case EmitKind::Sema:         return "sema";
     case EmitKind::StructuredIr: return "structured-ir";
     case EmitKind::Nothing:      return "nothing";
   }
@@ -77,6 +80,7 @@ bool parseEmitKind(const std::string& s, EmitKind& out) {
   if (s == "llvm-ir")       { out = EmitKind::LlvmIr;       return true; }
   if (s == "tokens")        { out = EmitKind::Tokens;       return true; }
   if (s == "ast")           { out = EmitKind::Ast;          return true; }
+  if (s == "sema")          { out = EmitKind::Sema;         return true; }
   if (s == "structured-ir") { out = EmitKind::StructuredIr; return true; }
   if (s == "nothing")       { out = EmitKind::Nothing;      return true; }
   return false;
@@ -102,9 +106,10 @@ const char* kHelpText =
     "\n"
     "选项:\n"
     "  -o <file>          输出文件（必填）\n"
-    "  --emit=<kind>      产物类型: llvm-ir（默认）| tokens | ast | structured-ir | nothing\n"
+    "  --emit=<kind>      产物类型: llvm-ir（默认）| tokens | ast | sema | structured-ir | nothing\n"
     "  --from-ast         输入是 --emit=ast 的产物（S-表达式），而不是 SysY 源码\n"
     "                     （S02 起用于验证：source --emit=ast --from-ast --emit=ast）\n"
+    "                     --emit=sema 时同样接受；产物不保证能被读回（单向视图）\n"
     "  -O0 / -O1          优化级别（-O1 目前只记录，S17 起生效）\n"
     "  --optimize         -O1 的别名（tools/run_tests.sh 使用长选项名）\n"
     "  -S                 接受但不解释（比赛调用形式: compiler a.sy -S -o a.s）\n"
@@ -133,7 +138,7 @@ bool parseCommandLine(int argc, char** argv, Options& opts) {
     }
     if (a == "-v" || a == "--version") {
       std::cout << "sysy-compiler " << SYSY_COMPILER_VERSION
-                << " (front/middle end; stage S01 — lexer)\n";
+                << " (front/middle end; stage S03 — type system + sema)\n";
       return false;
     }
     if (a == "-o") {
@@ -151,14 +156,14 @@ bool parseCommandLine(int argc, char** argv, Options& opts) {
       if (i + 1 >= args.size()) throw UsageError("option '--emit' requires a value");
       if (!parseEmitKind(args[++i], opts.emit))
         throw UsageError("unknown --emit kind '" + args[i] +
-                         "' (expected: llvm-ir | tokens | ast | structured-ir | nothing)");
+                         "' (expected: llvm-ir | tokens | ast | sema | structured-ir | nothing)");
       continue;
     }
     if (a.rfind("--emit=", 0) == 0) {
       const std::string v = a.substr(7);
       if (!parseEmitKind(v, opts.emit))
         throw UsageError("unknown --emit kind '" + v +
-                         "' (expected: llvm-ir | tokens | ast | structured-ir | nothing)");
+                         "' (expected: llvm-ir | tokens | ast | sema | structured-ir | nothing)");
       continue;
     }
     if (a == "-O0") { opts.optLevel = 0; continue; }
@@ -277,10 +282,35 @@ std::string renderAst(const SourceFile& src, DiagnosticEngine& diags, bool fromA
   return sysy::printAst(*unit);
 }
 
+// ============================================================================
+// --emit=sema 的真实实现（S03）
+//
+//   `--emit=ast` 的产物是**冻结契约**（490 个文件的 SHA-256 基线 + 490 次
+//   往返），所以 Sema **绝不允许**在 `--emit=ast` 的路径上跑：
+//   `--emit=ast` 在打印之后立刻结束，树里没有 `Cast`、也没有类型注解。
+//   （prompt §五 的第 1 条硬约束："--emit=ast 的输出一个字节都不许变"。）
+//
+//   `--emit=sema` = 同一棵树 + Sema 就地改写（填类型、插 Cast）+ 带注解的转储。
+//   它的产物**不要求**能被 `--from-ast` 读回（单向的调试/验证视图）。
+// ============================================================================
+std::string renderSema(const SourceFile& src, DiagnosticEngine& diags, bool fromAst) {
+  std::unique_ptr<CompUnit> unit;
+  if (fromAst) {
+    unit = sysy::parseAstText(src.text(), diags);
+  } else {
+    Lexer lexer(src, diags);
+    Parser parser(lexer, diags);
+    unit = parser.parseCompUnit();
+  }
+  if (unit == nullptr) return std::string();   // 契约上不会发生（Parser 保证非空）
+  sysy::runSema(*unit, diags);
+  return sysy::printSemaDump(*unit);
+}
+
 // —— 尚未实现的 emit 模式的占位产物 ——
 std::string renderPlaceholder(EmitKind kind, const Options& opts, const SourceFile& src) {
   std::string out;
-  out += "; SysY compiler (front/middle end) —— stage S02 (parser + AST)\n";
+  out += "; SysY compiler (front/middle end) —— stage S03 (type system + sema)\n";
   out += "; input:  " + src.path() + "\n";
   out += "; emit:   " + std::string(toString(kind)) + "\n";
   out += "; lines:  " + std::to_string(src.lineCount()) + "\n";
@@ -288,8 +318,9 @@ std::string renderPlaceholder(EmitKind kind, const Options& opts, const SourceFi
          (opts.optLevel >= 1 ? "requested (not implemented yet)" : "off") + "\n";
   out += std::string("; structured IR layer: ") + (opts.structured ? "on" : "off") + "\n";
   out += ";\n";
-  out += "; 本阶段真实可用：--emit=tokens（词法）、--emit=ast / --from-ast（语法+AST）。\n";
-  out += "; 语义/IR 尚未实现（S03 起）。\n";
+  out += "; 本阶段真实可用：--emit=tokens（词法）、--emit=ast / --from-ast（语法+AST）、\n";
+  out += ";               --emit=sema（语义分析 + 类型注解转储）。\n";
+  out += "; IR 尚未实现（S05 起）。\n";
   out += "; 交给后端的 .ll 契约（TESTING-GUIDE §3.3）：目标无关 ——\n";
   out += ";   不带 target triple、不带 target datalayout、\n";
   out += ";   函数属性里不带 target-cpu / target-features。\n";
@@ -342,6 +373,10 @@ int main(int argc, char** argv) {
         case EmitKind::Ast:
           // ★ S02 的真实产物：语法分析 + AST（S-表达式）
           artifact = renderAst(src, diags, opts.fromAst);
+          break;
+        case EmitKind::Sema:
+          // ★ S03 的真实产物：语义分析 + 类型注解转储
+          artifact = renderSema(src, diags, opts.fromAst);
           break;
         case EmitKind::LlvmIr:
         case EmitKind::StructuredIr:

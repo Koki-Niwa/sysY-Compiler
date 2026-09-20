@@ -71,18 +71,52 @@ struct NoAnno {
 template <class Anno>
 class SexpLayout {
  public:
+  // 单行模式（**S04 增加，默认关闭**）：把"换行 + 缩进"换成"一个空格"，
+  // 于是同一棵树被折叠成一行。用途只有一个 —— `--emit=initplan` 里
+  // `StoreExpr` 的动作行（§4.3）。**默认关闭 ⇒ `--emit=ast`/`--emit=sema`
+  // 的输出一个字节都不会变**（这两个 emit 的既有路径从不调用它）。
+  void setSingleLine(bool on) { singleLine_ = on; }
+
   std::string run(const CompUnit& unit) {
-    out_.reserve(4096);
-    mark_ = -1;          // 还没有任何一行
+    reset();
+    Anno::preamble(out_);   // `--emit=sema` 的 `(RuntimeLib ...)` 头（ast 为空实现）
+    runRoot(unit);
+    flushPending();
+    out_ += '\n';           // 结尾换行（与 §五 例子逐字节一致）
+    return std::move(out_);
+  }
+
+  // ── ★ S04 增加：只打印一棵**子树的正文**，供 `--emit=initplan` 复用 ──────
+  //   为什么必须复用而不是自己写一份：prompt §4.3 要求 `StoreExpr` 的子节点
+  //   "沿用 `--emit=sema` 的表达式格式（同一个打印器、同一套类型记号）"。
+  //   于是这里的输出与 `--emit=sema` 里同一棵子树的正文**逐字节相同**，
+  //   包括类型注解 —— 这份"同一性"由单元测试机械核对。
+  //
+  //   【调用方契约】返回的文本**是一个不完整的片段**：
+  //     * 不含 `Anno::preamble`
+  //     * 不含节点头与它自己的类型注解（调用方按输出顺序自己写，顺序见 §4.3）
+  //     * **含**节点自己的右括号，以及所有子节点的完整文本（含结尾换行）
+  //     调用方直接 append，不要自己补行首缩进（布局已经带了）。
+  //   【后置】`setSingleLine(true)` 时整棵子树折叠成一行（**没有**结尾换行）。
+  std::string runExpr(const Expr& e) {
+    reset();
+    out_.clear();           // 丢弃 preamble（本函数只返回子树正文）
+    runRoot(e);
+    flushPending();
+    return std::move(out_);
+  }
+
+ private:
+  void reset() {
+    out_.clear();
+    mark_ = -1;             // 还没有任何一行
     deferred_ = 0;
     stack_.clear();
+  }
 
-    // 注解策略的"头"（`--emit=sema` 是 `(RuntimeLib ...)` 那一整块；
-    // `--emit=ast` 什么都不写）。它自带结尾换行，所以 mark_ 仍保持 -1：
-    // 紧接着的 line(0) 不会再补一个换行。
-    Anno::preamble(out_);
-
-    pushNode(unit, 0);
+  // 打开根节点并跑完整个工作栈（不收尾 —— 收尾由调用方决定加不加换行）。
+  void runRoot(const Node& root) {
+    pushNode(root, 0);
     while (!stack_.empty()) {
       // ⚠️ 必须**按值**取帧再 pop：下面几乎每个分支都会往 stack_ 里压东西，
       //    而 std::vector 扩容会让任何指向元素的引用/指针失效。
@@ -97,14 +131,8 @@ class SexpLayout {
         case Step::EmptyLine:  line(f.depth); break;
       }
     }
-
-    // ★ 根节点的右括号也落在"最深那一行"（规则与树内所有节点一致）。
-    flushPending();
-    out_ += '\n';   // 结尾换行（与 §5 例子逐字节一致）
-    return std::move(out_);
   }
 
- private:
   enum class Step {
     OpenNode,    // 打开一个 AST 节点（node 有效）
     CloseNode,   // 给一个节点收账（depth/node 有效）
@@ -135,16 +163,36 @@ class SexpLayout {
     stack_.push_back(Frame{Step::OpenParam, nullptr, &p, depth});
   }
 
-  // 起一行：换行 + 缩进 2*depth。
+  // 起一行：换行 + 缩进 2*depth（**单行模式下**：一个空格）。
   // ⚠️ 换行之前必须先把"攒在同一行末尾的注解与右括号"落下去 —— 否则它们
   //    会被带到下一行去（括号就配错了位置）。
+  // ⚠️ 单行模式的这三个分支必须**逐字**对应多行版：`singleLine_ == false` 时
+  //    它逐字节等于 S02 的实现（`check_ast_baseline.py` 是门禁）。
   void line(int depth) {
+    if (singleLine_) {
+      if (mark_ >= 0) flushPending();
+      out_ += ' ';
+      mark_ = depth;
+      return;
+    }
     if (mark_ >= 0) {
       flushPending();
       out_ += '\n';
     }
     out_.append(static_cast<size_t>(depth) * 2, ' ');
     mark_ = depth;
+  }
+
+  // 写一个节点的头部（`(Name` 或 `(`+运算符 …）。所有 `openXxx` 都走这里，
+  // 于是"行首怎么起"只有一份实现 —— S04 加单行模式时不必改二十处调用点。
+  void writeHead(int depth, const char* head) {
+    line(depth);
+    out_ += head;
+  }
+  void writeHead(int depth, const std::string& head) { line(depth); out_ += head; }
+  void writeHead(int depth, const std::string_view& head) {
+    line(depth);
+    out_.append(head.data(), head.size());
   }
 
   void flushPending() { out_.append(static_cast<size_t>(deferred_), ')'); deferred_ = 0; }
@@ -169,16 +217,14 @@ class SexpLayout {
   // ⚠️ 子节点一律**逆序**压栈：栈是后进先出，只有逆序压才能保证
   //    "最左边的子节点最先打印"。顺序错了就是树形变了 —— 往返与基线会立刻抓到。
   void openCompUnit(const CompUnit& n, int depth) {
-    line(depth);
-    out_ += "(CompUnit";
+    writeHead(depth, "(CompUnit");
     for (size_t i = n.items.size(); i-- > 0;) {
       if (n.items[i] != nullptr) pushNode(*n.items[i], depth + 1);
     }
   }
 
   void openDecl(const Decl& n, int depth) {
-    line(depth);
-    out_ += "(Decl";
+    writeHead(depth, "(Decl");
     if (n.isConst) out_ += " :const";
     out_ += ' ';
     out_ += btypeSymbol(n.base);
@@ -188,8 +234,7 @@ class SexpLayout {
   }
 
   void openVarDef(const VarDef& n, int depth) {
-    line(depth);
-    out_ += "(VarDef ";
+    writeHead(depth, "(VarDef ");
     out_ += n.name;
     Anno::varDefHead(out_, n);          // ★ S03 的加法点：`:t <类型>`
     // 打印顺序：dims… → init。逆序压 ⇒ 先压 init，再倒着压 dims。
@@ -198,14 +243,12 @@ class SexpLayout {
   }
 
   void openDim(const Dim& n, int depth) {
-    line(depth);
-    out_ += "(Dim";
+    writeHead(depth, "(Dim");
     if (n.expr != nullptr) pushNode(*n.expr, depth + 1);
   }
 
   void openFuncDef(const FuncDef& n, int depth) {
-    line(depth);
-    out_ += "(FuncDef ";
+    writeHead(depth, "(FuncDef ");
     out_ += n.name;
     out_ += ' ';
     out_ += n.isVoid ? ":void" : btypeSymbol(n.retType);
@@ -222,22 +265,19 @@ class SexpLayout {
   }
 
   void openParams(const FuncDef& n, int depth) {
-    line(depth);
-    out_ += "(params";
+    writeHead(depth, "(params");
     for (size_t i = n.params.size(); i-- > 0;) pushParam(n.params[i], depth + 1);
   }
 
   void openParam(const Param& p, int depth) {
-    line(depth);
-    out_ += "(Param ";
+    writeHead(depth, "(Param ");
     out_ += p.name;
     Anno::paramHead(out_, p);           // ★ S03 的加法点：`:t <类型>`
     for (size_t i = p.type.dims.size(); i-- > 0;) pushNode(p.type.dims[i], depth + 1);
   }
 
   void openInitVal(const InitVal& n, int depth) {
-    line(depth);
-    out_ += "(InitVal";
+    writeHead(depth, "(InitVal");
     for (size_t i = n.list.size(); i-- > 0;) {
       if (n.list[i] != nullptr) pushNode(*n.list[i], depth + 1);
     }
@@ -245,8 +285,7 @@ class SexpLayout {
   }
 
   void openBlock(const BlockStmt& n, int depth) {
-    line(depth);
-    out_ += "(Block";
+    writeHead(depth, "(Block");
     for (size_t i = n.items.size(); i-- > 0;) {
       if (n.items[i] != nullptr) pushNode(*n.items[i], depth + 1);
     }
@@ -307,8 +346,7 @@ class SexpLayout {
 
   // `(Else ...)` 这一节不是 AST 节点（只是把 else 分支包起来），所以单独一帧。
   void openElse(const Stmt& s, int depth) {
-    line(depth);
-    out_ += "(Else";
+    writeHead(depth, "(Else");
     pushNode(s, depth + 1);
   }
 
@@ -316,7 +354,7 @@ class SexpLayout {
   void openExpr(const Expr& e, int depth) {
     const std::string_view k = e.nodeKind();
 
-    line(depth);
+    writeHead(depth, "");   // 只起一行；头部由下面各分支按节点种类追加
     // ★ S03 的加法点全部在"节点头之后、第一个子节点之前"（prompt §五(b)）：
     //   它只往**已有的行**上插记号，行的划分与括号的落位一动不动。
     if (k == "IntLit") {
@@ -384,6 +422,7 @@ class SexpLayout {
   std::string out_;
   int mark_ = -1;                 // 当前行号（-1 = 还没有任何一行）
   int deferred_ = 0;              // 攒在"最后一行"的右括号总数
+  bool singleLine_ = false;       // ★ S04：折叠成一行（只给 --emit=initplan 用）
   std::vector<Frame> stack_;      // ★ 显式工作栈：迭代遍历的全部状态，内存 O(树深)
 };
 

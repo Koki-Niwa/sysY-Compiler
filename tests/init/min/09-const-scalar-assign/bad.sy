@@ -1,0 +1,6 @@
+int main() {
+  int a[4] = {1,2,3,4};
+  const int b = 1;
+  b = 9;
+  return a[0];
+}

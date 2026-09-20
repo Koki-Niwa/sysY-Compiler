@@ -40,5 +40,39 @@ namespace sysy {
 //         以 '\n' 结尾。不抛异常、不修改 tree。
 std::string printSemaDump(const CompUnit& unit);
 
+// ============================================================================
+// ★ S04 增加的两个**加法**接口（`--emit=initplan` 复用同一份打印器）
+//
+//   prompt §4.3 要求 `--emit=initplan` 里 `StoreExpr` 的子节点"沿用
+//   `--emit=sema` 的表达式格式（**同一个打印器、同一套类型记号**）"。
+//   把布局复制一份出来是最糟的做法（两份真相必然漂移），所以这里把
+//   `SemaAnno` 的两个部件**导出**给 InitLoweringDump 用：
+//
+//     * `appendValueTypeAnnotation` —— 某种表达式节点的类型记号写法
+//     * `printExprBody`             —— 一棵式子树的正文（不含节点头与注解）
+//
+//   两处都是**只读**：`printSemaDump` 与 `--emit=ast` 的输出逐字节不变。
+// ============================================================================
+
+// 【前置】无。
+// 【后置】按 `--emit=sema` 的写法，把表达式节点 e 的**值类型记号**追加到 out。
+//         （`IntLit`/`FloatLit`/`LVal`/`Call`/`Cast` 写在末尾，`Unary`/`Binary`
+//          写在运算符之后 —— 顺序由调用方决定，本函数只管记号本身。）
+void appendValueTypeAnnotation(std::string& out, const Expr& e);
+
+// 【前置】indent >= 0。
+// 【后置】把 `(RuntimeLib ...)` 整块（13 个运行时函数各一行）追加到 out：
+//         首行缩进 indent 个空格，`RuntimeFunc` 各行的缩进是 indent + 2，
+//         **不含结尾换行**。与 `printSemaDump` 用的是同一份实现 ⇒ 两个 emit
+//         的这 13 行（在缩进之外）逐字节相同（`--emit=initplan` 的契约要求）。
+void appendRuntimeLibBlock(std::string& out);
+
+// 【前置】无（e 可以在 Sema 之前或之后）。
+// 【后置】返回 e 的**子树正文**（用与 `--emit=sema` 相同的布局与记号渲染）：
+//         不含节点头、不含 e 自己的类型注解，但**含**e 自己的右括号与所有
+//         子节点的完整文本，以换行结尾。`singleLine = true` 时折叠成一行
+//         （无换行）。不抛异常、不修改 e。
+std::string printExprBody(const Expr& e, bool singleLine = false);
+
 }  // namespace sysy
 #endif  // SYSY_FRONTEND_SEMADUMP_H

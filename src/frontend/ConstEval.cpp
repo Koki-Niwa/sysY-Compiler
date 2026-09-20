@@ -255,6 +255,34 @@ bool ConstEvaluator::eval(const Expr& root, ConstValue& out, const char* code) {
         }
         continue;
       }
+      if (k == "Cast") {
+        // ★ S04 补：Sema 会把隐式转换**物化成 `Cast` 节点**（prompt §3.3），
+        //   而本文件此前没有这一支 —— 于是 `float b[2] = {1,2};` 这种
+        //   "整型初值给浮点数组"的**合法**写法折不出常量，初始化计划里退化成
+        //   `:zero` / `StoreExpr`。规范 §3 ConstDef 8 明确允许它
+        //   （"the initializer list of a floating-point array may contain
+        //     integer constants"），所以这一支是**必须**有的。
+        //   三种转换的语义与 S05 的 IRGen 必须逐位一致（铁律 6）：
+        //     IntToFloat → 单精度舍入；FloatToInt → 向零截断 + 越界饱和；
+        //     ToBool     → "值 ≠ 0"（**不是**截断：`(int)0.5 == 0` 但 `if (0.5)` 为真）
+        const auto& n = static_cast<const Cast&>(e);
+        const ConstValue v = f.acc;
+        switch (n.kind) {
+          case CastKind::IntToFloat:
+            if (v.isFloat) return fail(e, "Cast :IntToFloat 的操作数已经是 float");
+            deliver(ConstValue::ofFloat(static_cast<float>(v.i)));
+            break;
+          case CastKind::FloatToInt:
+            if (!v.isFloat) return fail(e, "Cast :FloatToInt 的操作数不是 float");
+            deliver(ConstValue::ofInt(satFptosi(v.f)));
+            break;
+          case CastKind::ToBool:
+            if (!v.isFloat) return fail(e, "Cast :ToBool 的操作数不是 float");
+            deliver(ConstValue::ofInt(v.f != 0.0f ? 1 : 0));
+            break;
+        }
+        continue;
+      }
       if (k == "LVal") {
         const auto& n = static_cast<const LVal&>(e);
         // 到达的下标结果必须是 int 常量
@@ -279,16 +307,27 @@ bool ConstEvaluator::eval(const Expr& root, ConstValue& out, const char* code) {
         if (cur != nullptr && cur->isArray()) {
           return fail(e, "常量数组 '" + n.name + "' 的下标个数不足");
         }
-        if (f.offset < 0 || f.offset >= static_cast<int64_t>(obj->elems.size())) {
+        // ★ S04：元素值不再是扁平数组，而是"默认值 + 稀疏非零表"（ConstEval.h）。
+        //   越界判据从 `elems.size()` 换成 `elementCount(type)` —— 两者在旧表示下
+        //   恒等，但新表示下 `elems` 已经不存在了（大数组不许物化）。
+        const int64_t n_elems = obj->count();
+        if (f.offset < 0 || f.offset >= n_elems) {
           return fail(e, "常量数组 '" + n.name + "' 的下标越界");
         }
-        deliver(obj->elems[static_cast<size_t>(f.offset)]);
+        deliver(obj->getElem(static_cast<uint64_t>(f.offset)));
         continue;
       }
       return fail(e, std::string("不是常量表达式（结点 ") + std::string(k) + "）");
     }
 
     // ── state == 0：进入节点 ────────────────────────────────────────────
+    if (k == "Cast") {
+      const auto& n = static_cast<const Cast&>(e);
+      if (n.operand == nullptr) return fail(e, "Cast 缺少操作数");
+      st.push_back(Frame{&e, 1, 0, ConstValue(), ConstValue(), 0});
+      st.push_back(Frame{n.operand.get(), 0, 0, ConstValue(), ConstValue(), 0});
+      continue;
+    }
     if (k == "Unary") {
       const auto& n = static_cast<const Unary&>(e);
       if (n.op != TokKind::Plus && n.op != TokKind::Minus) {
@@ -318,8 +357,7 @@ bool ConstEvaluator::eval(const Expr& root, ConstValue& out, const char* code) {
         if (obj->type != nullptr && obj->type->isArray()) {
           return fail(e, "常量数组 '" + n.name + "' 必须完全下标后才能取值");
         }
-        if (obj->elems.empty()) return fail(e, "常量 '" + n.name + "' 没有值");
-        deliver(obj->elems[0]);
+        deliver(obj->scalar);
         continue;
       }
       st.push_back(Frame{&e, 1, 0, ConstValue(), ConstValue(), 0});

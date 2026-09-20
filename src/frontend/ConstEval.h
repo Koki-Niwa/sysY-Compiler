@@ -32,6 +32,8 @@
 #define SYSY_FRONTEND_CONSTEVAL_H
 
 #include <cstdint>
+#include <cstring>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -51,16 +53,58 @@ struct ConstValue {
   ConstValue() = default;
   static ConstValue ofInt(int32_t v) { ConstValue c; c.isFloat = false; c.i = v; return c; }
   static ConstValue ofFloat(float v) { ConstValue c; c.isFloat = true;  c.f = v; return c; }
+
+  // IEEE-754 单精度的位模式（C++17 下 float 一定是 binary32）。
+  // ★ 用它做"Noop 判定"：`-0.0` 与 `+0.0` 的**位模式不同**，前者不能被
+  //   §4.3 的 `:data` 省略（省掉就把 -0.0 变成了 +0.0）。
+  uint32_t bits() const {
+    uint32_t b = 0;
+    if (isFloat) {
+      static_assert(sizeof(float) == sizeof(uint32_t), "float must be 32-bit");
+      std::memcpy(&b, &f, sizeof(b));
+    } else {
+      b = static_cast<uint32_t>(i);
+    }
+    return b;
+  }
+  // 位模式相同即"同一个值"（用来判断某个元素是不是可以省掉/被删掉）。
+  bool sameBits(const ConstValue& o) const {
+    return isFloat == o.isFloat && bits() == o.bits();
+  }
 };
 
-// ── 一个已定义的符号常量：类型 + **扁平行主序**的元素值 ────────────────────
-//   标量：elems.size() == 1
-//   数组：elems.size() == elementCount(type)（行主序展开）
-//   "数组元素取值是**要求的**"（prompt §四）：`const int T[16]; ... T[3]`
-//   必须能在编译期求出来，所以这里真的把每个元素算出来存下。
+// ── 一个已定义的符号常量：**默认值 + 稀疏非零覆盖**（S04 改造）────────────
+//   为什么不再是 `std::vector<ConstValue> elems`：
+//     那会按 **12 字节/元素**物化。`const int a[50000000] = {1};` 是合法程序，
+//     却要 600 MB；而 `const int a[100000000] = {};` 要 1.2 GB（D8 上限 8 GB，
+//     但一个源码里的数字就能吃掉 1/7）。
+//   ⇒ 表示改成
+//       * `scalar`    —— 标量常量的值（数组时不看它）
+//       * `dflt`      —— 所有**没有被显式写出**的元素的初值（规范 §3 ConstDef 6.3：0）
+//       * `nonzero`   —— 只存**与 dflt 不同**的元素：下标(行主序扁平) → 值
+//     于是"几乎全零"的 const 大数组只花 O(1) 内存，而小数组的查找是 O(log k)。
+//   ★ 这与 `InitPlan::GlobalData` 是**同一种表示**（prompt §一 的第 3 条硬约束）：
+//     两处都回答"默认值 + 稀疏非零"，于是"大数组不物化"是结构上成立的，
+//     而不是靠每处各自记得不要展开。
 struct ConstObject {
   const Type* type = nullptr;
-  std::vector<ConstValue> elems;
+  ConstValue scalar;                                // 标量对象的值
+  ConstValue dflt = ConstValue::ofInt(0);           // 数组：未显式写出元素的初值
+  std::map<uint64_t, ConstValue> nonzero;           // 数组：下标 → 与 dflt 不同的元素
+
+  int64_t count() const { return type == nullptr ? 0 : elementCount(type); }
+  bool isScalar() const { return type == nullptr || !type->isArray(); }
+
+  // 【前置】无。【后置】返回第 i 个元素（越界 / 未覆盖 ⇒ dflt）。
+  ConstValue getElem(uint64_t i) const {
+    const auto it = nonzero.find(i);
+    return it == nonzero.end() ? dflt : it->second;
+  }
+  // 【后置】写入第 i 个元素；与 dflt 位模式相同 ⇒ 从稀疏表里删掉（保持"最小"）。
+  void setElem(uint64_t i, const ConstValue& v) {
+    if (v.sameBits(dflt)) nonzero.erase(i);
+    else nonzero[i] = v;
+  }
 };
 
 // ── 查表接口（由 Sema 实现；ConstEval 不依赖符号表的任何细节）─────────────

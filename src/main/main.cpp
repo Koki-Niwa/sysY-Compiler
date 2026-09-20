@@ -3,7 +3,7 @@
 //
 //   compiler <input> -o <output> [选项]
 //     -o <file>          输出文件（必填）
-//     --emit=<kind>      llvm-ir（默认）| tokens | ast | structured-ir | nothing
+//     --emit=<kind>      llvm-ir（默认）| tokens | ast | sema | initplan | structured-ir | nothing
 //     --from-ast         输入是 --emit=ast 产出的 S-表达式文本（往返验证用）
 //     -O1                开启性能优化（S00 只记录，不实现）
 //     -S                 比赛调用形式，必须接受；本阶段忽略其含义
@@ -12,6 +12,8 @@
 // 【S00】解析命令行 → 读文件 → 按 --emit 输出。
 // 【S01】--emit=tokens 已是【真实实现】（词法器）。
 // 【S02】--emit=ast 与 --from-ast 已是【真实实现】（语法分析器 + AST 打印/读取器）。
+// 【S03】--emit=sema 已是【真实实现】（语义分析 + 类型注解转储）。
+// 【S04】--emit=initplan 已是【真实实现】（初始化器降级 → 初始化计划）。
 //        其余 emit 仍是占位。
 //
 // 铁律 4：编译器本体不调用任何外部程序（这里没有 system/exec/fork）。
@@ -26,6 +28,8 @@
 
 #include "frontend/Ast.h"
 #include "frontend/AstPrinter.h"
+#include "frontend/InitLowering.h"
+#include "frontend/InitLoweringDump.h"
 #include "frontend/Lexer.h"
 #include "frontend/Parser.h"
 #include "frontend/Sema.h"
@@ -62,7 +66,7 @@ enum ExitCode {
   kInterrupted = 130,
 };
 
-enum class EmitKind { LlvmIr, Tokens, Ast, Sema, StructuredIr, Nothing };
+enum class EmitKind { LlvmIr, Tokens, Ast, Sema, InitPlan, StructuredIr, Nothing };
 
 const char* toString(EmitKind k) {
   switch (k) {
@@ -70,6 +74,7 @@ const char* toString(EmitKind k) {
     case EmitKind::Tokens:       return "tokens";
     case EmitKind::Ast:          return "ast";
     case EmitKind::Sema:         return "sema";
+    case EmitKind::InitPlan:     return "initplan";
     case EmitKind::StructuredIr: return "structured-ir";
     case EmitKind::Nothing:      return "nothing";
   }
@@ -81,6 +86,7 @@ bool parseEmitKind(const std::string& s, EmitKind& out) {
   if (s == "tokens")        { out = EmitKind::Tokens;       return true; }
   if (s == "ast")           { out = EmitKind::Ast;          return true; }
   if (s == "sema")          { out = EmitKind::Sema;         return true; }
+  if (s == "initplan")      { out = EmitKind::InitPlan;     return true; }
   if (s == "structured-ir") { out = EmitKind::StructuredIr; return true; }
   if (s == "nothing")       { out = EmitKind::Nothing;      return true; }
   return false;
@@ -106,7 +112,8 @@ const char* kHelpText =
     "\n"
     "选项:\n"
     "  -o <file>          输出文件（必填）\n"
-    "  --emit=<kind>      产物类型: llvm-ir（默认）| tokens | ast | sema | structured-ir | nothing\n"
+    "  --emit=<kind>      产物类型: llvm-ir（默认）| tokens | ast | sema | initplan\n"
+    "                     | structured-ir | nothing\n"
     "  --from-ast         输入是 --emit=ast 的产物（S-表达式），而不是 SysY 源码\n"
     "                     （S02 起用于验证：source --emit=ast --from-ast --emit=ast）\n"
     "                     --emit=sema 时同样接受；产物不保证能被读回（单向视图）\n"
@@ -138,7 +145,7 @@ bool parseCommandLine(int argc, char** argv, Options& opts) {
     }
     if (a == "-v" || a == "--version") {
       std::cout << "sysy-compiler " << SYSY_COMPILER_VERSION
-                << " (front/middle end; stage S03 — type system + sema)\n";
+                << " (front/middle end; stage S04 — init lowering)\n";
       return false;
     }
     if (a == "-o") {
@@ -307,6 +314,36 @@ std::string renderSema(const SourceFile& src, DiagnosticEngine& diags, bool from
   return sysy::printSemaDump(*unit);
 }
 
+// ============================================================================
+// --emit=initplan 的真实实现（S04）
+//
+//   `--emit=sema` 的产物也是**冻结契约**（样例对 + 490 个文件的类型不变式），
+//   所以 initplan **不能**在 sema 的路径上顺手加东西：它自己一条流水线
+//   （parse → Sema → InitLowering → dump）。
+//
+//   ★ Sema 必须跑：初始化计划里的 `StoreExpr` 子节点要用 Sema 插好的
+//     类型注解与 `Cast` 打印（§4.3："沿用 --emit=sema 的表达式格式"），
+//     而且 `ConstEvaluator` 查"符号常量"要靠 Sema 建的 consts_ 表。
+//   ★ Sema 报错时**照常产出计划**（与 tokens/ast/sema 一样：dump 是"可诊断的
+//     中间结果"，丢掉它反而无从定位）；错误通过 stderr + 退出码表达。
+//     InitLowering 对残缺树是防御性的（处处带边界检查），不会崩。
+// ============================================================================
+std::string renderInitPlan(const SourceFile& src, DiagnosticEngine& diags, bool fromAst) {
+  std::unique_ptr<CompUnit> unit;
+  if (fromAst) {
+    unit = sysy::parseAstText(src.text(), diags);
+  } else {
+    Lexer lexer(src, diags);
+    Parser parser(lexer, diags);
+    unit = parser.parseCompUnit();
+  }
+  if (unit == nullptr) return std::string();   // 契约上不会发生（Parser 保证非空）
+  sysy::Sema sema(diags);
+  sema.run(*unit);
+  const sysy::InitPlan plan = sysy::runInitLowering(*unit, sema);
+  return sysy::printInitPlanDump(plan);
+}
+
 // —— 尚未实现的 emit 模式的占位产物 ——
 std::string renderPlaceholder(EmitKind kind, const Options& opts, const SourceFile& src) {
   std::string out;
@@ -319,7 +356,8 @@ std::string renderPlaceholder(EmitKind kind, const Options& opts, const SourceFi
   out += std::string("; structured IR layer: ") + (opts.structured ? "on" : "off") + "\n";
   out += ";\n";
   out += "; 本阶段真实可用：--emit=tokens（词法）、--emit=ast / --from-ast（语法+AST）、\n";
-  out += ";               --emit=sema（语义分析 + 类型注解转储）。\n";
+  out += ";               --emit=sema（语义分析 + 类型注解转储）、\n";
+  out += ";               --emit=initplan（初始化计划）。\n";
   out += "; IR 尚未实现（S05 起）。\n";
   out += "; 交给后端的 .ll 契约（TESTING-GUIDE §3.3）：目标无关 ——\n";
   out += ";   不带 target triple、不带 target datalayout、\n";
@@ -377,6 +415,10 @@ int main(int argc, char** argv) {
         case EmitKind::Sema:
           // ★ S03 的真实产物：语义分析 + 类型注解转储
           artifact = renderSema(src, diags, opts.fromAst);
+          break;
+        case EmitKind::InitPlan:
+          // ★ S04 的真实产物：初始化器降级 → 初始化计划（§4.3 的冻结格式）
+          artifact = renderInitPlan(src, diags, opts.fromAst);
           break;
         case EmitKind::LlvmIr:
         case EmitKind::StructuredIr:

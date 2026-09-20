@@ -72,7 +72,14 @@ void Sema::run(CompUnit& unit) {
     error(mainDef_->loc, D::kMain, "main 的返回类型必须是 int（规范 §3.1 CompUnit 1）");
   }
 
-  scopes_.pop();
+  // ★ S04：**故意不弹全局层**。理由：`Sema` 实现 `ConstEnv`，而
+  //   `InitLowering` 在 `runInitPlan` 里要在 Sema 结束**之后**再求值一遍
+  //   全局初始化器（它必须复用这里存的符号常量）。若在这里 `scopes_.pop()`，
+  //   常量环境就空了，于是 `const int A = 3; const int B = A + 2;` 里的 B
+  //   会静默变成 0 —— 实测就是这样（`--emit=initplan` 把 B 印成 `:zero`，
+  //   而它应该是 5）。
+  //   `scopes_` 一共只有两层（运行时库层 + 全局层），留着全局层不占什么内存，
+  //   对 `run()` 的其它行为也没有影响（`run()` 每次自己压/弹函数与块作用域）。
 }
 
 const ConstObject* Sema::findConst(const std::string& name) const {

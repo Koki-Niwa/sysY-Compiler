@@ -144,15 +144,17 @@ void Sema::doVarDef(Frame& f) {
   initConstOk_ = true;
   initType_ = ty;
   initSym_ = slot;
-  if (materialize) {
-    int64_t n = elementCount(ty);
-    if (n < 0) n = 1;
-    initScratch_.assign(static_cast<size_t>(n), ConstValue::ofInt(0));
-  } else {
-    // 不物化：initScratch_ 保持空。写入路径 evalConstInto 本来就带边界检查，
-    // 所以求值（以及"是不是常量表达式"的判定）照常进行，只是不落盘。
-    initScratch_.clear();
-  }
+  //   ★ S04：占位表示是 ConstObject（默认值 + 稀疏非零表），所以这里的"分配"
+  //     是 **O(1)** 的。**不许**把它退回成"按元素 assign"：
+  //     `const int a[50000000] = {1};` 是合法程序，按元素物化要 **600 MB**
+  //     （prompt §一 的第 3 条硬约束；同一条约束的另一半见 ConstEval.h 的
+  //      ConstObject 注释与 InitPlan.h 的 GlobalData）。
+  //     非 const 对象照样写这份占位（写入路径带边界检查），但 `initMaterialize_`
+  //     是 false ⇒ doVarDefFinal 不会把它挂到符号上。
+  initScratch_ = ConstObject{};
+  initScratch_.type = ty;
+  initScratch_.dflt = ConstValue::ofInt(0);
+  initScratch_.scalar = ConstValue::ofInt(0);
 
   pushInitRoot(v->init.get(), ty, needConst);  // 在 VarDefFinal 之前执行
 }
@@ -160,10 +162,12 @@ void Sema::doVarDef(Frame& f) {
 // 初始化器处理完毕后：把求出的常量挂到符号上（供后续维度/常量表达式引用）。
 void Sema::doVarDefFinal(Frame&) {
   if (initMaterialize_ && initConstOk_ && initSym_ != nullptr) {
-    consts_.push_back(ConstObject{initType_, std::move(initScratch_)});
+    // 标量对象：值存在 `scalar` 里（数组才看 `nonzero` / `dflt`）。
+    if (initType_ != nullptr && !initType_->isArray()) initScratch_.scalar = initScratch_.dflt;
+    consts_.push_back(std::move(initScratch_));
     initSym_->cval = &consts_.back();
   }
-  initScratch_.clear();
+  initScratch_ = ConstObject{};
   initNeedConst_ = false;
   initMaterialize_ = false;
   initSym_ = nullptr;
@@ -334,8 +338,18 @@ void Sema::evalConstInto(Expr& e, int64_t pos, const Type* elemType) {
       v = ConstValue::ofFloat(static_cast<float>(v.i));
     }
   }
-  if (pos >= 0 && pos < static_cast<int64_t>(initScratch_.size())) {
-    initScratch_[static_cast<size_t>(pos)] = v;
+  if (pos >= 0) {
+    const int64_t n = initScratch_.count();
+    if (n > 0 && pos < n) {
+      const uint64_t idx = static_cast<uint64_t>(pos);
+      if (initScratch_.isScalar()) {
+        initScratch_.dflt = v;          // 标量：唯一那个元素就是"默认值"槽
+        initScratch_.scalar = v;
+        initScratch_.nonzero.clear();
+      } else {
+        initScratch_.setElem(idx, v);
+      }
+    }
   }
 }
 

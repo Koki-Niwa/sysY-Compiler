@@ -23,38 +23,52 @@ void appendTypeToken(std::string& out, const Type* t) {
 }
 
 // ============================================================================
+// `(RuntimeLib ...)` 这一整块（13 个运行时函数各占一行）。
+//
+// ★ 为什么抽成自由函数（S04）：`--emit=initplan` 的格式契约要求它的前 13 行
+//   与 `--emit=sema` **逐字节相同**。若 initplan 自己再拼一遍这 13 行，那就有
+//   两份真相：运行时签名表一变（比如以后加一个函数），两份立刻不一致，而
+//   没有任何东西会拦住它。⇒ 只有这一份实现，两个 emit 都调用它。
+//
+// 【后置】out 里追加 `(RuntimeLib …)`（**不含**结尾换行；最后一个 `)` 是
+//         RuntimeLib 的收尾括号，与 `--emit=sema` 的写法一致）。
+// ============================================================================
+void appendRuntimeLib(std::string& out, int indent) {
+  const std::vector<RuntimeFunc>& funcs = runtimeFunctions();
+  out.append(static_cast<size_t>(indent), ' ');
+  out += "(RuntimeLib\n";
+  for (size_t i = 0; i < funcs.size(); ++i) {
+    const RuntimeFunc& f = funcs[i];
+    out.append(static_cast<size_t>(indent + 2), ' ');
+    out += "(RuntimeFunc ";
+    out += f.name;
+    appendTypeToken(out, f.sig->ret);
+    if (f.sig->uncallable) {
+      out += " :uncallable";
+    } else {
+      for (size_t k = 0; k < f.sig->params.size(); ++k) {
+        out += " (Param ";
+        // 运行时函数的形参在 SysY 源码里不可见，名字取 sylib.h 里的原名。
+        out += (k == 0 && f.sig->params.size() > 1) ? 'n' : 'a';
+        out += " :t ";
+        appendTypeText(out, f.sig->params[k]);
+        if (rank(f.sig->params[k]) > 0) out += " (Dim)";
+        out += ')';
+      }
+    }
+    out += ')';
+    if (i + 1 == funcs.size()) out += ')';   // RuntimeLib 的收尾括号
+    out += '\n';
+  }
+}
+
+// ============================================================================
 // SemaAnno —— `--emit=sema` 的注解策略
 //   只**追加注解**，绝不参与换行 / 缩进 / 括号决策（那在 AstSexpLayout.h）。
 // ============================================================================
 struct SemaAnno {
-  // 转储的第一行固定是 `(RuntimeLib)`（§五）：13 个运行时函数各占一行，
-  // 形参用与 `(Param ...)` 相同的拼写，`putf` 标成 `:uncallable`。
-  static void preamble(std::string& out) {
-    out += "(RuntimeLib\n";
-    const std::vector<RuntimeFunc>& funcs = runtimeFunctions();
-    for (size_t i = 0; i < funcs.size(); ++i) {
-      const RuntimeFunc& f = funcs[i];
-      out += "  (RuntimeFunc ";
-      out += f.name;
-      appendTypeToken(out, f.sig->ret);
-      if (f.sig->uncallable) {
-        out += " :uncallable";
-      } else {
-        for (size_t k = 0; k < f.sig->params.size(); ++k) {
-          out += " (Param ";
-          // 运行时函数的形参在 SysY 源码里不可见，名字取 sylib.h 里的原名。
-          out += (k == 0 && f.sig->params.size() > 1) ? 'n' : 'a';
-          out += " :t ";
-          appendTypeText(out, f.sig->params[k]);
-          if (rank(f.sig->params[k]) > 0) out += " (Dim)";
-          out += ')';
-        }
-      }
-      out += ')';
-      if (i + 1 == funcs.size()) out += ')';   // RuntimeLib 的收尾括号
-      out += '\n';
-    }
-  }
+  // 转储的第一行固定是 `(RuntimeLib)`（§五）；实现见上面的 appendRuntimeLib。
+  static void preamble(std::string& out) { appendRuntimeLib(out, 0); }
 
   static void varDefHead(std::string& out, const VarDef& n) {
     out += " :t ";
@@ -92,6 +106,22 @@ struct SemaAnno {
 std::string printSemaDump(const CompUnit& unit) {
   sexp::SexpLayout<SemaAnno> layout;
   return layout.run(unit);
+}
+
+// ============================================================================
+// ★ S04 的加法：把"类型记号"与"子树正文"导出（`--emit=initplan` 复用）
+//
+//   `appendValueTypeAnnotation` 就是 `SemaAnno::valueType`（同一个函数体，
+//   这里只是给它一个文件作用域的名字）—— 于是"记号怎么写"永远只有一份。
+// ============================================================================
+void appendValueTypeAnnotation(std::string& out, const Expr& e) { SemaAnno::valueType(out, e); }
+
+void appendRuntimeLibBlock(std::string& out) { appendRuntimeLib(out, 2); }
+
+std::string printExprBody(const Expr& e, bool singleLine) {
+  sexp::SexpLayout<SemaAnno> layout;
+  layout.setSingleLine(singleLine);
+  return layout.runExpr(e);
 }
 
 }  // namespace sysy

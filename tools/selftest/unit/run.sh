@@ -5,10 +5,9 @@
 #   test_diagnostic  P00 验证标准 §6.7（诊断输出格式）
 #   test_lexer       S01 验证标准 §7.9（13 个边界用例 + 转储格式 + 拼接不变式）
 #   test_parser      S02 §10 第 4/6/9 项（34 条树形断言 + §5 例子逐字节 + 往返 + 恢复）
-#   test_sema        S03 §10 第 ⑨ 项（转换插入的节点形状、作用域遮蔽、★诊断条数探针、
-#                    3 万个 `+` / 4000 层块 / 2000 层花括号不崩）
+#   test_sema        S03 §10 第 ⑨ 项（转换形状、遮蔽、★诊断条数探针、深树不崩）
+#   test_initlowering S04 §10 第 ⑨ 项（"当前对象"试金石、规模锚点、病态输入）
 # 用 clang++ --std=c++17 直接编译，无第三方框架；每个程序退出 0 即通过。
-#
 # 用法: bash compiler/tools/selftest/unit/run.sh [--keep]
 # ============================================================================
 set -uo pipefail
@@ -31,7 +30,8 @@ FRONTEND=("$SRC/frontend/Lexer.cpp" "$SRC/frontend/Parser.cpp"
           "$SRC/frontend/ConstEval.cpp" "$SRC/frontend/RuntimeLib.cpp"
           "$SRC/frontend/Sema.cpp" "$SRC/frontend/SemaStmt.cpp"
           "$SRC/frontend/SemaExpr.cpp" "$SRC/frontend/SemaDecl.cpp"
-          "$SRC/frontend/SemaDump.cpp")
+          "$SRC/frontend/SemaDump.cpp"
+          "$SRC/frontend/InitLowering.cpp" "$SRC/frontend/InitLoweringDump.cpp")
 # ⚠️ 上面必须与 CMakeLists.txt 的源文件列表一致，少一个就是 undefined reference。
 
 # 每个测试：名字 | 需要的源文件（--bench 条目只构建，不参与"通过"判定）
@@ -40,14 +40,14 @@ TESTS=(
   "test_diagnostic|${SUPPORT[*]}"
   "test_lexer|${SUPPORT[*]} ${FRONTEND[*]}"
   "test_parser|${SUPPORT[*]} ${FRONTEND[*]}"
-  "test_sema|${SUPPORT[*]} ${FRONTEND[*]}")
+  "test_sema|${SUPPORT[*]} ${FRONTEND[*]}"
+  "test_initlowering|${SUPPORT[*]} ${FRONTEND[*]}")
 BENCHES=(
   "bench_lexer|${SUPPORT[*]} ${FRONTEND[*]}"
 )
 
 echo "════════════════════════════════════════════════════════════"
-echo " 单元测试    $("$CXX" --version | head -1)"
-echo " 工作目录: $WORK"
+echo " 单元测试    $("$CXX" --version | head -1)"; echo " 工作目录: $WORK"
 echo "════════════════════════════════════════════════════════════"
 
 build_one() {   # $1 = 目标名, $2 = 依赖源文件

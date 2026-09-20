@@ -53,6 +53,8 @@ add_executable(compiler
   src/frontend/SemaExpr.cpp
   src/frontend/SemaDecl.cpp
   src/frontend/SemaDump.cpp
+  src/frontend/InitLowering.cpp
+  src/frontend/InitLoweringDump.cpp
 )
 
 target_include_directories(compiler PRIVATE src)

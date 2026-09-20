@@ -208,7 +208,11 @@ class Sema : public ConstEnv {
   int64_t initPos_ = 0;                // InitGroup 的**扁平游标**（行主序）
   int64_t initTotal_ = 0;              // 目标数组的元素总数
   // ── 当前正在处理的初始化器的常量求值状态（**串行**，见 SemaDecl.cpp 的说明）──
-  std::vector<ConstValue> initScratch_;  // 扁平元素值（行主序）
+  //   ★ S04：占位表示从 `std::vector<ConstValue>` 改成 `ConstObject`
+  //     （"默认值 + 稀疏非零表"）。于是 `const int a[50000000] = {1};` 只花
+  //     O(1) 内存，而不是 600 MB。**只有 const 对象才需要这份占位**
+  //     （initMaterialize_），非 const 对象从来不写它。
+  ConstObject initScratch_;              // 扁平元素值（行主序）
   bool initNeedConst_ = false;           // 本初始化器必须是常量表达式（**检查**）
   // 是否把逐元素值物化进 consts_（只有 const 对象才需要 —— 见 SemaDecl.cpp 的详细说明）
   bool initMaterialize_ = false;

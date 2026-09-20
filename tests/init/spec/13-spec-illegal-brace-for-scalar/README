@@ -1,0 +1,2 @@
+依据：docs/sysy_lang.txt §3 ConstDef 6 / §3 Initial Values；C11 §6.7.9 的"当前对象"模型。
+期望值（expect.flat）为**手工**按规范核对后写下；有疑问的形态用 clang -std=c99 实测过。

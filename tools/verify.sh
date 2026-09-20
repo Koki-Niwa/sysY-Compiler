@@ -82,10 +82,26 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ── 能力探测：能否产出【真实】IR（至少含一个函数定义）──
+#    判据不写死阶段号，而是探测能力。IRGen 在 S05–S07 之间落地；落地之前，
+#    C 组的 IR 检查全部是【空过】—— 对着一份纯注释的占位 .ll，llvm-as 会成功，
+#    各种 grep 也一律干净，于是关卡给出 7 个假的 ✔（S02 实测踩到这个"假绿"）。
+#    宁可显式跳过，也不要假绿：假绿会掩盖真问题，比红灯更危险。
+CAN_IR=0
+if [ -x "$COMPILER" ]; then
+  PROBE_SY="$TESTS/final_arm/functional/00_main.sy"
+  if [ -f "$PROBE_SY" ] && "$COMPILER" "$PROBE_SY" -o "$WORK/gate.ll" >/dev/null 2>&1; then
+    grep -q '^define ' "$WORK/gate.ll" && CAN_IR=1
+  fi
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
 hdr "C. 基础功能（编译 → 跑 → 比对 .out）"
 # ─────────────────────────────────────────────────────────────────────────────
 if [ ! -x "$COMPILER" ]; then
   c_skip "编译器未构建，跳过功能验证"
+elif [ "$CAN_IR" = "0" ]; then
+  c_skip "C 组跳过：编译器尚未产出真实 IR（无 'define'）—— IRGen 在 S05–S07"
 else
   # 取一个最简单的用例探路
   PROBE="$TESTS/final_arm/functional/00_main.sy"
@@ -161,18 +177,37 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
+hdr "C3. 语法自校验（若 check_parser.py 已实现 —— S02 起）"
+# ─────────────────────────────────────────────────────────────────────────────
+if [ -x "$TOOLS/selftest/check_parser.py" ] && [ -x "$COMPILER" ]; then
+  LOG="$WORK/parse.log"
+  if python3 "$TOOLS/selftest/check_parser.py" --compiler "$COMPILER" \
+        --jobs "$(nproc)" >"$LOG" 2>&1; then
+    SUM=$(grep -E '范围内往返成功|范围外已报诊断' "$LOG" | tr -s ' ' | tr '\n' ' ')
+    c_ok "语法自校验：AST 往返逐字节相同 ${SUM:-通过}"
+  else
+    c_bad "语法自校验失败（打印器/读取器不互逆，或解析器丢信息）"
+    grep -E '失败|不一致|✘|首处' "$LOG" | head -8 | sed 's/^/      /'
+  fi
+  # 独立实现交叉验证（若存在）：与 C++ 完全无关的第二份 parser 必须产出同一份 AST
+  if [ -x "$TOOLS/selftest/independent_parser_check.py" ]; then
+    ILOG="$WORK/iparse.log"
+    if python3 "$TOOLS/selftest/independent_parser_check.py" --compiler "$COMPILER" \
+          --jobs "$(nproc)" >"$ILOG" 2>&1; then
+      c_ok "独立 parser 交叉验证：与 C++ 输出逐字节一致"
+    else
+      c_bad "独立 parser 交叉验证不一致（C++ 侧或独立侧有真 bug）"
+      grep -E '不一致|mismatch|✘' "$ILOG" | head -8 | sed 's/^/      /'
+    fi
+  fi
+else
+  c_skip "check_parser.py 未实现（S02 的交付物）"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
 hdr "D. 全量回归（若 run_tests.sh 已实现）"
 # ─────────────────────────────────────────────────────────────────────────────
-# ── 门槛：编译器还产不出真实 IR 时，端到端必然失败，不应计为回归 ──
-#    判据不写死阶段号，而是**探测能力**：能否产出带函数定义的 .ll
-CAN_E2E=0
-if [ -x "$COMPILER" ]; then
-  PROBE_SY="$TESTS/final_arm/functional/00_main.sy"
-  if [ -f "$PROBE_SY" ] && "$COMPILER" "$PROBE_SY" -o "$WORK/gate.ll" >/dev/null 2>&1; then
-    # 至少要有一个 define 才算产出了真实 IR
-    grep -q '^define ' "$WORK/gate.ll" && CAN_E2E=1
-  fi
-fi
+CAN_E2E="$CAN_IR"
 
 if [ -x "$TOOLS/run_tests.sh" ] && [ "$CAN_E2E" = "0" ]; then
   c_skip "端到端回归跳过：编译器尚未产出真实 IR（无 'define'）—— IRGen 在 S05–S07"

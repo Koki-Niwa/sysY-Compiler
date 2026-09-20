@@ -204,8 +204,11 @@ void writeWholeFile(const std::string& path, const std::string& content) {
 //     "第 4 列按顺序拼接 == 原文去空白去注释" 的逐字节自校验，不需要理解语义
 //   * **不写任何注释头/统计行** —— 拼接不变式要求每一行都是 token
 //
-// ⚠️ Invalid token【不输出】：它的原文正是"非法字符"（`@` / `"` …），
-//    与"去空白去注释"的期望串对不上。它已经通过诊断（stderr）报出来了。
+// 📌 Invalid token【照常输出】：它的原文就是那个非法字符（`@` / `$` …），
+//    而"去空白去注释"的期望串里【也保留】它 —— 所以拼接不变式对这类文件同样成立。
+//    错误另经诊断（stderr）报出，退出码为 1。
+//    ⚠️ 曾有一版注释写"Invalid 不输出"，那是错的：
+//       dump 格式是对外契约（--emit=tokens），照注释去"修正"代码会真的破坏不变式。
 // ============================================================================
 std::string renderTokens(const SourceFile& src, DiagnosticEngine& diags) {
   Lexer lexer(src, diags);

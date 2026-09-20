@@ -148,7 +148,9 @@ if [ -x "$TOOLS/selftest/check_lexer.py" ] && [ -x "$COMPILER" ]; then
   # 附带：540 个文件在 --emit=tokens 下不崩（退出码 0 或 1 均可，但不能是信号/超时）
   CRASH=0
   for f in $(find "$ROOT/tests" -name '*.sy' 2>/dev/null); do
-    "$COMPILER" "$f" --emit=tokens -o /dev/null >/dev/null 2>&1
+    # 超时护栏：词法器一旦死循环（正是"Invalid 必须前进"那条规则在防的失效模式），
+    # 关卡会永久挂住而不是报红。rc=124 表示超时。
+    timeout 20 "$COMPILER" "$f" --emit=tokens -o /dev/null >/dev/null 2>&1
     rc=$?
     [ "$rc" -gt 1 ] && CRASH=$((CRASH+1))
   done
@@ -219,7 +221,7 @@ hdr "F. 阶段硬门禁"
 # ─────────────────────────────────────────────────────────────────────────────
 case "$STAGE" in
   S11|S11b|S1[2-9]|S2[0-8])
-    echo "  本阶段要求：所有回归 100% 通过（245 个用例输出与 .out 逐字节相同）"
+    echo "  本阶段要求：所有回归 100% 通过（490 个用例输出与 .out 逐字节相同）"
     if [ "$FAIL" != "0" ]; then c_bad "有失败项 → 未达 S11 之后的硬门禁"; else c_ok "硬门禁满足"; fi
     ;;
   "") echo "  （未指定 --stage，跳过阶段门禁）" ;;

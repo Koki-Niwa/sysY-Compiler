@@ -342,8 +342,13 @@ Lexer::NumberScan Lexer::scanNumber(size_t start) {
       diag_.report(DiagLevel::Error, src_.locOf(start),
                    "hexadecimal literal has no digits");
     }
-    // `0x1.` 这种"有点但小数点后没数字"的情况：token 到 `0x1` 为止，
-    // 后面的 '.' 由主循环单独处理（与 clang 的 C 词法一致）——不是浮点。
+    // `0x1.` 这种"有点但小数点后没数字"的情况：本实现把 token 截到 `0x1`，
+    // 后面的 '.' 由主循环单独处理（报 invalid）。
+    // ⚠️ 曾有一版注释写"与 clang 的 C 词法一致"，那是错的：
+    //    clang 把它当作【一个】token 并报 "hexadecimal floating constant
+    //    requires an exponent"。两种做法都合理，但我们的不是 clang 那种。
+    //    这类畸形形态在 540 个用例里一次都没出现，所以不影响验收；
+    //    此处只是把实现与注释对齐，避免后人据错误注释去"修正"代码。
     return {p, isFloat};
   }
 

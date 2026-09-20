@@ -200,6 +200,18 @@ if [ -x "$TOOLS/selftest/check_parser.py" ] && [ -x "$COMPILER" ]; then
       grep -E '不一致|mismatch|✘' "$ILOG" | head -8 | sed 's/^/      /'
     fi
   fi
+  # ★ 冻结基线的指纹比对：`--emit=ast` 是对外契约，新阶段只许做加法。
+  #   基线由编排方在阶段开始前生成并进版本库 —— 开发 agent 无法"改完再生成基线"。
+  if [ -f "$TOOLS/selftest/baseline_ast_sha256.txt" ]; then
+    BLOG="$WORK/astbase.log"
+    if python3 "$TOOLS/selftest/check_ast_baseline.py" --compiler "$COMPILER" \
+          --jobs "$(nproc)" >"$BLOG" 2>&1; then
+      c_ok "AST 冻结基线：490 个文件逐字节不变"
+    else
+      c_bad "AST 输出偏离冻结基线（新阶段只能做加法，不许改已有格式）"
+      grep -E '✘|逐字节相同' "$BLOG" | head -8 | sed 's/^/      /'
+    fi
+  fi
 else
   c_skip "check_parser.py 未实现（S02 的交付物）"
 fi

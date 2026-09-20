@@ -8,6 +8,7 @@
 104  compiler/tools/selftest/check_crlf.py
 540  compiler/tools/selftest/check_lexer.py
 128  compiler/tools/selftest/check_line_budget.py
+114  compiler/tools/selftest/check_mem_budget.py
 357  compiler/tools/selftest/check_parser.py
 707  compiler/tools/selftest/check_sema.py
 224  compiler/tools/selftest/check_sema_probe.py
@@ -27,4 +28,4 @@
 798  compiler/tools/selftest/unit/test_parser.cpp
 414  compiler/tools/selftest/unit/test_sema.cpp
 135  compiler/tools/selftest/unit/test_sourcefile.cpp
-379  compiler/tools/verify.sh
+394  compiler/tools/verify.sh

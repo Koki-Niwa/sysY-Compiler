@@ -423,9 +423,15 @@ void Parser::parseIntLiteral(IntLit& lit) {
     i = 1;
   }
 
-  uint64_t value = 0;
   bool ok = (i < s.size());
-  bool overflow = false;
+  // ★ 溢出**回绕**，与权威实现（`ConstEvaluator::parseIntLit`）**完全同一套语义**。
+  //   为什么不报"超出 32 位"：本项目对 int 的既定策略是"32 位二进制补码、溢出回绕、
+  //   不产生 UB"（见 AGENT-CONTEXT 铁律 6）。字面量只是常量，不会因为写在源码里
+  //   就比算出来的常量更特殊；而且回绕是**跨目标确定**的，正合跨目标一致性的要求。
+  //   ⚠️ 曾经这里用 uint64 累加并在超 2^32-1 时判 overflow、置 parsed=false 并报警告，
+  //   而 S03 的权威实现是回绕——两层对同一个字面量给出不同判断，警告还指错了原因
+  //   （把 `09` 这种"非法数字"也说成"超出 32 位范围"）。**两层必须只有一套语义。**
+  uint32_t acc = 0;
   for (; ok && i < s.size(); ++i) {
     const char c = s[i];
     unsigned d;
@@ -440,28 +446,22 @@ void Parser::parseIntLiteral(IntLit& lit) {
       break;
     }
     if (d >= base) {
-      ok = false;
+      ok = false;   // `09`：八进制里没有数字 9
       break;
     }
-    if (value > 0xFFFFFFFFull / base) {   // 先除后乘，避免 uint64 自身溢出
-      overflow = true;
-      break;
-    }
-    value = value * base + d;
-    if (value > 0xFFFFFFFFull) {
-      overflow = true;
-      break;
-    }
+    acc = acc * static_cast<uint32_t>(base) + static_cast<uint32_t>(d);   // 回绕
   }
 
-  if (!ok || overflow) {
+  if (!ok) {
     lit.parsed = false;
     lit.value = 0;
-    warn(lit.loc, "integer constant '" + std::string(s) +
-                      "' does not fit in 32 bits (semantic handling is S04's job)");
+    // 只有"非法数字"才走到这里（`09` / `0x` / `0xG`）。消息必须说对原因：
+    // 比赛要评"编译错误的准确定位与描述"，指错原因的诊断等于没有诊断。
+    warn(lit.loc, "invalid digit in integer constant '" + std::string(s) +
+                      "' (base " + std::to_string(base) + ")");
     return;
   }
-  lit.value = static_cast<uint32_t>(value);
+  lit.value = acc;
   lit.parsed = true;
 }
 

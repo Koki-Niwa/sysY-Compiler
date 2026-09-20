@@ -209,7 +209,9 @@ class Sema : public ConstEnv {
   int64_t initTotal_ = 0;              // 目标数组的元素总数
   // ── 当前正在处理的初始化器的常量求值状态（**串行**，见 SemaDecl.cpp 的说明）──
   std::vector<ConstValue> initScratch_;  // 扁平元素值（行主序）
-  bool initNeedConst_ = false;           // 本初始化器必须是常量表达式
+  bool initNeedConst_ = false;           // 本初始化器必须是常量表达式（**检查**）
+  // 是否把逐元素值物化进 consts_（只有 const 对象才需要 —— 见 SemaDecl.cpp 的详细说明）
+  bool initMaterialize_ = false;
   bool initConstOk_ = true;              // 到目前为止每个元素都求值成功
   const Type* initType_ = nullptr;       // 目标类型
   Symbol* initSym_ = nullptr;            // 求值成功后把 cval 挂到这个符号上

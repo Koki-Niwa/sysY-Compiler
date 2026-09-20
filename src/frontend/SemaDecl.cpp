@@ -127,15 +127,30 @@ void Sema::doVarDef(Frame& f) {
   //    常量性：**全局变量**（规范 §3 Initial Values 1）与**所有 const 对象**
   //    （规范 §3 ConstDef 5：ConstInitVal 里的表达式是 ConstExp）都必须常量。
   const bool needConst = isGlobal || d->isConst;
+  // ★ "检查常量性"与"把值留下来"是**两件事**，必须分开：
+  //   * needConst     —— 要求初始化器是常量表达式（全局：规范 §3 Initial Values 1；
+  //                      const 对象：规范 §3 ConstDef 5）。**非 const 全局也要查。**
+  //   * materialize   —— 把逐元素的值存进 consts_，供**后续 ConstExp 引用**
+  //                      （规范 §3 ConstDef 3："may refer to already-defined symbolic constants"）。
+  //                      只有 **const 对象**才可能被引用到。
+  //   ⚠️ 曾经这两件事共用一个条件（`isGlobal || d->isConst`），于是
+  //      `int buffer[50000000] = {};`（23_json.sy:355）按每元素 12 字节物化了 **574 MB**，
+  //      而那份数据**一个字节都不可能被读到**：实测 `int g[2]={1,2}; int a[g[0]];`
+  //      报 E-ARRAY-DIM（非 const 对象不是符号常量），`int N=3; int M=N;` 报 E-CONST-INIT。
+  //      开销随源码里的一个数字线性无界 ⇒ 合法程序 `int a[200000000] = {};` 要 ~2.4 GB。
+  const bool materialize = d->isConst;
   initNeedConst_ = needConst;
+  initMaterialize_ = materialize;
   initConstOk_ = true;
   initType_ = ty;
   initSym_ = slot;
-  if (needConst) {
+  if (materialize) {
     int64_t n = elementCount(ty);
     if (n < 0) n = 1;
     initScratch_.assign(static_cast<size_t>(n), ConstValue::ofInt(0));
   } else {
+    // 不物化：initScratch_ 保持空。写入路径 evalConstInto 本来就带边界检查，
+    // 所以求值（以及"是不是常量表达式"的判定）照常进行，只是不落盘。
     initScratch_.clear();
   }
 
@@ -144,12 +159,13 @@ void Sema::doVarDef(Frame& f) {
 
 // 初始化器处理完毕后：把求出的常量挂到符号上（供后续维度/常量表达式引用）。
 void Sema::doVarDefFinal(Frame&) {
-  if (initNeedConst_ && initConstOk_ && initSym_ != nullptr) {
+  if (initMaterialize_ && initConstOk_ && initSym_ != nullptr) {
     consts_.push_back(ConstObject{initType_, std::move(initScratch_)});
     initSym_->cval = &consts_.back();
   }
   initScratch_.clear();
   initNeedConst_ = false;
+  initMaterialize_ = false;
   initSym_ = nullptr;
 }
 

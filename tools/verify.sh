@@ -67,6 +67,21 @@ fi
 #    ⚠️ 这条标准以前只写在文档里、**从来没有被检查过**，于是它既没被遵守也没被拦下
 #    （S02 收尾时 AstPrinter.cpp 1135 行、Parser.cpp 1010 行）。
 #    "写了标准但不检查"比没有标准更糟：它教会后面每个会话无视这一节。
+# ── 内存预算 ──
+#    "编译器的内存开销不得随源码里的一个数字爆炸"。语料的**正确性**判据看不见这类缺陷
+#    （490 个用例全绿、诊断全对），它会一直藏到现场赛的一个大数组上才 OOM。
+#    判据是几个**压力文件**的实测峰值 RSS —— 见 check_mem_budget.py 里每一行的依据。
+if [ -x "$TOOLS/selftest/check_mem_budget.py" ] && [ -x "$COMPILER" ]; then
+  MLOG="$WORK/mem.log"
+  if python3 "$TOOLS/selftest/check_mem_budget.py" --compiler "$COMPILER" \
+        --root "$ROOT" >"$MLOG" 2>&1; then
+    c_ok "内存预算：压力文件峰值 RSS 全部在预算内"
+  else
+    c_bad "有压力文件超出内存预算（内存开销随源码数字爆炸）"
+    grep -E '✘|依据' "$MLOG" | head -6 | sed 's/^/      /'
+  fi
+fi
+
 if [ -f "$TOOLS/selftest/check_line_budget.py" ]; then
   LLOG="$WORK/lines.log"
   if python3 "$TOOLS/selftest/check_line_budget.py" --root "$ROOT" >"$LLOG" 2>&1; then

@@ -42,6 +42,8 @@ add_executable(compiler
   src/support/Diagnostic.cpp
   src/support/SourceFile.cpp
   src/frontend/Lexer.cpp
+  src/frontend/Parser.cpp
+  src/frontend/AstPrinter.cpp
 )
 
 target_include_directories(compiler PRIVATE src)
@@ -76,9 +78,10 @@ if(SYSY_STATIC)
 endif()
 
 # 本阶段没有 CMake 测试目标：验证靠 compiler/tools/ 下的脚本
-#   * tools/selftest/unit/run.sh          单元测试（含 S01 的 test_lexer）
+#   * tools/selftest/unit/run.sh          单元测试（含 S01 的 test_lexer、S02 的 test_parser）
 #   * tools/selftest/check_lexer.py       ★★ 词法自校验（490 个用例的拼接不变式）
 #   * tools/selftest/check_tokens_meta.py 逐 token 的 loc+length 反查原文（540 个）
 #   * tools/selftest/check_crlf.py        CRLF 与 LF 词法结果一致性
+#   * tools/selftest/check_parser.py      ★★ 语法往返验证（490 个用例，S02）
 #   * tools/selftest/perf_tokens.py       性能实测（比赛调用口径）
 #   * tools/selftest/run.sh               三种 target 的端到端链路自检

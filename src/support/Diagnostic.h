@@ -44,6 +44,10 @@ class DiagnosticEngine {
   // 【前置】指针在引擎使用期间保持有效（driver 里 SourceFile 活得比引擎久）。
   void setSourceFile(const SourceFile* file) { source_ = file; }
 
+  // 【前置】无。【后置】返回已设置的诊断源；未设置时为 nullptr。
+  // 用途：调用方需要把 token 原文取出来拼进诊断消息（tokenText 需要一个 SourceFile）。
+  const SourceFile* sourceFile() const { return source_; }
+
   // 【前置】无。【后置】记录一条诊断；不抛异常、不中断。
   void report(DiagLevel level, SourceLoc loc, const std::string& msg);
 

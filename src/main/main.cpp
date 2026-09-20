@@ -4,16 +4,18 @@
 //   compiler <input> -o <output> [选项]
 //     -o <file>          输出文件（必填）
 //     --emit=<kind>      llvm-ir（默认）| tokens | ast | structured-ir | nothing
+//     --from-ast         输入是 --emit=ast 产出的 S-表达式文本（往返验证用）
 //     -O1                开启性能优化（S00 只记录，不实现）
 //     -S                 比赛调用形式，必须接受；本阶段忽略其含义
 //     -h, --help / -v, --version
 //
 // 【S00】解析命令行 → 读文件 → 按 --emit 输出。
-// 【S01】--emit=tokens 已是【真实实现】（词法器）；其余 emit 仍是占位。
+// 【S01】--emit=tokens 已是【真实实现】（词法器）。
+// 【S02】--emit=ast 与 --from-ast 已是【真实实现】（语法分析器 + AST 打印/读取器）。
+//        其余 emit 仍是占位。
 //
 // 铁律 4：编译器本体不调用任何外部程序（这里没有 system/exec/fork）。
 // ============================================================================
-#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <iostream>
@@ -22,7 +24,10 @@
 #include <string_view>
 #include <vector>
 
+#include "frontend/Ast.h"
+#include "frontend/AstPrinter.h"
 #include "frontend/Lexer.h"
+#include "frontend/Parser.h"
 #include "frontend/Token.h"
 #include "support/Diagnostic.h"
 #include "support/Errors.h"
@@ -34,10 +39,12 @@
 
 namespace {
 
+using sysy::CompUnit;
 using sysy::DiagnosticEngine;
 using sysy::DiagLevel;
 using sysy::IOError;
 using sysy::Lexer;
+using sysy::Parser;
 using sysy::SourceFile;
 using sysy::SourceLoc;
 using sysy::Token;
@@ -84,6 +91,7 @@ struct Options {
   bool structured = true;      // S05 起：结构化 IR 层开关（默认开）
   bool optimize = false;       // --optimize：与 -O1 等价的别名（run_tests.sh 用它）
   bool toyBackend = false;     // --toy-backend：S11b 起表示"用自研降级器"；当前只接受
+  bool fromAst = false;        // --from-ast：输入是 S-表达式（不是 SysY 源码）
   bool verbose = false;
 };
 
@@ -95,6 +103,8 @@ const char* kHelpText =
     "选项:\n"
     "  -o <file>          输出文件（必填）\n"
     "  --emit=<kind>      产物类型: llvm-ir（默认）| tokens | ast | structured-ir | nothing\n"
+    "  --from-ast         输入是 --emit=ast 的产物（S-表达式），而不是 SysY 源码\n"
+    "                     （S02 起用于验证：source --emit=ast --from-ast --emit=ast）\n"
     "  -O0 / -O1          优化级别（-O1 目前只记录，S17 起生效）\n"
     "  --optimize         -O1 的别名（tools/run_tests.sh 使用长选项名）\n"
     "  -S                 接受但不解释（比赛调用形式: compiler a.sy -S -o a.s）\n"
@@ -165,6 +175,7 @@ bool parseCommandLine(int argc, char** argv, Options& opts) {
     // --toy-backend 由 tools/run_tests.sh 传入，用于让链路走【自研降级器】而非 clang。
     // 那是【测试链路】的选择，不是编译器的行为；编译器只需接受它（同 -S 的处理方式）。
     if (a == "--toy-backend")   { opts.toyBackend = true; continue; }
+    if (a == "--from-ast")      { opts.fromAst = true; continue; }
     if (a == "--verbose")       { opts.verbose = true; continue; }
 
     if (!a.empty() && a[0] == '-' && a != "-") {
@@ -242,10 +253,34 @@ std::string renderTokens(const SourceFile& src, DiagnosticEngine& diags) {
   return out;
 }
 
+// ============================================================================
+// --emit=ast 的真实实现（S02）
+//
+// 两条输入路径：
+//   源  →  Lexer → Parser → AST      （默认）
+//   S-表达式 → parseAstText → AST    （--from-ast，供往返验证）
+// 两条路径共用同一个打印器 —— 这正是轨 A（往返）成立的前提。
+// ============================================================================
+std::string renderAst(const SourceFile& src, DiagnosticEngine& diags, bool fromAst) {
+  std::unique_ptr<CompUnit> unit;
+  if (fromAst) {
+    // 输入是 S-表达式文本。**不经过 Lexer**：AST 文本不是 SysY（prompt §6.1）。
+    // ⚠️ SourceFile 的生命期由 main 持有并覆盖整个 emit 过程，所以字面量节点里
+    //    指向 src.text() 的 string_view 一直有效。
+    unit = sysy::parseAstText(src.text(), diags);
+  } else {
+    Lexer lexer(src, diags);
+    Parser parser(lexer, diags);
+    unit = parser.parseCompUnit();
+  }
+  if (unit == nullptr) return std::string();   // 契约上不会发生（Parser 保证非空）
+  return sysy::printAst(*unit);
+}
+
 // —— 尚未实现的 emit 模式的占位产物 ——
 std::string renderPlaceholder(EmitKind kind, const Options& opts, const SourceFile& src) {
   std::string out;
-  out += "; SysY compiler (front/middle end) —— stage S01 (lexer)\n";
+  out += "; SysY compiler (front/middle end) —— stage S02 (parser + AST)\n";
   out += "; input:  " + src.path() + "\n";
   out += "; emit:   " + std::string(toString(kind)) + "\n";
   out += "; lines:  " + std::to_string(src.lineCount()) + "\n";
@@ -253,8 +288,8 @@ std::string renderPlaceholder(EmitKind kind, const Options& opts, const SourceFi
          (opts.optLevel >= 1 ? "requested (not implemented yet)" : "off") + "\n";
   out += std::string("; structured IR layer: ") + (opts.structured ? "on" : "off") + "\n";
   out += ";\n";
-  out += "; 本阶段只有词法器是真实的（--emit=tokens 可用）；\n";
-  out += "; 语法/语义/IR 尚未实现（见 phases/S01-lexer.md §八）。\n";
+  out += "; 本阶段真实可用：--emit=tokens（词法）、--emit=ast / --from-ast（语法+AST）。\n";
+  out += "; 语义/IR 尚未实现（S03 起）。\n";
   out += "; 交给后端的 .ll 契约（TESTING-GUIDE §3.3）：目标无关 ——\n";
   out += ";   不带 target triple、不带 target datalayout、\n";
   out += ";   函数属性里不带 target-cpu / target-features。\n";
@@ -263,7 +298,7 @@ std::string renderPlaceholder(EmitKind kind, const Options& opts, const SourceFi
 }
 
 void ensureReadable(const SourceFile& src) {
-  // 只做 I/O（读文件 + CRLF 规范化）。不解析、不分析 —— 那是 S02 之后的事。
+  // 只做 I/O（读文件 + CRLF 规范化）。解析由 renderAst / renderTokens 各自负责。
   (void)src.text();
 }
 
@@ -304,8 +339,11 @@ int main(int argc, char** argv) {
           // ★ S01 的真实产物：词法分析（Token 转储，机器可校验）
           artifact = renderTokens(src, diags);
           break;
-        case EmitKind::LlvmIr:
         case EmitKind::Ast:
+          // ★ S02 的真实产物：语法分析 + AST（S-表达式）
+          artifact = renderAst(src, diags, opts.fromAst);
+          break;
+        case EmitKind::LlvmIr:
         case EmitKind::StructuredIr:
           artifact = renderPlaceholder(opts.emit, opts, src);
           break;

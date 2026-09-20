@@ -4,6 +4,8 @@
 #   test_sourcefile  P00 验证标准 §6.8（CRLF 行列号一致性）
 #   test_diagnostic  P00 验证标准 §6.7（诊断输出格式）
 #   test_lexer       S01 验证标准 §7.9（13 个边界用例 + 转储格式 + 拼接不变式）
+#   test_parser      S02 验证标准 §10 第 4/6/9 项（★轨 B 的 34 条树形断言 + §5 例子
+#                    逐字节 + 内部往返 + 错误恢复 + CLI 往返冒烟）
 #
 # 用 clang++ --std=c++17（与 CMake 构建同一套标准）直接编译，不需要任何测试框架。
 # 通过标准：每个测试程序都退出 0。退出码：0 = 全通过，1 = 有失败。
@@ -25,13 +27,14 @@ mkdir -p "$WORK"
 # 这里只加项目自己的严格开关（-Werror 保证零警告是硬门禁）。
 FLAGS=(--std=c++17 -Wall -Wextra -Wpedantic -Werror -O1 -I"$SRC")
 SUPPORT=("$SRC/support/SourceFile.cpp" "$SRC/support/Diagnostic.cpp")
-FRONTEND=("$SRC/frontend/Lexer.cpp")
+FRONTEND=("$SRC/frontend/Lexer.cpp" "$SRC/frontend/Parser.cpp" "$SRC/frontend/AstPrinter.cpp")
 
 # 每个测试：名字 | 需要的源文件（--bench 条目只构建，不参与"通过"判定）
 TESTS=(
   "test_sourcefile|${SUPPORT[*]}"
   "test_diagnostic|${SUPPORT[*]}"
   "test_lexer|${SUPPORT[*]} ${FRONTEND[*]}"
+  "test_parser|${SUPPORT[*]} ${FRONTEND[*]}"
 )
 BENCHES=(
   "bench_lexer|${SUPPORT[*]} ${FRONTEND[*]}"
@@ -61,7 +64,12 @@ for entry in "${TESTS[@]}"; do
   echo
   echo "──── $t ────"
   build_one "$t" "$extra" || { FAIL=1; continue; }
-  "$WORK/$t"
+  # test_parser 需要真实编译器二进制做 CLI 往返冒烟（可选参数：二进制 + 工作目录）
+  if [ "$t" = "test_parser" ]; then
+    "$WORK/$t" "$ROOT/compiler/build/compiler" "$WORK"
+  else
+    "$WORK/$t"
+  fi
   rc=$?
   if [ "$rc" = 0 ]; then
     echo "  ✔ $t 通过"

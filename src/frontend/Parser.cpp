@@ -278,7 +278,7 @@ bool Parser::depthExceeded() {
   if (!depthReported_) {
     depthReported_ = true;
     error(cur().loc, "nesting is too deep (limit " + std::to_string(kMaxDepth) +
-                         " levels); the rest of this brace level is skipped");
+                         " levels); the rest of this construct is skipped");
   }
   return true;
 }
@@ -576,9 +576,9 @@ void Parser::parseVarDefDims(std::vector<Dim>& dims) {
 std::unique_ptr<InitVal> Parser::parseInitVal() {
   DepthGuard guard(*this);
   auto iv = std::make_unique<InitVal>(cur().loc);
-  if (guard.exceeded()) {
-    error(cur().loc, "initializer nesting is too deep (limit " +
-                         std::to_string(kMaxDepth) + " levels)");
+  // ⚠️ 必须调 depthExceeded()（会**报错**）而不是 guard.exceeded()（只查询）。
+  //    返回空节点而不报错 = 静默产出错误的 AST 且退出码 0，比崩溃更糟。
+  if (depthExceeded()) {
     int depth = 0;
     while (cur().kind != TokKind::EndOfFile) {
       if (cur().kind == TokKind::LBrace) {
@@ -611,7 +611,7 @@ std::unique_ptr<InitVal> Parser::parseInitVal() {
 // ============================================================================
 std::unique_ptr<Stmt> Parser::parseStmt() {
   DepthGuard guard(*this);
-  if (guard.exceeded()) {
+  if (depthExceeded()) {
     // ⚠️ 超限时必须**消费 token**，不能只是返回一个空语句：调用方
     //    （parseBlock 的循环 / while 的 body）会原地重试同一个 token → 死循环。
     //    S02 在 4100 层嵌套块上实测卡死过一次。
@@ -789,7 +789,7 @@ std::unique_ptr<Expr> Parser::parseCond() { return parseExp(1); }
 // ============================================================================
 std::unique_ptr<Expr> Parser::parseExp(int minPrec, std::unique_ptr<Expr> lhs) {
   DepthGuard guard(*this);
-  if (guard.exceeded()) return std::make_unique<IntLit>(cur().loc, std::string_view{});
+  if (depthExceeded()) return std::make_unique<IntLit>(cur().loc, std::string_view{});
 
   // lhs == nullptr ⇒ 从头解析一个一元表达式；否则接在调用方给的前缀后面继续爬
   if (lhs == nullptr) {
@@ -813,7 +813,7 @@ std::unique_ptr<Expr> Parser::parseExp(int minPrec, std::unique_ptr<Expr> lhs) {
 // UnaryExp → ('+'|'-'|'!') UnaryExp | PostfixExp
 std::unique_ptr<Expr> Parser::parseUnary() {
   DepthGuard guard(*this);
-  if (guard.exceeded()) return std::make_unique<IntLit>(cur().loc, std::string_view{});
+  if (depthExceeded()) return std::make_unique<IntLit>(cur().loc, std::string_view{});
 
   if (at(TokKind::Plus) || at(TokKind::Minus) || at(TokKind::Not)) {
     const TokKind op = cur().kind;

@@ -652,6 +652,12 @@ static void testPathologicalInputs() {
   struct Case {
     const char* name;
     std::string src;
+    // 该输入**必须**报出诊断吗？
+    //   ⚠️ 这一列是必须的，不许再靠名字去猜：原先的判据是"只有含 NUL 的那例要求报错"，
+    //   于是"深度超限后静默丢掉上千个节点、退出码仍然是 0"这个真 bug
+    //   从单测里漏了过去 —— 它是被一份**独立实现**的语法分析器交叉验证抓出来的。
+    //   "合法但超出我们处理能力"的输入同样**必须报错**：静默产出错误的 AST 比崩溃更糟。
+    bool expectError = true;
   };
   std::vector<Case> cases;
   cases.push_back({"多余右括号 100 个", "int main(){ return 0; }" + std::string(100, '}')});
@@ -662,7 +668,18 @@ static void testPathologicalInputs() {
                        " return 0; }"});
   cases.push_back({"一元链 5 万层", "int main(){ int a; return " + std::string(50000, '-') + "a; }"});
   cases.push_back({"二元链 3 万个 +（左倾 3 万层深的树）",
-                   "int main(){ int a; a = 1" + rep("+1", 30000) + "; return a; }"});
+                   "int main(){ int a; a = 1" + rep("+1", 30000) + "; return a; }",
+                   /*expectError=*/false});
+  // ★ 深度上限的**边界**回归：3997 层合法且必须不报错；4001 层必须报错。
+  //   两者只差 4 层，但修复前的行为是"4001 层静默成功"，所以这个边界必须钉住。
+  cases.push_back({"嵌套块 3997 层（上限内）",
+                   "int main(){ " + std::string(3997, '{') + std::string(3997, '}') +
+                       " return 0; }",
+                   /*expectError=*/false});
+  cases.push_back({"嵌套块 4001 层（刚过上限）",
+                   "int main(){ " + std::string(4001, '{') + std::string(4001, '}') +
+                       " return 0; }",
+                   /*expectError=*/true});
   cases.push_back({"初始化列表 10 万层",
                    "int a = " + std::string(100000, '{') + std::string(100000, '}') + ";"});
   cases.push_back({"赋值链 10 万层",
@@ -681,10 +698,11 @@ static void testPathologicalInputs() {
                             std::to_string(static_cast<int>(ms)) + " ms）");
     // ② 不崩：走到这里就说明没有段错误/栈溢出
     check(r.unit != nullptr, std::string(c.name) + "：返回非空 CompUnit");
-    // ③ 有诊断就有错误码：不能静默通过（除非它本来就是合法的）
-    const bool legit = (std::string(c.name).find("NUL") == std::string::npos);
-    if (!legit) {
+    // ③ 该报错的必须报错（静默产出错误的 AST 比崩溃更糟，见 Case::expectError）
+    if (c.expectError) {
       check(r.parserErrors > 0, std::string(c.name) + "：报出诊断");
+    } else {
+      check(r.parserErrors == 0, std::string(c.name) + "：合法输入不该报错");
     }
     // ④ 能打印（打印是另一条容易崩的路径：递归 + 巨大的缩进串）
     if (r.unit != nullptr) {

@@ -63,6 +63,20 @@ else
   fi
 fi
 
+# ── 代码规模（SESSION-PLAN §C4）──
+#    ⚠️ 这条标准以前只写在文档里、**从来没有被检查过**，于是它既没被遵守也没被拦下
+#    （S02 收尾时 AstPrinter.cpp 1135 行、Parser.cpp 1010 行）。
+#    "写了标准但不检查"比没有标准更糟：它教会后面每个会话无视这一节。
+if [ -f "$TOOLS/selftest/check_line_budget.py" ]; then
+  LLOG="$WORK/lines.log"
+  if python3 "$TOOLS/selftest/check_line_budget.py" --root "$ROOT" >"$LLOG" 2>&1; then
+    c_ok "行数预算（§C4）：产品代码 ≤ 600 行 / 工具脚本棘轮"
+  else
+    c_bad "违反 §C4 的行数预算（拆分，或由编排方明确改标准）"
+    grep -E '✘' "$LLOG" | head -6 | sed 's/^/      /'
+  fi
+fi
+
 # ─────────────────────────────────────────────────────────────────────────────
 hdr "B. 合规自查（对应铁律 2/3/4 —— 违反会被取消资格）"
 # ─────────────────────────────────────────────────────────────────────────────
@@ -75,7 +89,16 @@ if [ -d "$ROOT/compiler/src" ]; then
            "$ROOT/compiler/src" 2>/dev/null | grep -viE 'RuntimeLib|runtime_lib|RuntimeLibrary|Signature' || true)
   [ -z "$HARD" ] && c_ok "没有识别函数名/用例名的特判" || { c_bad "疑似特判"; echo "$HARD" | head -3 | sed 's/^/      /'; }
 
-  CASE=$(grep -rniE '\.(sy|in|out)"|tests/' "$ROOT/compiler/src" 2>/dev/null || true)
+  # ⚠️ 只检查【代码】，不检查【注释】。
+  #    这条规则的目的是"代码里不许读用例路径 / 拿用例名做特判"；注释做不到这件事。
+  #    而源码注释里写清楚"这个数字实测出自哪个用例"是**正常的工程记录**
+  #    （例如"真实语料 tests/.../86_long_code2.sy 的打印树深是 4007"）。
+  #    做法：剥掉行尾 `//` 注释，丢掉以 `*` 或 `/*` 开头的块注释续行，再匹配。
+  #    （与前面 target-features 的处理同一个道理：关卡自己也会误报，误报要修关卡，不是改代码。）
+  CASE=$(grep -rnE '\.(sy|in|out)"|tests/' "$ROOT/compiler/src" 2>/dev/null \
+         | sed -E 's@//.*$@@' \
+         | grep -vE ':[0-9]+:[[:space:]]*(/\*|\*)' \
+         | grep -E '\.(sy|in|out)"|tests/' || true)
   [ -z "$CASE" ] && c_ok "没有引用测试用例路径" || { c_bad "引用了测试用例"; echo "$CASE" | head -3 | sed 's/^/      /'; }
 else
   c_skip "compiler/src 不存在"

@@ -124,7 +124,7 @@ class Parser {
   // 优先级爬升。lhs 可以是调用方已经解析好的**前缀结果**（nullptr = 从头解析）。
   // 为什么需要它：语句层要先按 LVal 的形状探一下"这是不是赋值语句"，
   // 而那个探测已经把 `Ident`（可能还有下标链）消费掉了；把结果交回来再往下爬，
-  // 就既不需要回溯、也不会重复解析。见 Parser.cpp 的 parseStmt。
+  // 就既不需要回溯、也不会重复解析。见 ParserStmtExpr.cpp 的 parseStmt。
   std::unique_ptr<Expr> parseExp(int minPrec, std::unique_ptr<Expr> lhs = nullptr);
   std::unique_ptr<Expr> parseUnary();
   std::unique_ptr<Expr> parsePostfix();
@@ -136,11 +136,27 @@ class Parser {
 
   // ── 递归深度防护 ───────────────────────────────────────────────────────
   // kMaxDepth 的定值依据（实测，见 S02 报告 §8）：
-  //   * 语料里最深的嵌套是 29_long_line.sy 的 10 层块 + 82_long_func 的 14 层括号
+  //   * ⚠️ 它量的是**递归深度**（depth_ 计数器的上限），**不是"树有多深"**。
+  //     本实现里这两者**不相等**，原因见下面的隐式耦合。
+  //   * 语料里最深的**递归**嵌套是 29_long_line.sy 的 10 层块 + 82_long_func
+  //     的 14 层括号
   //   * 这个深度下每层递归的实际栈消耗 < 1 KB（parseStmt/parseExp/parseUnary 的帧都很小）
   //     所以 4000 层 ≈ 4 MB 以内，8 MB 栈留足余量
   //   * 超过它的一律是畸形/攻击性输入：报一条 error 后【照常返回】，
   //     输出退化为一个空节点 —— **不崩**才是验收要求
+  //
+  // ⚠️ **隐式耦合：二元链靠 parseExp 的迭代实现规避深度计数。**
+  //    真实语料 86_long_code2.sy 的**打印树深是 4007 层**（3999 个 `+` 串成的
+  //    左倾链，源码形如 `a[2*2][20000-1] + a[2*2][20000-1] + …`），已经**超过**
+  //    kMaxDepth = 4000，却仍然被接受 —— 唯一原因就是 parseExp 对二元链用
+  //    **循环**建树（优先级爬升），depth_ 只在该函数入口 +1，整条链有多少层
+  //    都不消耗递归计数（打印侧不能这么赖账：树深是真的，见 AstPrinter.cpp
+  //    文件头，那里必须用显式工作栈）。
+  //    ⇒ 把 parseExp 改成"每层一个递归函数"（照文法 `AddExp → AddExp '+' MulExp`
+  //      直写）会**立刻**把 86_long_code2.sy 这个合法用例判成"嵌套过深"
+  //      —— 那等于**改变能接受的程序集合**，是行为变更而不是重构。
+  //      真要那么改，必须同时重新评估所有构造的树深、这个阈值的依据、
+  //      以及 8 MB 栈的余量（单测里有 3 万个 `+1` 的合法用例）。
   static constexpr int kMaxDepth = 4000;
   // 深度超限后，同一条诊断只报一次（否则一个病态输入能刷出几十万条诊断）
   bool depthReported_ = false;

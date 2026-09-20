@@ -468,7 +468,7 @@ static void testTrackB() {
   {
     // ★ 选择：语法层**统一接受** `!` 作为一元运算符（不区分 Cond 与 Exp），
     //   把"`!` 只能出现在 Cond 里"留给 S03 语义阶段报错。
-    //   理由见 Parser.cpp 文件头；这两条断言把这个选择**钉死**。
+    //   理由见 ParserStmtExpr.cpp 文件头；这两条断言把这个选择**钉死**。
     size_t errs = 0;
     const std::string got = shapeOf("int main(){ int x; int y = !x; return y; }", &errs);
     checkEq("! 在 Exp 里【被语法接受】（选择：留给 S03 报错）", got,

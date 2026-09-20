@@ -1,0 +1,25 @@
+# 开发/验证脚本的行数棘轮（由编排方用 --update 刷新）
+# 格式：<行数>  <相对工作区根的路径>
+# 规则：只许变短，不许变长；不在表里的新文件不得超过 800 行。
+591  compiler/tools/_run_tests.py
+108  compiler/tools/expect_out.py
+123  compiler/tools/run_tests.sh
+170  compiler/tools/selftest/check_ast_baseline.py
+104  compiler/tools/selftest/check_crlf.py
+540  compiler/tools/selftest/check_lexer.py
+128  compiler/tools/selftest/check_line_budget.py
+357  compiler/tools/selftest/check_parser.py
+177  compiler/tools/selftest/check_tokens_meta.py
+171  compiler/tools/selftest/gen_manifest.py
+976  compiler/tools/selftest/independent_parser_check.py
+123  compiler/tools/selftest/perf_tokens.py
+16  compiler/tools/selftest/probe.c
+78  compiler/tools/selftest/proto_kindseq.py
+132  compiler/tools/selftest/run.sh
+82  compiler/tools/selftest/unit/bench_lexer.cpp
+99  compiler/tools/selftest/unit/run.sh
+215  compiler/tools/selftest/unit/test_diagnostic.cpp
+496  compiler/tools/selftest/unit/test_lexer.cpp
+798  compiler/tools/selftest/unit/test_parser.cpp
+135  compiler/tools/selftest/unit/test_sourcefile.cpp
+311  compiler/tools/verify.sh

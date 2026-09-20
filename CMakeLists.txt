@@ -43,7 +43,9 @@ add_executable(compiler
   src/support/SourceFile.cpp
   src/frontend/Lexer.cpp
   src/frontend/Parser.cpp
+  src/frontend/ParserStmtExpr.cpp
   src/frontend/AstPrinter.cpp
+  src/frontend/AstReader.cpp
 )
 
 target_include_directories(compiler PRIVATE src)

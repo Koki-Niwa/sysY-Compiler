@@ -27,7 +27,12 @@ mkdir -p "$WORK"
 # 这里只加项目自己的严格开关（-Werror 保证零警告是硬门禁）。
 FLAGS=(--std=c++17 -Wall -Wextra -Wpedantic -Werror -O1 -I"$SRC")
 SUPPORT=("$SRC/support/SourceFile.cpp" "$SRC/support/Diagnostic.cpp")
-FRONTEND=("$SRC/frontend/Lexer.cpp" "$SRC/frontend/Parser.cpp" "$SRC/frontend/AstPrinter.cpp")
+FRONTEND=("$SRC/frontend/Lexer.cpp" "$SRC/frontend/Parser.cpp"
+          "$SRC/frontend/ParserStmtExpr.cpp" "$SRC/frontend/AstPrinter.cpp"
+          "$SRC/frontend/AstReader.cpp")
+# ⚠️ 上面这一行必须与 CMakeLists.txt 的源文件列表一致：前端现在有四个 .cpp
+#    （Parser 拆成 Parser.cpp + ParserStmtExpr.cpp，打印器拆成
+#      AstPrinter.cpp + AstReader.cpp），少一个就是链接期的 undefined reference。
 
 # 每个测试：名字 | 需要的源文件（--bench 条目只构建，不参与"通过"判定）
 TESTS=(

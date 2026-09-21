@@ -40,4 +40,4 @@
 420  compiler/tools/selftest/unit/test_sema.cpp
 135  compiler/tools/selftest/unit/test_sourcefile.cpp
 373  compiler/tools/selftest/unit/test_structured.cpp
-577  compiler/tools/verify.sh
+601  compiler/tools/verify.sh

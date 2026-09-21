@@ -408,6 +408,30 @@ if [ "$CAN_INITPLAN" = "1" ]; then
   fi
 fi
 
+# ── 验证工具必须**能从源码运行** ──
+#    S05 的独立代码生成器检查器曾经把 11 个方法只留在 `.pyc` 字节码里，靠 marshal
+#    在运行时补回来。后果有三条，每一条都足以否掉那份验证：
+#      ① **读不到** —— 我无法审计它到底比了什么；
+#      ② **复现不了** —— 换 Python 版本 marshal 格式就变（它自己还写了按版本号找
+#         `__pycache__` 的兜底，说明作者知道这一点）；
+#      ③ **留不住** —— `.pyc` 没被 gitignore 覆盖，但也不该进源码仓；一次干净 clone
+#         就再也跑不出那个"490/490"。
+#    ⇒ 判据很简单：验证工具目录下**不许有 `.pyc`**，也不许 import marshal 去补代码。
+if [ -d "$TOOLS/selftest" ]; then
+  # ⚠️ 只查**故意放进去的** .pyc：`__pycache__/` 里的是解释器自动生成的缓存
+  #    （且已被 gitignore 覆盖），它不影响可复现性。真正的信号是
+  #    "工具目录下躺着一个源码之外的 .pyc，且代码用 marshal 去读它"。
+  PYC=$(find "$TOOLS/selftest" -name '*.pyc' -not -path '*/__pycache__/*' 2>/dev/null | head -5)
+  MARSHAL=$(grep -ln 'marshal' "$TOOLS"/selftest/*.py 2>/dev/null | head -3)
+  if [ -z "$PYC" ] && [ -z "$MARSHAL" ]; then
+    c_ok "验证工具可从源码运行（无 .pyc、无 marshal 补代码）"
+  else
+    c_bad "验证工具依赖编译产物，无法从源码复现"
+    [ -n "$PYC" ] && echo "$PYC" | sed 's/^/      .pyc: /'
+    [ -n "$MARSHAL" ] && echo "$MARSHAL" | sed 's/^/      marshal: /'
+  fi
+fi
+
 # ─────────────────────────────────────────────────────────────────────────────
 hdr "C6. 结构化 IR 自校验（若 --emit=structured-ir 已实现 —— S05 起）"
 # ─────────────────────────────────────────────────────────────────────────────

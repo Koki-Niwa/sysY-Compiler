@@ -323,6 +323,54 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
+hdr "C5. 初始化计划自校验（若 --emit=initplan 已实现 —— S04 起）"
+# ─────────────────────────────────────────────────────────────────────────────
+# 这一关的产物没有可对齐的历史基线，所以关卡必须**自己**守住三件事：
+#   结构（拼写/形态）、策略（零不物化、`a[4096]={1}` 动作数 ≤3）、规模（转储总量）。
+# 语义正确性（填对没填对）由开发方的 check_initplan.py 负责——它独立实现一遍
+# 初始化语义并模拟计划；关卡不重复那件事。
+CAN_INITPLAN=0
+if [ -x "$COMPILER" ] && [ -x "$TOOLS/selftest/check_initplan_format.py" ]; then
+  FLOG="$WORK/initfmt.log"
+  python3 "$TOOLS/selftest/check_initplan_format.py" --compiler "$COMPILER" \
+      --root "$ROOT" --jobs "$(nproc)" >"$FLOG" 2>&1
+  case $? in
+    0) CAN_INITPLAN=1; c_ok "初始化计划：结构 / 策略 / 规模 $(grep -c . "$FLOG" >/dev/null && echo 合规)"
+       grep -E '范围内用例|转储总量|单文件最大' "$FLOG" | sed 's/^/      /' ;;
+    2) c_skip "初始化计划跳过：--emit=initplan 尚未实现" ;;
+    *) c_bad "初始化计划违反格式 / 策略 / 规模预算"
+       grep -E '✘|判定' "$FLOG" | head -8 | sed 's/^/      /' ;;
+  esac
+fi
+# 语义侧：开发方的独立检查器（自己实现初始化语义 + 模拟计划 + 与源码含义比对）
+if [ "$CAN_INITPLAN" = "1" ]; then
+  if [ -x "$TOOLS/selftest/check_initplan.py" ]; then
+    ILOG="$WORK/initplan.log"
+    if python3 "$TOOLS/selftest/check_initplan.py" --compiler "$COMPILER" \
+          --jobs "$(nproc)" >"$ILOG" 2>&1; then
+      c_ok "初始化语义：独立检查器模拟计划并与源码含义逐元素一致"
+    else
+      c_bad "初始化语义检查失败"
+      grep -E '✘|违反|不一致' "$ILOG" | head -8 | sed 's/^/      /'
+    fi
+  else
+    c_skip "check_initplan.py 未实现（S04 的交付物）"
+  fi
+  if [ -x "$TOOLS/selftest/run_init_cases.py" ]; then
+    CLOG="$WORK/initcases.log"
+    if python3 "$TOOLS/selftest/run_init_cases.py" --compiler "$COMPILER" >"$CLOG" 2>&1; then
+      SUM=$(grep -E '通过|总计' "$CLOG" | tail -1)
+      c_ok "初始化金样例：${SUM:-全过}"
+    else
+      c_bad "初始化金样例有失败"
+      grep -E '✘|失败|FAIL' "$CLOG" | head -8 | sed 's/^/      /'
+    fi
+  else
+    c_skip "run_init_cases.py 未实现（S04 的交付物）"
+  fi
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
 hdr "D. 全量回归（若 run_tests.sh 已实现）"
 # ─────────────────────────────────────────────────────────────────────────────
 CAN_E2E="$CAN_IR"
@@ -372,6 +420,18 @@ fi
 # ─────────────────────────────────────────────────────────────────────────────
 hdr "F. 阶段硬门禁"
 # ─────────────────────────────────────────────────────────────────────────────
+# ★ 能力门控有个洞：C4/C5 在能力不具备时会**跳过**，于是"阶段要求的能力还没做"
+#   反而让关卡全绿通过。S03/S04 起，各阶段**要求**的能力一旦缺失就是硬失败。
+NEED=""
+case "$STAGE" in
+  S03) NEED="sema" ;;
+  S04|S05|S0[6-9]|S1[0-9]|S2[0-8]) NEED="sema initplan" ;;
+esac
+if [ -n "$NEED" ]; then
+  case "$NEED" in *sema*)     [ "$CAN_SEMA" = "1" ]     || c_bad "本阶段要求 --emit=sema，但它没实现/没通过";; esac
+  case "$NEED" in *initplan*) [ "$CAN_INITPLAN" = "1" ] || c_bad "本阶段要求 --emit=initplan，但它没实现/没通过";; esac
+fi
+
 case "$STAGE" in
   S11|S11b|S1[2-9]|S2[0-8])
     echo "  本阶段要求：所有回归 100% 通过（490 个用例输出与 .out 逐字节相同）"

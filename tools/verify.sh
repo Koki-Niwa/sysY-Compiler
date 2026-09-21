@@ -353,6 +353,15 @@ if [ "$CAN_INITPLAN" = "1" ]; then
       c_bad "初始化语义检查失败"
       grep -E '✘|违反|不一致' "$ILOG" | head -8 | sed 's/^/      /'
     fi
+    # ★ 反证：人为改坏的转储必须逐条报红。与 C4 组同一条规矩——
+    #   "检查器全过"只有在证明过它抓得住错之后才有意义（S01 的教训）。
+    if python3 "$TOOLS/selftest/check_initplan.py" --compiler "$COMPILER" --probe \
+          >"$WORK/initplan_probe.log" 2>&1; then
+      c_ok "初始化检查器反证：人为改坏的转储被逐条报红"
+    else
+      c_bad "初始化检查器抓不住人为改坏 —— 它的\"全过\"不可信"
+      grep -E '✘|没抓到|判定' "$WORK/initplan_probe.log" | head -6 | sed 's/^/      /'
+    fi
   else
     c_skip "check_initplan.py 未实现（S04 的交付物）"
   fi

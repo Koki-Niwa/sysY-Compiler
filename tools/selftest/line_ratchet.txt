@@ -34,4 +34,4 @@
 798  compiler/tools/selftest/unit/test_parser.cpp
 414  compiler/tools/selftest/unit/test_sema.cpp
 135  compiler/tools/selftest/unit/test_sourcefile.cpp
-454  compiler/tools/verify.sh
+463  compiler/tools/verify.sh

@@ -1,0 +1,8 @@
+int a[3][4];
+int main() {
+  int i = 1;
+  int j = 2;
+  a[i][j] = 5;
+  int b[2] = {1, 2};
+  return a[i][j] + b[0];
+}

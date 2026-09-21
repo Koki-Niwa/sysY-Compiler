@@ -1,0 +1,7 @@
+int main() {
+  int g = 9;
+  {
+    int g = g + 1;
+  }
+  return 0;
+}

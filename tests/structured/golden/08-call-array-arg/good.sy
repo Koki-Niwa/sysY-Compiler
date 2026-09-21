@@ -1,0 +1,10 @@
+int sum(int a[], int n) {
+  int s = 0;
+  int i = 0;
+  while (i < n) { s = s + a[i]; i = i + 1; }
+  return s;
+}
+int main() {
+  int b[4] = {1,2,3,4};
+  return sum(b, 4);
+}

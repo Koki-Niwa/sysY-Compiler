@@ -1,0 +1,43 @@
+(Module "good.sy") {
+  (Func "f" :ret f32 :param [i32] @line 1) {
+    (GetArg %f.0 0 i32 @line 1)
+    (Alloca %f.1 i32 @line 1)
+    (Store i32 %f.0 %f.1 @line 1)
+    (Alloca %f.2 f32 @line 2)
+    (Int %f.3 0 @line 2)
+    (Sext %f.4 %f.3 @line 2)
+    (GetElementPtr %f.5 f32 i64 0 %f.2 %f.4 @line 2)
+    (Load %f.6 i32 %f.1 @line 2)
+    (I2F %f.7 %f.6 @line 2)
+    (Store f32 %f.7 %f.5 @line 2)
+    (Alloca %f.8 i32 @line 3)
+    (Int %f.9 0 @line 3)
+    (Sext %f.10 %f.9 @line 3)
+    (GetElementPtr %f.11 i32 i64 0 %f.8 %f.10 @line 3)
+    (Int %f.12 1 @line 3)
+    (Store i32 %f.12 %f.11 @line 3)
+    (Alloca %f.13 f32 @line 4)
+    (Int %f.14 0 @line 4)
+    (Sext %f.15 %f.14 @line 4)
+    (GetElementPtr %f.16 f32 i64 0 %f.13 %f.15 @line 4)
+    (Float %f.17 0x0p+0 @line 4)
+    (Store f32 %f.17 %f.16 @line 4)
+    (Load %f.18 i32 %f.1 @line 5)
+    (If %f.18 @line 5) {
+      (Load %f.19 f32 %f.2 @line 5)
+      (Store f32 %f.19 %f.13 @line 5)
+      (Yield @line 5)
+    }
+    {
+      (Yield @line 5)
+    }
+    (Load %f.20 f32 %f.13 @line 6)
+    (Load %f.21 f32 %f.2 @line 6)
+    (AddF %f.22 %f.21 %f.20 @line 6)
+    (Return %f.22 @line 6)
+  }
+  (Func "main" :ret i32 :param [] @line 8) {
+    (Int %main.0 1 @line 8)
+    (Return %main.0 @line 8)
+  }
+}

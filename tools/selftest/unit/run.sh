@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
 # ============================================================================
 # unit/run.sh —— 支撑层 + 前端单元测试
-#   test_sourcefile  P00 验证标准 §6.8（CRLF 行列号一致性）
-#   test_diagnostic  P00 验证标准 §6.7（诊断输出格式）
+#   test_sourcefile  P00 §6.8（CRLF 行列号一致性）· test_diagnostic P00 §6.7（诊断格式）
 #   test_lexer       S01 验证标准 §7.9（13 个边界用例 + 转储格式 + 拼接不变式）
 #   test_parser      S02 §10 第 4/6/9 项（34 条树形断言 + §5 例子逐字节 + 往返 + 恢复）
-#   test_sema        S03 §10 第 ⑨ 项（转换形状、遮蔽、★诊断条数探针、深树不崩）
-#   test_initlowering S04 §10 第 ⑨ 项（"当前对象"试金石、规模锚点、病态输入）
+#   test_sema        S03 §10⑨（转换形状、遮蔽、★诊断条数探针、深树不崩）
+#   test_initlowering S04 §10⑨（"当前对象"试金石、规模锚点、病态输入）
+#   test_structured  S05 §十⑦（★0..N 容量、铁律 1 形状、检查器反证、20 万层不爆栈）
 # 用 clang++ --std=c++17 直接编译，无第三方框架；每个程序退出 0 即通过。
-# 用法: bash compiler/tools/selftest/unit/run.sh [--keep]
 # ============================================================================
 set -uo pipefail
 
@@ -24,14 +23,14 @@ mkdir -p "$WORK"
 # -Werror：零警告是硬门禁（clang++ 对 mingw 目标的告警与本项目无关，已避开）。
 FLAGS=(--std=c++17 -Wall -Wextra -Wpedantic -Werror -O1 -I"$SRC")
 SUPPORT=("$SRC/support/SourceFile.cpp" "$SRC/support/Diagnostic.cpp")
-FRONTEND=("$SRC/frontend/Lexer.cpp" "$SRC/frontend/Parser.cpp"
-          "$SRC/frontend/ParserStmtExpr.cpp" "$SRC/frontend/AstPrinter.cpp"
-          "$SRC/frontend/AstReader.cpp"
-          "$SRC/frontend/ConstEval.cpp" "$SRC/frontend/RuntimeLib.cpp"
-          "$SRC/frontend/Sema.cpp" "$SRC/frontend/SemaStmt.cpp"
-          "$SRC/frontend/SemaExpr.cpp" "$SRC/frontend/SemaDecl.cpp"
-          "$SRC/frontend/SemaDump.cpp"
-          "$SRC/frontend/InitLowering.cpp" "$SRC/frontend/InitLoweringDump.cpp")
+FRONTEND=("$SRC/frontend/Lexer.cpp" "$SRC/frontend/Parser.cpp" "$SRC/frontend/ParserStmtExpr.cpp"
+          "$SRC/frontend/AstPrinter.cpp" "$SRC/frontend/AstReader.cpp" "$SRC/frontend/ConstEval.cpp"
+          "$SRC/frontend/RuntimeLib.cpp" "$SRC/frontend/Sema.cpp" "$SRC/frontend/SemaStmt.cpp"
+          "$SRC/frontend/SemaExpr.cpp" "$SRC/frontend/SemaDecl.cpp" "$SRC/frontend/SemaDump.cpp"
+          "$SRC/frontend/InitLowering.cpp" "$SRC/frontend/InitLoweringDump.cpp"
+          "$SRC/structured/StructuredIR.cpp" "$SRC/structured/StructuredDump.cpp"
+          "$SRC/structured/StructuredReader.cpp" "$SRC/structured/StructuredVerifier.cpp"
+          "$SRC/structured/IRGenTypes.cpp" "$SRC/structured/IRGen.cpp" "$SRC/structured/IRGenStmt.cpp")
 # ⚠️ 上面必须与 CMakeLists.txt 的源文件列表一致，少一个就是 undefined reference。
 
 # 每个测试：名字 | 需要的源文件（--bench 条目只构建，不参与"通过"判定）
@@ -41,7 +40,8 @@ TESTS=(
   "test_lexer|${SUPPORT[*]} ${FRONTEND[*]}"
   "test_parser|${SUPPORT[*]} ${FRONTEND[*]}"
   "test_sema|${SUPPORT[*]} ${FRONTEND[*]}"
-  "test_initlowering|${SUPPORT[*]} ${FRONTEND[*]}")
+  "test_initlowering|${SUPPORT[*]} ${FRONTEND[*]}"
+  "test_structured|${SUPPORT[*]} ${FRONTEND[*]}")
 BENCHES=(
   "bench_lexer|${SUPPORT[*]} ${FRONTEND[*]}"
 )

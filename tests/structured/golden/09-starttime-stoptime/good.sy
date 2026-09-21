@@ -1,0 +1,6 @@
+int main() {
+  starttime();
+  int x = 1;
+  stoptime();
+  return x;
+}

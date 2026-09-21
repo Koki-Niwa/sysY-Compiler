@@ -55,6 +55,14 @@ add_executable(compiler
   src/frontend/SemaDump.cpp
   src/frontend/InitLowering.cpp
   src/frontend/InitLoweringDump.cpp
+  # ── S05：两层 IR 的第一层（结构化 IR）────────────────────────────────────
+  src/structured/StructuredIR.cpp
+  src/structured/StructuredDump.cpp
+  src/structured/StructuredReader.cpp
+  src/structured/StructuredVerifier.cpp
+  src/structured/IRGenTypes.cpp
+  src/structured/IRGen.cpp
+  src/structured/IRGenStmt.cpp
 )
 
 target_include_directories(compiler PRIVATE src)

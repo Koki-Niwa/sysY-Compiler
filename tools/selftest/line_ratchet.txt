@@ -17,9 +17,9 @@
 795  compiler/tools/selftest/check_structured.py
 177  compiler/tools/selftest/check_tokens_meta.py
 171  compiler/tools/selftest/gen_manifest.py
+200  compiler/tools/selftest/iic_front.py
 144  compiler/tools/selftest/iic_sexp.py
-786  compiler/tools/selftest/independent_irgen_check.py
-7  compiler/tools/selftest/independent_irgen_check_main.py
+709  compiler/tools/selftest/independent_irgen_check.py
 976  compiler/tools/selftest/independent_parser_check.py
 380  compiler/tools/selftest/initplan_dump.py
 510  compiler/tools/selftest/initplan_sem.py

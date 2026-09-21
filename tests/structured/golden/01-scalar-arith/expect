@@ -1,0 +1,24 @@
+(Module "good.sy") {
+  (Func "main" :ret i32 :param [] @line 1) {
+    (Alloca %main.0 i32 @line 2)
+    (Int %main.1 0 @line 2)
+    (Sext %main.2 %main.1 @line 2)
+    (GetElementPtr %main.3 i32 i64 0 %main.0 %main.2 @line 2)
+    (Int %main.4 1 @line 2)
+    (Store i32 %main.4 %main.3 @line 2)
+    (Alloca %main.5 i32 @line 3)
+    (Int %main.6 0 @line 3)
+    (Sext %main.7 %main.6 @line 3)
+    (GetElementPtr %main.8 i32 i64 0 %main.5 %main.7 @line 3)
+    (Int %main.9 2 @line 3)
+    (Store i32 %main.9 %main.8 @line 3)
+    (Int %main.10 4 @line 4)
+    (Int %main.11 3 @line 4)
+    (Load %main.12 i32 %main.5 @line 4)
+    (MulI %main.13 %main.12 %main.11 @line 4)
+    (Load %main.14 i32 %main.0 @line 4)
+    (AddI %main.15 %main.14 %main.13 @line 4)
+    (SubI %main.16 %main.15 %main.10 @line 4)
+    (Return %main.16 @line 4)
+  }
+}

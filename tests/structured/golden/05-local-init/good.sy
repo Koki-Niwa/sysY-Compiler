@@ -1,0 +1,9 @@
+int main() {
+  int z[4] = {};
+  int one[4] = {1};
+  int c[2] = {4, 5};
+  int k = 3;
+  int d[3] = {k, 2, 3};
+  int m[8] = {1,2,3,4,5,6,7,8};
+  return z[0] + one[0] + c[1] + d[0] + m[7];
+}

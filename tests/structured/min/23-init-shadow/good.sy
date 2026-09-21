@@ -1,0 +1,10 @@
+int main() {
+  int g = 9;
+  int l = 11;
+  {
+    g = 10;
+    int g = 11;
+    l = l + g;
+  }
+  return g + l;
+}

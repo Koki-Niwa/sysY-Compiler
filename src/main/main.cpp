@@ -14,7 +14,9 @@
 // 【S02】--emit=ast 与 --from-ast 已是【真实实现】（语法分析器 + AST 打印/读取器）。
 // 【S03】--emit=sema 已是【真实实现】（语义分析 + 类型注解转储）。
 // 【S04】--emit=initplan 已是【真实实现】（初始化器降级 → 初始化计划）。
-//        其余 emit 仍是占位。
+// 【S05】--emit=structured-ir 已是【真实实现】（IRGen：Sema 后的 AST + InitPlan
+//        → 结构化 IR）；--from-structured 读回该文本（轨 A：往返逐字节相同）。
+//        其余 emit 仍是占位（--emit=llvm-ir 是 S07）。
 //
 // 铁律 4：编译器本体不调用任何外部程序（这里没有 system/exec/fork）。
 // ============================================================================
@@ -34,6 +36,10 @@
 #include "frontend/Parser.h"
 #include "frontend/Sema.h"
 #include "frontend/SemaDump.h"
+#include "structured/IRGen.h"
+#include "structured/StructuredDump.h"
+#include "structured/StructuredReader.h"
+#include "structured/StructuredVerifier.h"
 #include "frontend/Token.h"
 #include "support/Diagnostic.h"
 #include "support/Errors.h"
@@ -102,6 +108,7 @@ struct Options {
   bool optimize = false;       // --optimize：与 -O1 等价的别名（run_tests.sh 用它）
   bool toyBackend = false;     // --toy-backend：S11b 起表示"用自研降级器"；当前只接受
   bool fromAst = false;        // --from-ast：输入是 S-表达式（不是 SysY 源码）
+  bool fromStructured = false;  // --from-structured：输入是结构化 IR 文本
   bool verbose = false;
 };
 
@@ -117,6 +124,8 @@ const char* kHelpText =
     "  --from-ast         输入是 --emit=ast 的产物（S-表达式），而不是 SysY 源码\n"
     "                     （S02 起用于验证：source --emit=ast --from-ast --emit=ast）\n"
     "                     --emit=sema 时同样接受；产物不保证能被读回（单向视图）\n"
+    "  --from-structured  输入是 --emit=structured-ir 的产物（S-表达式），而不是\n"
+    "                     SysY 源码（S05 起用于轨 A：往返必须逐字节相同）\n"
     "  -O0 / -O1          优化级别（-O1 目前只记录，S17 起生效）\n"
     "  --optimize         -O1 的别名（tools/run_tests.sh 使用长选项名）\n"
     "  -S                 接受但不解释（比赛调用形式: compiler a.sy -S -o a.s）\n"
@@ -145,7 +154,7 @@ bool parseCommandLine(int argc, char** argv, Options& opts) {
     }
     if (a == "-v" || a == "--version") {
       std::cout << "sysy-compiler " << SYSY_COMPILER_VERSION
-                << " (front/middle end; stage S04 — init lowering)\n";
+                << " (front/middle end; stage S05 — structured IR + IRGen)\n";
       return false;
     }
     if (a == "-o") {
@@ -188,6 +197,8 @@ bool parseCommandLine(int argc, char** argv, Options& opts) {
     // 那是【测试链路】的选择，不是编译器的行为；编译器只需接受它（同 -S 的处理方式）。
     if (a == "--toy-backend")   { opts.toyBackend = true; continue; }
     if (a == "--from-ast")      { opts.fromAst = true; continue; }
+    // --from-structured：输入是结构化 IR 文本（S05 轨 A 的"读回"路径）
+    if (a == "--from-structured") { opts.fromStructured = true; continue; }
     if (a == "--verbose")       { opts.verbose = true; continue; }
 
     if (!a.empty() && a[0] == '-' && a != "-") {
@@ -344,6 +355,72 @@ std::string renderInitPlan(const SourceFile& src, DiagnosticEngine& diags, bool 
   return sysy::printInitPlanDump(plan);
 }
 
+// ============================================================================
+// --emit=structured-ir 的真实实现（S05）
+//
+//   流水线（**顺序固定**）：Lexer → Parser → Sema → InitLowering → IRGen → dump
+//     * Sema **必须**跑：IRGen 只读它填的字段（Expr::type / LVal::objType /
+//       VarDef::semType / Param::semType）与它插的 `Cast` 节点；
+//     * InitLowering **必须**跑：初始化完全按 S04 的 InitPlan 降级（prompt §五.11），
+//       IRGen **不重新解释** InitVal；
+//     * 这是**独立的一条流水线**，与前三个 emit 互不影响 —— 前三档的输出是
+//       冻结契约（关卡逐字节比对），所以它们各自的路径一个字节都不许变。
+//
+//   ★ 源文件基名（不是绝对路径）进 `(Module "x")`：dump 必须是**纯函数**
+//     （同一输入两次运行逐字节相同，不含路径/时间戳/地址）。
+// ============================================================================
+std::string baseNameOf(const std::string& path) {
+  const size_t p = path.find_last_of("/\\");
+  return (p == std::string::npos) ? path : path.substr(p + 1);
+}
+
+std::string renderStructuredIr(const SourceFile& src, DiagnosticEngine& diags, bool fromAst) {
+  std::unique_ptr<CompUnit> unit;
+  if (fromAst) {
+    unit = sysy::parseAstText(src.text(), diags);
+  } else {
+    Lexer lexer(src, diags);
+    Parser parser(lexer, diags);
+    unit = parser.parseCompUnit();
+  }
+  if (unit == nullptr) return std::string();   // 契约上不会发生（Parser 保证非空）
+  sysy::Sema sema(diags);
+  sema.run(*unit);
+  const sysy::InitPlan plan = sysy::runInitLowering(*unit, sema);
+  sysy::sir::Arena arena;
+  // ⚠️ Sema 的生命期必须覆盖 IRGen（IRGen 要用 `Cast`/类型注解，但不再查符号表）
+  sysy::sir::Op* mod = sysy::sir::buildModule(arena, *unit, plan, baseNameOf(src.path()), diags);
+  // ★ 自查：结构化 IR 生成后立刻验六条不变式（I4/I5/use-def/指令集封闭/
+  //   终结符匹配/GEP 标记）。**失败即报 error 并退出码 1**（prompt §九.6：
+  //   不允许"静默产出坏 IR"）。这就是"IRGen 直接产出合法 IR"的落地保证。
+  const std::vector<sysy::sir::Violation> vs = sysy::sir::verifyModule(mod);
+  if (!vs.empty()) {
+    std::string msg = "结构化 IR 违反不变量（" + std::to_string(vs.size()) + " 条）：\n";
+    for (size_t i = 0; i < vs.size() && i < 10; ++i) {
+      msg += "  [";
+      msg += vs[i].invariant;
+      msg += "] ";
+      if (vs[i].loc.line != 0) msg += "line " + std::to_string(vs[i].loc.line) + ": ";
+      msg += vs[i].message;
+      msg += '\n';
+    }
+    diags.report(DiagLevel::Error, sysy::SourceLoc(0, 0), "E-STRUCT-VERIFY", msg);
+  }
+  return sysy::sir::dumpModule(mod);
+}
+
+// ============================================================================
+// --from-structured 的真实实现（S05 轨 A）
+//   输入是 `--emit=structured-ir` 的产物；**不经过 Lexer/Parser**（它不是 SysY）。
+//   读回 → 再 dump，与原文**逐字节相同**（打印器与读取器互逆）。
+// ============================================================================
+std::string renderFromStructured(const SourceFile& src, DiagnosticEngine& diags) {
+  sysy::sir::Arena arena;
+  sysy::sir::Op* mod = sysy::sir::parseStructuredModule(src.text(), arena, diags);
+  if (mod == nullptr) return std::string();   // 诊断已经报出；产物照常写出（可定位）
+  return sysy::sir::dumpModule(mod);
+}
+
 // —— 尚未实现的 emit 模式的占位产物 ——
 std::string renderPlaceholder(EmitKind kind, const Options& opts, const SourceFile& src) {
   std::string out;
@@ -357,8 +434,9 @@ std::string renderPlaceholder(EmitKind kind, const Options& opts, const SourceFi
   out += ";\n";
   out += "; 本阶段真实可用：--emit=tokens（词法）、--emit=ast / --from-ast（语法+AST）、\n";
   out += ";               --emit=sema（语义分析 + 类型注解转储）、\n";
-  out += ";               --emit=initplan（初始化计划）。\n";
-  out += "; IR 尚未实现（S05 起）。\n";
+  out += ";               --emit=initplan（初始化计划）、\n";
+  out += ";               --emit=structured-ir / --from-structured（结构化 IR）。\n";
+  out += "; LLVM IR 文本发射器尚未实现（S07）；本档是占位。\n";
   out += "; 交给后端的 .ll 契约（TESTING-GUIDE §3.3）：目标无关 ——\n";
   out += ";   不带 target triple、不带 target datalayout、\n";
   out += ";   函数属性里不带 target-cpu / target-features。\n";
@@ -420,8 +498,13 @@ int main(int argc, char** argv) {
           // ★ S04 的真实产物：初始化器降级 → 初始化计划（§4.3 的冻结格式）
           artifact = renderInitPlan(src, diags, opts.fromAst);
           break;
-        case EmitKind::LlvmIr:
         case EmitKind::StructuredIr:
+          // ★ S05 的真实产物：结构化 IR（容器 → 文本）
+          artifact = opts.fromStructured ? renderFromStructured(src, diags)
+                                         : renderStructuredIr(src, diags, opts.fromAst);
+          break;
+        case EmitKind::LlvmIr:
+          // S07 才实现；本档是占位。
           artifact = renderPlaceholder(opts.emit, opts, src);
           break;
         case EmitKind::Nothing:

@@ -1,0 +1,4 @@
+int zeros[8] = {};
+int data[3] = {1, 2, 3};
+float fs[2] = {1, 0.5};
+int main() { return data[1]; }

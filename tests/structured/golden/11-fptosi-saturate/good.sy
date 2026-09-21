@@ -1,0 +1,9 @@
+int main() {
+  float f = 1.5;
+  int x = f;
+  float big = 1e30;
+  int y = big;
+  float small = -1e30;
+  int z = small;
+  return x + y + z;
+}

@@ -1,0 +1,163 @@
+(Module "good.sy") {
+  (Func "main" :ret i32 :param [] @line 1) {
+    (Alloca %main.0 f32 @line 2)
+    (Int %main.1 0 @line 2)
+    (Sext %main.2 %main.1 @line 2)
+    (GetElementPtr %main.3 f32 i64 0 %main.0 %main.2 @line 2)
+    (Float %main.4 0x1.8p+0 @line 2)
+    (Store f32 %main.4 %main.3 @line 2)
+    (Alloca %main.5 i32 @line 3)
+    (Int %main.6 0 @line 3)
+    (Sext %main.7 %main.6 @line 3)
+    (GetElementPtr %main.8 i32 i64 0 %main.5 %main.7 @line 3)
+    (Load %main.9 f32 %main.0 @line 3)
+    (Float %main.10 0x1p+31 @line 3)
+    (Gt %main.11 %main.9 %main.10 @line 3)
+    (Float %main.12 -0x1p+31 @line 3)
+    (Lt %main.13 %main.9 %main.12 @line 3)
+    (Ne %main.14 %main.9 %main.9 @line 3)
+    (Alloca %main.15 i32 @line 3)
+    (Alloca %main.16 i32 @line 3)
+    (Alloca %main.17 i32 @line 3)
+    (If %main.11 @line 3) {
+      (Int %main.18 2147483647 @line 3)
+      (Store i32 %main.18 %main.15 @line 3)
+      (Yield @line 3)
+    }
+    {
+      (If %main.13 @line 3) {
+        (Int %main.19 -2147483648 @line 3)
+        (Store i32 %main.19 %main.16 @line 3)
+        (Yield @line 3)
+      }
+      {
+        (If %main.14 @line 3) {
+          (Int %main.20 0 @line 3)
+          (Store i32 %main.20 %main.17 @line 3)
+          (Yield @line 3)
+        }
+        {
+          (F2I %main.21 %main.9 @line 3)
+          (Store i32 %main.21 %main.17 @line 3)
+          (Yield @line 3)
+        }
+        (Load %main.22 i32 %main.17 @line 3)
+        (Store i32 %main.22 %main.16 @line 3)
+        (Yield @line 3)
+      }
+      (Load %main.23 i32 %main.16 @line 3)
+      (Store i32 %main.23 %main.15 @line 3)
+      (Yield @line 3)
+    }
+    (Load %main.24 i32 %main.15 @line 3)
+    (Store i32 %main.24 %main.8 @line 3)
+    (Alloca %main.25 f32 @line 4)
+    (Int %main.26 0 @line 4)
+    (Sext %main.27 %main.26 @line 4)
+    (GetElementPtr %main.28 f32 i64 0 %main.25 %main.27 @line 4)
+    (Float %main.29 0x1.93e594p+99 @line 4)
+    (Store f32 %main.29 %main.28 @line 4)
+    (Alloca %main.30 i32 @line 5)
+    (Int %main.31 0 @line 5)
+    (Sext %main.32 %main.31 @line 5)
+    (GetElementPtr %main.33 i32 i64 0 %main.30 %main.32 @line 5)
+    (Load %main.34 f32 %main.25 @line 5)
+    (Float %main.35 0x1p+31 @line 5)
+    (Gt %main.36 %main.34 %main.35 @line 5)
+    (Float %main.37 -0x1p+31 @line 5)
+    (Lt %main.38 %main.34 %main.37 @line 5)
+    (Ne %main.39 %main.34 %main.34 @line 5)
+    (Alloca %main.40 i32 @line 5)
+    (Alloca %main.41 i32 @line 5)
+    (Alloca %main.42 i32 @line 5)
+    (If %main.36 @line 5) {
+      (Int %main.43 2147483647 @line 5)
+      (Store i32 %main.43 %main.40 @line 5)
+      (Yield @line 5)
+    }
+    {
+      (If %main.38 @line 5) {
+        (Int %main.44 -2147483648 @line 5)
+        (Store i32 %main.44 %main.41 @line 5)
+        (Yield @line 5)
+      }
+      {
+        (If %main.39 @line 5) {
+          (Int %main.45 0 @line 5)
+          (Store i32 %main.45 %main.42 @line 5)
+          (Yield @line 5)
+        }
+        {
+          (F2I %main.46 %main.34 @line 5)
+          (Store i32 %main.46 %main.42 @line 5)
+          (Yield @line 5)
+        }
+        (Load %main.47 i32 %main.42 @line 5)
+        (Store i32 %main.47 %main.41 @line 5)
+        (Yield @line 5)
+      }
+      (Load %main.48 i32 %main.41 @line 5)
+      (Store i32 %main.48 %main.40 @line 5)
+      (Yield @line 5)
+    }
+    (Load %main.49 i32 %main.40 @line 5)
+    (Store i32 %main.49 %main.33 @line 5)
+    (Alloca %main.50 f32 @line 6)
+    (Int %main.51 0 @line 6)
+    (Sext %main.52 %main.51 @line 6)
+    (GetElementPtr %main.53 f32 i64 0 %main.50 %main.52 @line 6)
+    (Float %main.54 -0x1.93e594p+99 @line 6)
+    (Store f32 %main.54 %main.53 @line 6)
+    (Alloca %main.55 i32 @line 7)
+    (Int %main.56 0 @line 7)
+    (Sext %main.57 %main.56 @line 7)
+    (GetElementPtr %main.58 i32 i64 0 %main.55 %main.57 @line 7)
+    (Load %main.59 f32 %main.50 @line 7)
+    (Float %main.60 0x1p+31 @line 7)
+    (Gt %main.61 %main.59 %main.60 @line 7)
+    (Float %main.62 -0x1p+31 @line 7)
+    (Lt %main.63 %main.59 %main.62 @line 7)
+    (Ne %main.64 %main.59 %main.59 @line 7)
+    (Alloca %main.65 i32 @line 7)
+    (Alloca %main.66 i32 @line 7)
+    (Alloca %main.67 i32 @line 7)
+    (If %main.61 @line 7) {
+      (Int %main.68 2147483647 @line 7)
+      (Store i32 %main.68 %main.65 @line 7)
+      (Yield @line 7)
+    }
+    {
+      (If %main.63 @line 7) {
+        (Int %main.69 -2147483648 @line 7)
+        (Store i32 %main.69 %main.66 @line 7)
+        (Yield @line 7)
+      }
+      {
+        (If %main.64 @line 7) {
+          (Int %main.70 0 @line 7)
+          (Store i32 %main.70 %main.67 @line 7)
+          (Yield @line 7)
+        }
+        {
+          (F2I %main.71 %main.59 @line 7)
+          (Store i32 %main.71 %main.67 @line 7)
+          (Yield @line 7)
+        }
+        (Load %main.72 i32 %main.67 @line 7)
+        (Store i32 %main.72 %main.66 @line 7)
+        (Yield @line 7)
+      }
+      (Load %main.73 i32 %main.66 @line 7)
+      (Store i32 %main.73 %main.65 @line 7)
+      (Yield @line 7)
+    }
+    (Load %main.74 i32 %main.65 @line 7)
+    (Store i32 %main.74 %main.58 @line 7)
+    (Load %main.75 i32 %main.55 @line 8)
+    (Load %main.76 i32 %main.30 @line 8)
+    (Load %main.77 i32 %main.5 @line 8)
+    (AddI %main.78 %main.77 %main.76 @line 8)
+    (AddI %main.79 %main.78 %main.75 @line 8)
+    (Return %main.79 @line 8)
+  }
+}

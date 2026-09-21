@@ -1,0 +1,8 @@
+float f(int a) {
+  float x = a;
+  int y = 1.5;
+  float z = 0.0;
+  if (a) { z = x; }
+  return x + z;
+}
+int main() { return 1; }

@@ -5,6 +5,7 @@
 
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "frontend/RuntimeLib.h"
@@ -272,9 +273,15 @@ class Checker {
     }
   }
 
-  // ── I1 / I2 / I3（★ S05 不产 ForOp ⇒ 这三条在本关**平凡成立**）──────────
-  //   实现是规格要求（prompt §4.2），并在单元测试里用**手工构造的 IR** 验证
-  //   检查器真的抓得住。**不要把"检查器有这三条"读成"S05 验证过循环不变量"**。
+  // ── I1 / I2 / I3（★ S05b 起它们**不再平凡**：IR 里真的有 `ForOp` 了）────
+  //    实现方式是 **IR 上的 use-def**（`ForOp` 的 4 个操作数就是身份）：
+  //      * 操作数 0 = IV 的槽（`AllocaOp` 的结果）—— I1 判"体内有没有写它"；
+  //      * 操作数 1/2/3 = lower/upper/step —— I2 判"它们的定义在不在体内"；
+  //      * I3 = 体内**一个** `BreakOp` 都不许有。
+  //    ★ 为什么 I1 用**操作数身份**而不是"IV 名字等于某个 Alloca 的名字"：
+  //      同名遮蔽是合法的（`int i` 两处作用域），按名字比会把**内层**同名变量
+  //      的 Store 误判成"写了外层 IV"（假红），也会漏掉"换了个槽但语义相同"
+  //      的情形。身份比较是可判定的，名字不是。
   void checkForInvariants(const Op* op, const Ctx& ctx) {
     (void)ctx;
     if (op->numRegions() != 1) {
@@ -284,66 +291,126 @@ class Checker {
     const Region* body = op->region(0);
     const std::string iv = op->strAttr(0);
     if (iv.empty()) add("I1", op->loc, "ForOp 缺少 IV 名字（attrs[0]）");
-    if (op->numOperands() != 3) {
-      add("I2", op->loc, "ForOp 必须有 3 个操作数（lower/upper/step），有 " +
+    if (op->numOperands() != 4) {
+      add("I2", op->loc, "ForOp 必须有 4 个操作数（iv/lower/upper/step），有 " +
                              std::to_string(op->numOperands()) + " 个");
+      return;
     }
-    // where：某个 Op 是否在 body 子树里（含 body 自己）
-    auto inBody = [&](const Op* target) {
-      if (target == nullptr || body == nullptr) return false;
-      bool found = false;
-      std::vector<const Op*> st;
-      for (size_t i = 0; i < body->size(); ++i) st.push_back(body->at(i));
-      while (!st.empty()) {
-        const Op* x = st.back();
-        st.pop_back();
-        if (x == nullptr) continue;
-        if (x == target) { found = true; break; }
-        for (size_t i = 0; i < x->numRegions(); ++i) {
-          const Region* r = x->region(i);
-          if (r == nullptr) continue;
-          for (size_t j = 0; j < r->size(); ++j) st.push_back(r->at(j));
-        }
-      }
-      return found;
-    };
-    // I1：IV 在循环体内不被赋值 —— 体内任何 StoreOp 的目的地不能是 IV 的槽。
-    //     这里用**保守判据**：体内出现了对 IV 名字的 Alloca 槽的 Store，就算违反。
-    //     （真正的证明属于 LoopNormalize，检查器只回答"没被写"这个可判定的问题。）
+    const Value ivSlot = op->operand(0);
+    if (ivSlot == nullptr) {
+      add("I1", op->loc, "ForOp 的 IV 槽是空值");
+    } else if (ivSlot->definer != nullptr && ivSlot->definer->kind != OpKind::Alloca) {
+      add("I1", op->loc, "ForOp 的 IV 槽不是 AllocaOp 的结果（是 `" +
+                             name(ivSlot->definer) + "`）");
+    } else if (ivSlot->definer != nullptr && ivSlot->definer->numResults() != 1) {
+      add("I1", op->loc, "ForOp 的 IV 槽所在的 AllocaOp 有 " +
+                             std::to_string(ivSlot->definer->numResults()) + " 个结果");
+    }
+
+    // 体内遍历（显式工作栈；**不递归**）
+    std::vector<const Op*> st;
     if (body != nullptr) {
-      std::vector<const Op*> st;
       for (size_t i = 0; i < body->size(); ++i) st.push_back(body->at(i));
-      while (!st.empty()) {
-        const Op* x = st.back();
-        st.pop_back();
-        if (x == nullptr) continue;
-        if (x->kind == OpKind::Store && x->numOperands() == 2) {
-          const Op* dst = x->operand(1) != nullptr ? x->operand(1)->definer : nullptr;
-          if (dst != nullptr && dst->kind == OpKind::Alloca &&
-              !dst->strAttr(0).empty() && dst->strAttr(0) == iv) {
-            add("I1", x->loc, "ForOp 的 IV `" + iv + "` 在循环体内被赋值");
-          }
-        }
-        if (x->kind == OpKind::Break) {
-          add("I3", x->loc, "ForOp 体内出现 BreakOp（SCoP 条件要求体内无 break）");
-        }
-        for (size_t i = 0; i < x->numRegions(); ++i) {
-          const Region* r = x->region(i);
-          if (r == nullptr) continue;
-          for (size_t j = 0; j < r->size(); ++j) st.push_back(r->at(j));
+    }
+    // I2 需要知道哪些 Op 在体内（含嵌套）——顺手建一个集合
+    std::unordered_map<const Op*, bool> inBody;
+    std::vector<const Op*> all;
+    while (!st.empty()) {
+      const Op* x = st.back();
+      st.pop_back();
+      if (x == nullptr || inBody.count(x) != 0) continue;
+      inBody[x] = true;
+      all.push_back(x);
+      for (size_t i = 0; i < x->numRegions(); ++i) {
+        const Region* r = x->region(i);
+        if (r == nullptr) continue;
+        for (size_t j = 0; j < r->size(); ++j) st.push_back(r->at(j));
+      }
+    }
+    // ── I1：IV 的槽在体内不被赋值（`ForOp` 自身的步进不算）──────────────
+    //   ⚠️ 用**操作数身份**比：`Store` 的目的地 == IV 槽的结果指针。
+    for (const Op* x : all) {
+      if (x->kind != OpKind::Store || x->numOperands() != 2) continue;
+      if (ivSlot != nullptr && x->operand(1) == ivSlot) {
+        add("I1", x->loc, "ForOp 的 IV `" + iv + "` 在循环体内被赋值");
+      }
+    }
+    // ── I3：体内没有 `BreakOp`（SCoP 条件；LoopNormalize 的成功条件之一）──
+    for (const Op* x : all) {
+      if (x->kind == OpKind::Break) {
+        add("I3", x->loc, "ForOp 体内出现 BreakOp（SCoP 条件要求体内无 break）");
+      }
+    }
+    // ── I2：lower/upper/step 在体内**不被修改** ──────────────────────────
+    //   两重判据（都是**声音的**近似）：
+    //     ① `G` = lower/upper/step 的整棵依赖子树里的 Op。`G` 与"体内 Op"的交集
+    //        必须为空 —— 这排除"边界表达式就是体内算出来的"（例如边界依赖 IV）；
+    //     ② 反过来：若边界子树里出现"体内被写过某个本地槽的 `Load`"，说明这个
+    //        边界的值会随循环改变 ⇒ 违反 I2。这一条抓的是"边界读 `n`，而体内
+    //        写 `n`"（IRGen 的 `while (i < n)` 正是这个形状）。
+    //   ★ 为什么不只看操作数的直接定义者（S05 的旧实现）：那只覆盖"边界就是
+    //     体内那条指令"的平凡情形，漏掉"边界是 `n - 1` 而 `n` 在体内被写"。
+    std::unordered_map<const Op*, bool> gset;
+    {
+      std::vector<const Op*> gs;
+      for (size_t i = 1; i < op->numOperands(); ++i) {
+        const Value v = op->operand(i);
+        gs.push_back((v != nullptr) ? v->definer : nullptr);
+      }
+      while (!gs.empty()) {
+        const Op* x = gs.back();
+        gs.pop_back();
+        if (x == nullptr || gset.count(x) != 0) continue;
+        gset[x] = true;
+        for (size_t i = 0; i < x->numOperands(); ++i) {
+          const Value v = x->operand(i);
+          gs.push_back((v != nullptr) ? v->definer : nullptr);
         }
       }
     }
-    // I2：lower/upper/step 在体内不被修改 —— 同上，看三个操作数的定义是否在体内
-    for (size_t i = 0; i < op->numOperands(); ++i) {
+    static const char* kBound[3] = {"lower", "upper", "step"};
+    // 体内被写过的本地槽（**只算一次**：I2 的两条判据都要用）
+    std::unordered_set<const Op*> written;
+    for (const Op* x : all) {
+      if (x->kind != OpKind::Store || x->numOperands() != 2) continue;
+      const Op* slot = rootSlot(x->operand(1));
+      if (slot != nullptr) written.insert(slot);
+    }
+    for (size_t i = 1; i < op->numOperands(); ++i) {
       const Value v = op->operand(i);
       const Op* d = (v != nullptr) ? v->definer : nullptr;
-      if (d != nullptr && inBody(d)) {
-        static const char* kBound[3] = {"lower", "upper", "step"};
-        add("I2", op->loc, std::string("ForOp 的 ") + kBound[i < 3 ? i : 2] +
+      if (d != nullptr && inBody.count(d) != 0) {
+        add("I2", op->loc, std::string("ForOp 的 ") + kBound[i - 1] +
                                " 在循环体**内**被定义（体内可能修改它）");
+        continue;
+      }
+      if (d == nullptr || gset.count(d) == 0) continue;
+      // 边界子树里读的槽若在体内被写 ⇒ 边界的值会随循环改变 ⇒ 违反 I2
+      for (const auto& kv : gset) {
+        const Op* x = kv.first;
+        if (x->kind != OpKind::Load || x->numOperands() != 1) continue;
+        const Value p = x->operand(0);
+        const Op* slot = (p != nullptr) ? p->definer : nullptr;
+        if (slot != nullptr && written.count(slot) != 0) {
+          add("I2", op->loc, std::string("ForOp 的 ") + kBound[i - 1] +
+                                 " 依赖的槽在循环体内被写（`lower/upper/step` "
+                                 "必须循环不变）");
+          break;
+        }
       }
     }
+  }
+
+  // 【后置】`p` 的**根槽**：沿 `GetElementPtr` 一路回到 `AllocaOp`；
+  //         不是本地槽（全局/形参指针）→ nullptr。
+  static const Op* rootSlot(const Value p) {
+    const Op* d = (p != nullptr) ? p->definer : nullptr;
+    size_t guard = 0;
+    while (d != nullptr && d->kind == OpKind::GetElementPtr && guard++ < 64) {
+      const Value base = d->operand(0);
+      d = (base != nullptr) ? base->definer : nullptr;
+    }
+    return (d != nullptr && d->kind == OpKind::Alloca) ? d : nullptr;
   }
 
   void checkModuleRegion(const Region* r) {

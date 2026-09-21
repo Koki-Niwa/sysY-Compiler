@@ -1,0 +1,11 @@
+int main() {
+  int i = 0;
+  int s = 0;
+  while (i < 4) {
+    int t[3];
+    t[0] = i;
+    s = s + t[0];
+    i = i + 1;
+  }
+  return s;
+}

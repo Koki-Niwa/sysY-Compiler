@@ -62,6 +62,11 @@ add_executable(compiler
   src/structured/StructuredVerifier.cpp
   src/structured/IRGenTypes.cpp
   src/structured/IRGen.cpp
+  # ── S05b：第一个**变换**（LoopNormalize）+ alloca 提升 ────────────────────
+  src/structured/LoopNormalize.cpp
+  src/structured/LoopAnalysis.cpp
+  src/structured/LoopRewrite.cpp
+  src/structured/AllocaHoist.cpp
   src/structured/IRGenStmt.cpp
 )
 

@@ -1,0 +1,53 @@
+(Module "case.sy") {
+  (Func "main" :ret i32 :param [] @line 1) {
+    (Alloca %main.0 i32 @line 2)
+    (Int %main.1 0 @line 2)
+    (Sext %main.2 %main.1 @line 2)
+    (GetElementPtr %main.3 i32 i64 0 %main.0 %main.2 @line 2)
+    (Int %main.4 0 @line 2)
+    (Store i32 %main.4 %main.3 @line 2)
+    (Alloca %main.5 i32 @line 3)
+    (Int %main.6 0 @line 3)
+    (Sext %main.7 %main.6 @line 3)
+    (GetElementPtr %main.8 i32 i64 0 %main.5 %main.7 @line 3)
+    (Int %main.9 0 @line 3)
+    (Store i32 %main.9 %main.8 @line 3)
+    (Int %main.10 10 @line 4)
+    (Load %main.11 i32 %main.0 @line 4)
+    (Lt %main.12 %main.11 %main.10 @line 4)
+    (Load %main.13 i32 %main.0 @line 4)
+    (Int %main.14 1 @line 4)
+    (For "%main.11" %main.0 %main.13 %main.10 %main.14 @line 4) {
+      (Int %main.15 3 @line 5)
+      (Load %main.16 i32 %main.0 @line 5)
+      (Eq %main.17 %main.16 %main.15 @line 5)
+      (If %main.17 @line 5) {
+        (Int %main.18 1 @line 5)
+        (Load %main.19 i32 %main.0 @line 5)
+        (AddI %main.20 %main.19 %main.18 @line 5)
+        (Yield @line 5)
+      }
+      {
+        (Yield @line 5)
+      }
+      (Int %main.21 0 @line 5)
+      (Eq %main.22 %main.17 %main.21 @line 5)
+      (If %main.22 @line 5) {
+        (Load %main.23 i32 %main.0 @line 6)
+        (Load %main.24 i32 %main.5 @line 6)
+        (AddI %main.25 %main.24 %main.23 @line 6)
+        (Store i32 %main.25 %main.5 @line 6)
+        (Int %main.26 1 @line 7)
+        (Load %main.27 i32 %main.0 @line 7)
+        (AddI %main.28 %main.27 %main.26 @line 7)
+        (Yield @line 4)
+      }
+      {
+        (Yield @line 5)
+      }
+      (Yield @line 4)
+    }
+    (Load %main.29 i32 %main.5 @line 9)
+    (Return %main.29 @line 9)
+  }
+}

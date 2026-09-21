@@ -1,0 +1,11 @@
+int A[16];
+int main() {
+  int i = 0;
+  int j = 0;
+  while (i < 4) {
+    j = 0;
+    while (j < 4) { A[i * 4 + j] = i + j; j = j + 1; }
+    i = i + 1;
+  }
+  return A[0];
+}

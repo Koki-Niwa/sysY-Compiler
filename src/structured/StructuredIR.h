@@ -222,6 +222,20 @@ class Region {
   // 【后置】Region 里的 Op 列表（只读）。供 dump/读回/检查器遍历。
   const std::vector<Op*>& all() const { return ops_; }
 
+  // 【前置】无（`ops` 里的空指针原样保留）。
+  // 【后置】Region 的内容**整体替换**为 `ops`（顺序即给定顺序）。
+  // 【副作用】`ops_` 变成 `ops` 的副本。**`Op*` 本身不失效**（Arena 持有）。
+  // ★ 为什么必须新增这个方法（S05b 是第一个**变换**）：
+  //   S05 只做"构造"（一路 `push`），所以容器只留了"追加"。而 `LoopNormalize`
+  //   要"把条件 Region 的边界表达式搬到循环之前"、"把 `while` 换成 `for`"、
+  //   "摘掉体内末尾的自增" —— 全是**改写中间位置**。没有这个方法就只能
+  //   `const_cast` 绕过容器契约（那会让"顺序由容器保证"这条前提失效）。
+  //   加它与 SESSION-PLAN §5 的"S05 结束后结构化 IR 的 Region 接口**只增不改**"
+  //   一致：`push` 的语义一个字没动，只是多了一个受控的整体替换入口。
+  //   ⚠️ 调用者必须**一次性**给出完整序列：本方法不做任何 I4/use-def 检查
+  //      （那是 StructuredVerifier 的职责）。
+  void replaceAll(std::vector<Op*> ops) { ops_.swap(ops); }
+
  private:
   std::vector<Op*> ops_;
 };

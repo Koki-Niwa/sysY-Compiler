@@ -192,8 +192,18 @@ bool Reader::parseHead(P& p, Op* op, OpKind kind, size_t lineNo) {
     op->addAttr(Attr::ofStr(p.peek().s));
     ++p.i;
   }
+  // ★ S05b 定稿：`ForOp` 的 IV 名字也是**头部属性**
+  //   （`(For "i" %iv %lower %upper %step) { … }`）。理由：dump 是可读契约，
+  //   `IV` 的名字是它最有用的一栏；而 IV 的**身份**是操作数 0
+  //   （`AllocaOp` 的结果），不是这个名字（同名遮蔽合法 ⇒ 名字不可作判据）。
+  //   ⚠️ 必须与 `StructuredDump.cpp` 的头部属性顺序**逐字对应**，否则往返后
+  //      这一段文本会消失（轨 A 立刻报红）。
+  if (kind == OpKind::For) {
+    if (!needStr("IV 名字字符串")) return false;
+    op->addAttr(Attr::ofStr(p.peek().s));
+    ++p.i;
+  }
   if (kind == OpKind::Func) {
-    // `:ret <ty>` 与 `:param [ty, ty]`（prompt §六：函数头必须带签名）
     if (!(p.at(TK::Colon) && p.i + 1 < p.t.size() && p.t[p.i + 1].s == "ret")) {
       err(lineNo, "Func 缺少 `:ret`");
       return false;

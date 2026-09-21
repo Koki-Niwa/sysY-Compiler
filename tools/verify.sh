@@ -71,7 +71,7 @@ fi
 #    ⚠️ 关卡一直**没有**跑单元测试：改一条语义规则时，`run.sh` 里两处断言先红了，
 #    而关卡照样 20 通过 —— 因为没人调它。凡是"标准要求、关卡不查"的东西，
 #    迟早会漂移（这条与 C5 的成因是同一个）。
-if [ -x "$TOOLS/selftest/unit/run.sh" ]; then
+if [ -f "$TOOLS/selftest/unit/run.sh" ]; then
   ULOG="$WORK/unit.log"
   if bash "$TOOLS/selftest/unit/run.sh" >"$ULOG" 2>&1; then
     SUM=$(grep -oE '检查项 [0-9]+ 个' "$ULOG" | tr '\n' ' ')
@@ -86,7 +86,7 @@ fi
 #    "编译器的内存开销不得随源码里的一个数字爆炸"。语料的**正确性**判据看不见这类缺陷
 #    （490 个用例全绿、诊断全对），它会一直藏到现场赛的一个大数组上才 OOM。
 #    判据是几个**压力文件**的实测峰值 RSS —— 见 check_mem_budget.py 里每一行的依据。
-if [ -x "$TOOLS/selftest/check_mem_budget.py" ] && [ -x "$COMPILER" ]; then
+if [ -f "$TOOLS/selftest/check_mem_budget.py" ] && [ -x "$COMPILER" ]; then
   MLOG="$WORK/mem.log"
   if python3 "$TOOLS/selftest/check_mem_budget.py" --compiler "$COMPILER" \
         --root "$ROOT" >"$MLOG" 2>&1; then
@@ -204,7 +204,7 @@ fi
 # ─────────────────────────────────────────────────────────────────────────────
 hdr "C2. 词法自校验（若 check_lexer.py 已实现 —— S01 起）"
 # ─────────────────────────────────────────────────────────────────────────────
-if [ -x "$TOOLS/selftest/check_lexer.py" ] && [ -x "$COMPILER" ]; then
+if [ -f "$TOOLS/selftest/check_lexer.py" ] && [ -x "$COMPILER" ]; then
   LOG="$WORK/lex.log"
   if python3 "$TOOLS/selftest/check_lexer.py" --compiler "$COMPILER" \
         --jobs "$(nproc)" >"$LOG" 2>&1; then
@@ -232,7 +232,7 @@ fi
 # ─────────────────────────────────────────────────────────────────────────────
 hdr "C3. 语法自校验（若 check_parser.py 已实现 —— S02 起）"
 # ─────────────────────────────────────────────────────────────────────────────
-if [ -x "$TOOLS/selftest/check_parser.py" ] && [ -x "$COMPILER" ]; then
+if [ -f "$TOOLS/selftest/check_parser.py" ] && [ -x "$COMPILER" ]; then
   LOG="$WORK/parse.log"
   if python3 "$TOOLS/selftest/check_parser.py" --compiler "$COMPILER" \
         --jobs "$(nproc)" >"$LOG" 2>&1; then
@@ -243,7 +243,7 @@ if [ -x "$TOOLS/selftest/check_parser.py" ] && [ -x "$COMPILER" ]; then
     grep -E '失败|不一致|✘|首处' "$LOG" | head -8 | sed 's/^/      /'
   fi
   # 独立实现交叉验证（若存在）：与 C++ 完全无关的第二份 parser 必须产出同一份 AST
-  if [ -x "$TOOLS/selftest/independent_parser_check.py" ]; then
+  if [ -f "$TOOLS/selftest/independent_parser_check.py" ]; then
     ILOG="$WORK/iparse.log"
     if python3 "$TOOLS/selftest/independent_parser_check.py" --compiler "$COMPILER" \
           --jobs "$(nproc)" >"$ILOG" 2>&1; then
@@ -299,7 +299,7 @@ else
     fi
   fi
   # ② 独立不变式检查器（轨 A 零误报 + 去注解还原 + 16 条类型不变式，一次扫描）
-  if [ -x "$TOOLS/selftest/check_sema.py" ]; then
+  if [ -f "$TOOLS/selftest/check_sema.py" ]; then
     SLOG="$WORK/sema.log"
     if python3 "$TOOLS/selftest/check_sema.py" --compiler "$COMPILER" \
           --jobs "$(nproc)" >"$SLOG" 2>&1; then
@@ -311,7 +311,7 @@ else
     # ②b ★ 证明检查器不是"永远说 OK"：四处**定向人为破坏**必须逐条报红。
     #     这是 S01 留下的教训 —— 自校验脚本必须先证明它抓得住错，
     #     否则"490 个文件全过"可能只是因为它什么都没查。
-    if [ -x "$TOOLS/selftest/check_sema_probe.py" ]; then
+    if [ -f "$TOOLS/selftest/check_sema_probe.py" ]; then
       if python3 "$TOOLS/selftest/check_sema_probe.py" >"$WORK/semaprobe.log" 2>&1; then
         c_ok "语义检查器反证：四处人为破坏被逐条报红（不是永远说 OK）"
       else
@@ -323,7 +323,7 @@ else
     c_skip "check_sema.py 未实现（S03 的交付物）"
   fi
   # ③ 最小对照用例集
-  if [ -x "$TOOLS/selftest/run_sema_cases.py" ]; then
+  if [ -f "$TOOLS/selftest/run_sema_cases.py" ]; then
     CLOG="$WORK/semacases.log"
     if python3 "$TOOLS/selftest/run_sema_cases.py" --compiler "$COMPILER" >"$CLOG" 2>&1; then
       SUM=$(grep -E '通过|总计' "$CLOG" | tail -1)
@@ -345,7 +345,7 @@ hdr "C5. 初始化计划自校验（若 --emit=initplan 已实现 —— S04 起
 # 语义正确性（填对没填对）由开发方的 check_initplan.py 负责——它独立实现一遍
 # 初始化语义并模拟计划；关卡不重复那件事。
 CAN_INITPLAN=0
-if [ -x "$COMPILER" ] && [ -x "$TOOLS/selftest/check_initplan_format.py" ]; then
+if [ -x "$COMPILER" ] && [ -f "$TOOLS/selftest/check_initplan_format.py" ]; then
   FLOG="$WORK/initfmt.log"
   python3 "$TOOLS/selftest/check_initplan_format.py" --compiler "$COMPILER" \
       --root "$ROOT" --jobs "$(nproc)" >"$FLOG" 2>&1
@@ -373,7 +373,7 @@ fi
   fi
 # 语义侧：开发方的独立检查器（自己实现初始化语义 + 模拟计划 + 与源码含义比对）
 if [ "$CAN_INITPLAN" = "1" ]; then
-  if [ -x "$TOOLS/selftest/check_initplan.py" ]; then
+  if [ -f "$TOOLS/selftest/check_initplan.py" ]; then
     ILOG="$WORK/initplan.log"
     if python3 "$TOOLS/selftest/check_initplan.py" --compiler "$COMPILER" \
           --jobs "$(nproc)" >"$ILOG" 2>&1; then
@@ -394,7 +394,7 @@ if [ "$CAN_INITPLAN" = "1" ]; then
   else
     c_skip "check_initplan.py 未实现（S04 的交付物）"
   fi
-  if [ -x "$TOOLS/selftest/run_init_cases.py" ]; then
+  if [ -f "$TOOLS/selftest/run_init_cases.py" ]; then
     CLOG="$WORK/initcases.log"
     if python3 "$TOOLS/selftest/run_init_cases.py" --compiler "$COMPILER" >"$CLOG" 2>&1; then
       SUM=$(grep -E '通过|总计' "$CLOG" | tail -1)
@@ -473,7 +473,7 @@ else
     c_bad "找不到样例对 $EX3（S05 的交付物：真实运行产出的 dump + README）"
   fi
   # ② 结构 / 覆盖性 / 指令集封闭
-  if [ -x "$TOOLS/selftest/check_structured.py" ]; then
+  if [ -f "$TOOLS/selftest/check_structured.py" ]; then
     SLOG="$WORK/sir.log"
     if python3 "$TOOLS/selftest/check_structured.py" --compiler "$COMPILER" \
           --dir "$ROOT/tests" --jobs "$(nproc)" >"$SLOG" 2>&1; then
@@ -487,7 +487,7 @@ else
     c_skip "check_structured.py 未实现（S05 的交付物）"
   fi
   # ③ ★★ 独立实现的第二份 IRGen（唯一能抓"理解错了"的一条）
-  if [ -x "$TOOLS/selftest/independent_irgen_check.py" ]; then
+  if [ -f "$TOOLS/selftest/independent_irgen_check.py" ]; then
     ILOG="$WORK/iirgen.log"
     if python3 "$TOOLS/selftest/independent_irgen_check.py" --compiler "$COMPILER" \
           --dir "$ROOT/tests" --jobs "$(nproc)" >"$ILOG" 2>&1; then
@@ -500,7 +500,7 @@ else
     c_skip "independent_irgen_check.py 未实现（S05 的交付物）"
   fi
   # ④ 金样例与最小对照
-  if [ -x "$TOOLS/selftest/run_structured_cases.py" ]; then
+  if [ -f "$TOOLS/selftest/run_structured_cases.py" ]; then
     CLOG="$WORK/sircases.log"
     if python3 "$TOOLS/selftest/run_structured_cases.py" --compiler "$COMPILER" \
           >"$CLOG" 2>&1; then
@@ -513,6 +513,82 @@ else
   else
     c_skip "run_structured_cases.py 未实现（S05 的交付物）"
   fi
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+hdr "C7. 循环规范化自校验（若 --normalize 已实现 —— S05b 起）"
+# ─────────────────────────────────────────────────────────────────────────────
+# 这是第一个"变换"而不是降级：判据只有一个——**行为不变**。
+# 关卡守四件可机械判定的事：
+#   ① 冻结契约：不带开关时与 S05 样例对逐字节相同、往返同构（含"不触发用例零改动"）；
+#   ② 不变式 I1–I3 **本关才真正有意义**，且必须能被 3 份人为违反反证；
+#   ③ ★ 独立实现的第二份规范化器逐字节一致；
+#   ④ ★ 受限执行器：变换前后两份 IR 用同一输入跑出**相同轨迹**——这是唯一能抓
+#      边界 off-by-one 的判据（设计文档的调度等价性模型检查自己标了"必要条件，
+#      不是充分条件"，抓不到 IV 替换错与边界差一）。
+CAN_NORM=0
+if [ -x "$COMPILER" ] && [ -f "$TOOLS/selftest/check_loopnorm.py" ]; then
+  if "$COMPILER" --normalize --emit=structured-ir "$TESTS/final_arm/functional/00_main.sy" \
+        -o "$WORK/norm_probe.txt" >/dev/null 2>&1 && grep -q '^(Module' "$WORK/norm_probe.txt" 2>/dev/null; then
+    CAN_NORM=1
+  fi
+fi
+if [ "$CAN_NORM" = "0" ]; then
+  c_skip "循环规范化跳过：--normalize 尚未实现（S05b 的交付物）"
+else
+  # ①②③零改动：一次性跑完全量（含两种模式的往返与"不触发用例零改动"）
+  NLOG="$WORK/loopnorm.log"
+  if python3 "$TOOLS/selftest/check_loopnorm.py" --compiler "$COMPILER" \
+        --jobs "$(nproc)" --probe --variants >"$NLOG" 2>&1; then
+    c_ok "循环规范化：不变式 + 往返 + 零改动 + 反证"
+    grep -E '成功率|零改动|反例|变体' "$NLOG" | head -4 | sed 's/^/      /'
+  else
+    c_bad "循环规范化检查失败（不变式 / 往返 / 零改动 / 反证）"
+    grep -E '✘|违反|失败' "$NLOG" | head -8 | sed 's/^/      /'
+  fi
+  # ③ 独立实现的第二份规范化器
+  if [ -f "$TOOLS/selftest/independent_loopnorm_check.py" ]; then
+    LLOG="$WORK/iloopnorm.log"
+    if python3 "$TOOLS/selftest/independent_loopnorm_check.py" --compiler "$COMPILER" \
+          --jobs "$(nproc)" >"$LLOG" 2>&1; then
+      c_ok "独立规范化器：与 C++ 输出逐字节一致"
+    else
+      c_bad "独立规范化器不一致（C++ 侧或独立侧有真 bug）"
+      grep -E '不一致|差异|✘' "$LLOG" | head -8 | sed 's/^/      /'
+    fi
+  else
+    c_skip "independent_loopnorm_check.py 未实现（S05b 的交付物）"
+  fi
+
+  # ④ 行为等价（唯一能抓 off-by-one 的一条）
+  if [ -f "$TOOLS/selftest/loopnorm_exec.py" ]; then
+    ELOG="$WORK/loopnorm_exec.log"
+    if python3 "$TOOLS/selftest/loopnorm_exec.py" --compiler "$COMPILER" \
+          --jobs "$(nproc)" >"$ELOG" 2>&1; then
+      c_ok "行为等价：变换前后两份 IR 轨迹相同"
+      grep -E '轨迹相同|跳过' "$ELOG" | tail -2 | sed 's/^/      /'
+    else
+      c_bad "行为等价检查失败（变换改了行为——先假定是规范化错了）"
+      grep -E '不同|差异|✘' "$ELOG" | head -8 | sed 's/^/      /'
+    fi
+  else
+    c_skip "loopnorm_exec.py 未实现（S05b 的交付物）"
+  fi
+
+  # 用例集
+  if [ -f "$TOOLS/selftest/run_loopnorm_cases.py" ]; then
+    KLOG="$WORK/loopnorm_cases.log"
+    if python3 "$TOOLS/selftest/run_loopnorm_cases.py" --compiler "$COMPILER" >"$KLOG" 2>&1; then
+      SUM=$(grep -E '通过|总计' "$KLOG" | tail -1)
+      c_ok "循环规范化用例集：${SUM:-全过}"
+    else
+      c_bad "循环规范化用例集有失败"
+      grep -E '✘|失败|FAIL' "$KLOG" | head -8 | sed 's/^/      /'
+    fi
+  else
+    c_skip "run_loopnorm_cases.py 未实现（S05b 的交付物）"
+  fi
+
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -571,12 +647,14 @@ NEED=""
 case "$STAGE" in
   S03) NEED="sema" ;;
   S04) NEED="sema initplan" ;;
-  S05|S0[6-9]|S1[0-9]|S2[0-8]) NEED="sema initplan structured-ir" ;;
+  S05) NEED="sema initplan structured-ir" ;;
+  S05b|S0[6-9]|S1[0-9]|S2[0-8]) NEED="sema initplan structured-ir normalize" ;;
 esac
 if [ -n "$NEED" ]; then
   case "$NEED" in *sema*)     [ "$CAN_SEMA" = "1" ]     || c_bad "本阶段要求 --emit=sema，但它没实现/没通过";; esac
   case "$NEED" in *initplan*) [ "$CAN_INITPLAN" = "1" ] || c_bad "本阶段要求 --emit=initplan，但它没实现/没通过";; esac
   case "$NEED" in *structured-ir*) [ "$CAN_SIR" = "1" ] || c_bad "本阶段要求 --emit=structured-ir，但它没实现/没通过";; esac
+  case "$NEED" in *normalize*) [ "$CAN_NORM" = "1" ] || c_bad "本阶段要求 --normalize，但它没实现/没通过";; esac
 fi
 
 case "$STAGE" in

@@ -36,7 +36,9 @@
 #include "frontend/Parser.h"
 #include "frontend/Sema.h"
 #include "frontend/SemaDump.h"
+#include "structured/AllocaHoist.h"
 #include "structured/IRGen.h"
+#include "structured/LoopNormalize.h"
 #include "structured/StructuredDump.h"
 #include "structured/StructuredReader.h"
 #include "structured/StructuredVerifier.h"
@@ -109,6 +111,8 @@ struct Options {
   bool toyBackend = false;     // --toy-backend：S11b 起表示"用自研降级器"；当前只接受
   bool fromAst = false;        // --from-ast：输入是 S-表达式（不是 SysY 源码）
   bool fromStructured = false;  // --from-structured：输入是结构化 IR 文本
+  bool normalize = false;       // --normalize：跑 LoopNormalize + AllocaHoist（**默认关**）
+  bool loopStats = false;       // --dump-loopnorm-stats：把规范化统计打到 stderr
   bool verbose = false;
 };
 
@@ -131,6 +135,11 @@ const char* kHelpText =
     "  -S                 接受但不解释（比赛调用形式: compiler a.sy -S -o a.s）\n"
     "  --structured       使用结构化 IR 层（默认）\n"
     "  --no-structured    不走结构化 IR 层（供回归对照用）\n"
+    "  --normalize        跑 LoopNormalize（while→for + continue 消解）与\n"
+    "                     AllocaHoist（alloca 提到函数入口 Region）。**默认关**：\n"
+    "                     不带它时 --emit=structured-ir 的输出与 S05 契约逐字节相同\n"
+    "  --dump-loopnorm-stats  把规范化统计（被规范化/保留的循环、原因直方图）\n"
+    "                     打到 stderr（进不了 dump：dump 是冻结契约）\n"
     "  --toy-backend      接受但不解释（测试链路选择：走自研降级器而非 clang）\n"
     "  --verbose          打印处理过程\n"
     "  -h, --help         显示本帮助并退出\n"
@@ -199,6 +208,13 @@ bool parseCommandLine(int argc, char** argv, Options& opts) {
     if (a == "--from-ast")      { opts.fromAst = true; continue; }
     // --from-structured：输入是结构化 IR 文本（S05 轨 A 的"读回"路径）
     if (a == "--from-structured") { opts.fromStructured = true; continue; }
+    // ★ S05b：循环规范化开关（**默认关**：不带它时 `--emit=structured-ir` 的
+    //   输出必须与 S05 的样例对逐字节相同 —— 那是冻结契约）。
+    if (a == "--normalize")     { opts.normalize = true; continue; }
+    // ★ S05b：把"哪些循环被规范化、哪些没有、为什么"打到 **stderr**。
+    //   为什么不写进 dump：dump 是冻结契约，多一行就破坏逐字节比对；
+    //   而不留痕迹又会让"静默不规范化"无法发现（prompt §3.3）。
+    if (a == "--dump-loopnorm-stats") { opts.loopStats = true; continue; }
     if (a == "--verbose")       { opts.verbose = true; continue; }
 
     if (!a.empty() && a[0] == '-' && a != "-") {
@@ -374,7 +390,8 @@ std::string baseNameOf(const std::string& path) {
   return (p == std::string::npos) ? path : path.substr(p + 1);
 }
 
-std::string renderStructuredIr(const SourceFile& src, DiagnosticEngine& diags, bool fromAst) {
+std::string renderStructuredIr(const SourceFile& src, DiagnosticEngine& diags, bool fromAst,
+                               bool normalize, bool loopStats) {
   std::unique_ptr<CompUnit> unit;
   if (fromAst) {
     unit = sysy::parseAstText(src.text(), diags);
@@ -390,9 +407,23 @@ std::string renderStructuredIr(const SourceFile& src, DiagnosticEngine& diags, b
   sysy::sir::Arena arena;
   // ⚠️ Sema 的生命期必须覆盖 IRGen（IRGen 要用 `Cast`/类型注解，但不再查符号表）
   sysy::sir::Op* mod = sysy::sir::buildModule(arena, *unit, plan, baseNameOf(src.path()), diags);
-  // ★ 自查：结构化 IR 生成后立刻验六条不变式（I4/I5/use-def/指令集封闭/
+  // ★ S05b：`--normalize` 的两件事（**验收口径不同**，prompt §二）：
+  //   ① 循环规范化 —— 只对满足成功条件的 `while` 生效；**不触发的循环零改动**；
+  //   ② `alloca` 提升 —— 每个函数都做（它是后端不变量 2 的前提）。
+  //   顺序：先规范化（它会改写体），再提升（只动入口 Region 的顺序）。
+  std::string statsText;
+  if (normalize) {
+    sysy::sir::LoopNormStats ls;
+    mod = sysy::sir::normalizeLoops(mod, arena, ls);
+    const size_t moved = sysy::sir::hoistAllocas(mod);
+    statsText = sysy::sir::formatLoopNormStats(ls);
+    statsText += "rolled-back " + std::to_string(ls.rolledBack) + "\n";
+    statsText += "allocas-hoisted " + std::to_string(moved) + "\n";
+  }
+  // ★ 自查：结构化 IR 生成后立刻验六条不变式（I1–I6 + use-def + 指令集封闭/
   //   终结符匹配/GEP 标记）。**失败即报 error 并退出码 1**（prompt §九.6：
   //   不允许"静默产出坏 IR"）。这就是"IRGen 直接产出合法 IR"的落地保证。
+  //   ★ S05b 起 I1/I2/I3 **不再平凡**（IR 里真的有 `ForOp` 了）。
   const std::vector<sysy::sir::Violation> vs = sysy::sir::verifyModule(mod);
   if (!vs.empty()) {
     std::string msg = "结构化 IR 违反不变量（" + std::to_string(vs.size()) + " 条）：\n";
@@ -406,6 +437,9 @@ std::string renderStructuredIr(const SourceFile& src, DiagnosticEngine& diags, b
     }
     diags.report(DiagLevel::Error, sysy::SourceLoc(0, 0), "E-STRUCT-VERIFY", msg);
   }
+  // ★ S05b：统计**绝不进 dump**（dump 是与 S05 样例对的冻结契约），
+  //   走 stderr。放在最后：即使不变量报红，统计照样打出来（可定位）。
+  if (loopStats && normalize) std::cerr << statsText;
   return sysy::sir::dumpModule(mod);
 }
 
@@ -413,11 +447,31 @@ std::string renderStructuredIr(const SourceFile& src, DiagnosticEngine& diags, b
 // --from-structured 的真实实现（S05 轨 A）
 //   输入是 `--emit=structured-ir` 的产物；**不经过 Lexer/Parser**（它不是 SysY）。
 //   读回 → 再 dump，与原文**逐字节相同**（打印器与读取器互逆）。
+//
+//   ★ S05b：`--normalize --from-structured` 也接受，并且会**再跑一遍**规范化。
+//     这不是多余：它把"规范化**幂等**"（§C3：run(run(X)) == run(X)）变成一条
+//     可机械重跑的关卡判据 —— 读回的是已经规范化过的文本，再跑一次必须
+//     逐字节不变。
 // ============================================================================
-std::string renderFromStructured(const SourceFile& src, DiagnosticEngine& diags) {
+std::string renderFromStructured(const SourceFile& src, DiagnosticEngine& diags, bool normalize,
+                                 bool loopStats) {
   sysy::sir::Arena arena;
   sysy::sir::Op* mod = sysy::sir::parseStructuredModule(src.text(), arena, diags);
   if (mod == nullptr) return std::string();   // 诊断已经报出；产物照常写出（可定位）
+  if (normalize) {
+    sysy::sir::LoopNormStats ls;
+    mod = sysy::sir::normalizeLoops(mod, arena, ls);
+    const size_t moved = sysy::sir::hoistAllocas(mod);
+    if (loopStats) {
+      std::cerr << sysy::sir::formatLoopNormStats(ls);
+      std::cerr << "allocas-hoisted " << moved << "\n";
+    }
+    const std::vector<sysy::sir::Violation> vs = sysy::sir::verifyModule(mod);
+    if (!vs.empty()) {
+      diags.report(DiagLevel::Error, sysy::SourceLoc(0, 0), "E-STRUCT-VERIFY",
+                   "读回后再规范化的结果违反不变量：\n" + sysy::sir::formatViolations(vs));
+    }
+  }
   return sysy::sir::dumpModule(mod);
 }
 
@@ -500,8 +554,11 @@ int main(int argc, char** argv) {
           break;
         case EmitKind::StructuredIr:
           // ★ S05 的真实产物：结构化 IR（容器 → 文本）
-          artifact = opts.fromStructured ? renderFromStructured(src, diags)
-                                         : renderStructuredIr(src, diags, opts.fromAst);
+          // ★ S05b：`--normalize` 在**同一棵树**上跑 LoopNormalize + AllocaHoist
+          artifact = opts.fromStructured
+                         ? renderFromStructured(src, diags, opts.normalize, opts.loopStats)
+                         : renderStructuredIr(src, diags, opts.fromAst, opts.normalize,
+                                              opts.loopStats);
           break;
         case EmitKind::LlvmIr:
           // S07 才实现；本档是占位。

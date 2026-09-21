@@ -1,0 +1,14 @@
+int A[16];
+int main() {
+  int n = 8;
+  int i = 0;
+  int j = 0;
+  int s = 0;
+  while (i < n) {
+    if (A[i] == 1) { i = i + 1; continue; }
+    j = 0;
+    while (j < n) { s = s + A[j]; j = j + 1; }
+    i = i + 1;
+  }
+  return s;
+}

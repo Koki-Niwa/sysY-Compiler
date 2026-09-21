@@ -14,8 +14,12 @@
 357  compiler/tools/selftest/check_parser.py
 707  compiler/tools/selftest/check_sema.py
 224  compiler/tools/selftest/check_sema_probe.py
+795  compiler/tools/selftest/check_structured.py
 177  compiler/tools/selftest/check_tokens_meta.py
 171  compiler/tools/selftest/gen_manifest.py
+144  compiler/tools/selftest/iic_sexp.py
+786  compiler/tools/selftest/independent_irgen_check.py
+7  compiler/tools/selftest/independent_irgen_check_main.py
 976  compiler/tools/selftest/independent_parser_check.py
 380  compiler/tools/selftest/initplan_dump.py
 510  compiler/tools/selftest/initplan_sem.py
@@ -25,6 +29,7 @@
 132  compiler/tools/selftest/run.sh
 335  compiler/tools/selftest/run_init_cases.py
 207  compiler/tools/selftest/run_sema_cases.py
+196  compiler/tools/selftest/run_structured_cases.py
 257  compiler/tools/selftest/sema_dump_format.py
 82  compiler/tools/selftest/unit/bench_lexer.cpp
 99  compiler/tools/selftest/unit/run.sh
@@ -34,4 +39,5 @@
 798  compiler/tools/selftest/unit/test_parser.cpp
 420  compiler/tools/selftest/unit/test_sema.cpp
 135  compiler/tools/selftest/unit/test_sourcefile.cpp
-492  compiler/tools/verify.sh
+373  compiler/tools/selftest/unit/test_structured.cpp
+577  compiler/tools/verify.sh

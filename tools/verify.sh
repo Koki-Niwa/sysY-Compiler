@@ -67,6 +67,21 @@ fi
 #    ⚠️ 这条标准以前只写在文档里、**从来没有被检查过**，于是它既没被遵守也没被拦下
 #    （S02 收尾时 AstPrinter.cpp 1135 行、Parser.cpp 1010 行）。
 #    "写了标准但不检查"比没有标准更糟：它教会后面每个会话无视这一节。
+# ── 单元断言 ──
+#    ⚠️ 关卡一直**没有**跑单元测试：改一条语义规则时，`run.sh` 里两处断言先红了，
+#    而关卡照样 20 通过 —— 因为没人调它。凡是"标准要求、关卡不查"的东西，
+#    迟早会漂移（这条与 C5 的成因是同一个）。
+if [ -x "$TOOLS/selftest/unit/run.sh" ]; then
+  ULOG="$WORK/unit.log"
+  if bash "$TOOLS/selftest/unit/run.sh" >"$ULOG" 2>&1; then
+    SUM=$(grep -oE '检查项 [0-9]+ 个' "$ULOG" | tr '\n' ' ')
+    c_ok "单元断言：全部通过 ${SUM:-}"
+  else
+    c_bad "单元断言有失败"
+    grep -E '✘|X ' "$ULOG" | head -8 | sed 's/^/      /'
+  fi
+fi
+
 # ── 内存预算 ──
 #    "编译器的内存开销不得随源码里的一个数字爆炸"。语料的**正确性**判据看不见这类缺陷
 #    （490 个用例全绿、诊断全对），它会一直藏到现场赛的一个大数组上才 OOM。
@@ -342,6 +357,20 @@ if [ -x "$COMPILER" ] && [ -x "$TOOLS/selftest/check_initplan_format.py" ]; then
        grep -E '✘|判定' "$FLOG" | head -8 | sed 's/^/      /' ;;
   esac
 fi
+  # ①b ★ 规范样例对：与仓库里那份**真实运行产出**的样例逐字节相同。
+  #     §4.3 的示例原先是我手写的，与实际输出有三处排版差异（`:data` 一行一对、
+  #     `StoreExpr` 折叠、`MemcpyConst` 收尾括号）—— 文字会漂，样例对不会。
+  #     这与 C4 组里 `--emit=sema` 的做法完全一致。
+  EX2="$TOOLS/selftest/initplan_example"
+  if [ -f "$EX2/example.sy" ] && [ -f "$EX2/example.emit-initplan.txt" ]; then
+    if "$COMPILER" --emit=initplan "$EX2/example.sy" -o "$WORK/ex2.txt" >/dev/null 2>&1 \
+       && cmp -s "$WORK/ex2.txt" "$EX2/example.emit-initplan.txt"; then
+      c_ok "初始化计划：与规范样例逐字节相同"
+    else
+      c_bad "初始化计划与规范样例不一致（违反 §4.3 的格式契约）"
+      diff "$EX2/example.emit-initplan.txt" "$WORK/ex2.txt" 2>/dev/null | head -8 | sed 's/^/      /'
+    fi
+  fi
 # 语义侧：开发方的独立检查器（自己实现初始化语义 + 模拟计划 + 与源码含义比对）
 if [ "$CAN_INITPLAN" = "1" ]; then
   if [ -x "$TOOLS/selftest/check_initplan.py" ]; then

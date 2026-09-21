@@ -17,7 +17,7 @@
 //   （扁平标量与嵌套组**混用**）。
 //
 //   判据（prompt §3.2 第 15 条，四条规定）：
-//     ① 花括号组的嵌套深度不得深于目标的**秩**；
+//     ① 花括号组作用在标量上时，组内**至多一个元素**（`{1}` 合法、`{1,2}` 非法）；
 //     ② 一个组在某一维上消耗掉的元素个数不得超过该维长度；
 //     ③ 元素总数不得超过数组元素总数（§3 ConstDef 10）；
 //     ④ 整型数组的元素不许是浮点（§3 ConstDef 8 的**不对称**规则；
@@ -215,9 +215,22 @@ void Sema::doInitRoot(Frame& f) {
       pushExpr(*iv->expr, &iv->expr, target, 0);
       return;
     }
-    // `= {}` / `= {1}` / `= {1,2,3}`：花括号组用于标量 ⇒ 嵌套深度 1 > 秩 0
+    // ★ 标量对象**可以**用花括号包一个值：`int x = {1};` / `int x = {{1}};` 在 C 里合法
+    //   （clang 只给风格警告，无警告的是 `{1}`）。规范点名的非法形式 `a = {1,2,3}`
+    //   是**元素多余**（3 个给 1 个标量），不是"不许有花括号"。
+    //   ⚠️ 早先这里一律报"标量对象不能用花括号组初始化"，把合法程序判死了；
+    //   而本项目自己写的"当前对象 + 元素多余"模型（prompt §3.1）说 `{5}` 合法——
+    //   两份文档互相矛盾，以 C 为准。
+    InitVal* inner = iv;
+    while (inner->expr == nullptr && inner->list.size() == 1) inner = inner->list[0].get();
+    if (inner->expr != nullptr) {
+      if ((nf & kInitNeedConst) != 0) evalConstInto(*inner->expr, 0, target);
+      pushExpr(*inner->expr, &inner->expr, target, 0);
+      return;
+    }
+    if (inner->list.empty()) return;   // `= {}`：标量置 0（与"未初始化"在常量值上等价）
     error(iv->loc, D::kInitShape,
-          "标量对象不能用花括号组初始化（规范 §3 Initial Values 2：`a = {1,2,3}` 非法）");
+          "初始化器的元素个数超过了标量能容纳的数量（规范 §3 Initial Values 2：`a = {1,2,3}` 非法）");
     // 仍然遍历组内的表达式，保证转储类型完整
     for (size_t i = iv->list.size(); i-- > 0;) {
       InitVal* ch = iv->list[i].get();
@@ -293,9 +306,27 @@ void Sema::doInitGroup(Frame& f) {
   //  ① 深度判据：花括号的**嵌套层数**不得超过目标的秩（prompt §3.2 第 15 条 ①）
   const int nd = f.depth + 1;
   if (nd > r) {
+    // 组作用在**标量**上。C 允许 `int a[2] = {{3}};`（标量加花括号），
+    // 只有当组里**多于一个**元素时才非法——那正是规范点名的 `a[2] = {{1,2}, 3}`。
+    InitVal* inner = child;
+    while (inner->expr == nullptr && inner->list.size() == 1) inner = inner->list[0].get();
+    if (inner->expr != nullptr) {
+      // 合法的"标量加花括号"：退化成裸标量元素，走下面标量那条路。
+      if (initPos_ >= end || initPos_ >= initTotal_) {
+        error(child->loc, D::kInitShape,
+              "初始化器的元素个数超过了数组元素总数（规范 §3 ConstDef 10）");
+        pushExpr(*inner->expr, &inner->expr, nullptr, 0);
+        return;
+      }
+      if ((f.flags & kInitNeedConst) != 0) evalConstInto(*inner->expr, initPos_, et);
+      initPos_ += 1;
+      pushExpr(*inner->expr, &inner->expr, et, static_cast<uint8_t>(kInitArrElem));
+      return;
+    }
+    if (inner->list.empty()) return;   // `{{}}`：这一个标量位置留 0，游标不动
     error(child->loc, D::kInitShape,
-          "花括号组的嵌套深度（" + std::to_string(nd) + "）超过了目标的秩（" +
-              std::to_string(r) + "）（规范 §3 Initial Values 2：`a[2] = {{1,2},3}` 非法）");
+          "初始化器的元素个数超过了标量能容纳的数量（规范 §3 Initial Values 2："
+          "`a[2] = {{1,2},3}` 非法）");
     for (size_t i = child->list.size(); i-- > 0;) {
       InitVal* gch = child->list[i].get();
       if (gch != nullptr && gch->expr != nullptr) {

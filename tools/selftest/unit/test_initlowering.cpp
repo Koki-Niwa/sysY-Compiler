@@ -328,7 +328,8 @@ static void testShapes() {
 static void testRobustness() {
   std::cout << "\n── D. 稳健性（prompt §九：病态输入不许崩、不许 OOM）──\n";
   {
-    // 4000 层 `{{{{…}}}}`（Sema 会报 E-INIT-SHAPE，但降级仍然要走完）
+    // 4000 层 `{{{{…}}}}`：**超过 S02 的语法嵌套上限（4000）**，所以必然有一条语法诊断。
+    // 标量加花括号本身合法（见 test_sema），这里考的是"超限之后仍须产出计划、不许崩"。
     std::string src = "int a = ";
     for (int i = 0; i < 4000; ++i) src += "{";
     src += "1";
@@ -336,7 +337,7 @@ static void testRobustness() {
     src += ";\nint main() { return 0; }\n";
     const Lowered r = lower(src);
     check(findGlobal(r.plan, "a") != nullptr && r.errors >= 1,
-          "4000 层 `{{{{…}}}}`：报了错、**仍然产出计划**、不崩（显式工作栈）");
+          "4000 层 `{{{{…}}}}`：超语法上限报了错、**仍然产出计划**、不崩（显式工作栈）");
   }
   {
     // 大数组 + 深嵌套混合：动作数必须仍是常数级
@@ -354,7 +355,9 @@ static void testRobustness() {
     src += "}; return 0; }\n";
     const Lowered r = lower(src);
     const std::vector<int64_t> f = flatten(r.plan, "main/a");
-    check(r.errors >= 1 && f.size() == 20000 && f[0] == 1,
+    // ★ 每个 `{1}` 都作用在一个**标量**上，合法（见 test_sema 的同一处说明），
+    //   所以零诊断。断言改成查**值**：前 10000 个元素是 1，其余隐式为 0。
+    check(r.errors == 0 && f.size() == 20000 && f[0] == 1 && f[9999] == 1 && f[10000] == 0,
           "一万个 `{1}` 组（每个绑定一个元素）：不崩、首个元素是 1");
   }
   {

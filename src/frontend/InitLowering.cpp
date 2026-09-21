@@ -43,10 +43,8 @@ constexpr uint64_t kScalarBytes = 4;
 // "连续常量段 ≥ 4 个元素 ⇒ 一条 MemcpyConst"（prompt §4.2 的策略表）。
 constexpr size_t kMemcpyMin = 4;
 
-// 第 level 层的一个**子对象**占几个元素（level >= rank ⇒ 一个标量 = 1）。
-//   = elemSizeAt(level) / len(level) = elemSizeAt(level + 1)
-// ★ S04 实测踩过：把"组的跨度"写成 elemSizeAt(level) 会让
-//   `int[4][2] = {{1,2},{3,4},…}` 的每个组只前进 1 格后又跳 2 格 ——
+// 第 level 层的**子对象**占几个元素 = elemSizeAt(level+1)（level >= rank ⇒ 1）。
+// ★ S04 实测踩过：写成 elemSizeAt(level) 会让每个组只前进 1 格后又跳 2 格，
 //   期望值表整体错位（被 check_initplan.py 的逐元素比对抓出来）。
 
 int64_t elemSpanAt(const Type* arr, int level) {
@@ -59,13 +57,11 @@ int64_t elemSpanAt(const Type* arr, int level) {
 // 第 idx 个元素（行主序扁平下标）相对对象起始的**字节**偏移。
 uint64_t byteOffsetOf(int64_t idx) { return static_cast<uint64_t>(idx) * kScalarBytes; }
 
-// ── 展平的结果：**只有被显式写到的位置**（行主序下标 → 那个表达式）─────────
-//   ★ 为什么不是 `std::vector<FlatSlot>`（每个元素一格）：
-//     `const int a[50000000] = {1};` 是合法程序，稠密格子要 8 字节 × 5×10^7 =
-//     **400 MB**（实测 `--emit=initplan` 的峰值 RSS 383.6 MB，预算 32 MB）。
-//     没被写到的位置语义上就是 0（规范 §3 ConstDef 6.3），**根本不需要存**。
-//   ⇒ 稀疏表：`(下标, 表达式)`，按下标**升序**（Descender 里下钻时可能乱序，
-//     所以最后排一次序）。这与 `InitPlan::GlobalData::nonzero` 是同一种思路。
+// ── 展平的结果：**只记被显式写到的位置**（行主序下标 → 表达式）─────────────
+//   ★ 不用"每元素一格"：`const int a[50000000] = {1};` 是合法程序，稠密格子要
+//     8B × 5×10^7 = **400 MB**（实测峰值 383.6 MB，预算 32 MB）；没写到的位置
+//     语义上就是 0（规范 §3 ConstDef 6.3），不必存。稀疏表按下标升序（下钻时
+//     可能乱序，最后排一次序），与 `InitPlan::GlobalData::nonzero` 同一种思路。
 struct FlatSlot {
   int64_t index = 0;
   const Expr* expr = nullptr;
@@ -125,16 +121,20 @@ class Flattener {
  public:
   Flattener(const Type* target, std::vector<FlatSlot>& out)
       : out_(out), r_(rank(target)), total_(elementCount(target)) {
-    for (int k = 0; k < 8; ++k) dim_[k] = 1;
-    for (int k = 0; k < r_ && k < 8; ++k) {
+    // ⚠️ 容量必须**随秩**走，不能固定成 8：语料里有 **19 维**数组
+    //    （`h_functional/30_many_dimensions.sy`）。早先 `span_[8]` + `r>7 就 return`
+    //    让"秩 ≥8 且初始化器非零"静默产出全零计划——又一次"保护性截断不报错"。
+    //    语料那两个恰好是 `= {0}`，所以三轮验收全绿也照不出来。
+    dim_.assign(static_cast<size_t>(r_) + 1, 1);
+    for (int k = 0; k < r_; ++k) {
       const Type* t = dropDims(target, k);
       dim_[k] = (t != nullptr && t->isArray() && t->len > 0) ? t->len : 1;
     }
-    // ⚠️ `elemSpanAt(target, k)` 给的是"第 k 层对象的**子对象**"大小，也就是
-    //    `span[k+1]` —— 差一层就会让整张期望值表错位（S04 实测踩过两次）。
-    //    这里显式错开一位：span[0] = 整个数组，span[k] = elemSpanAt(k-1)。
+    // ⚠️ `elemSpanAt(target,k)` 给的是"第 k 层对象的**子对象**"大小 = span[k+1]；
+    //    差一层就让整张期望值表错位（S04 实测踩过两次）。这里显式错开一位。
+    span_.assign(static_cast<size_t>(r_) + 1, 1);
     span_[0] = total_;
-    for (int k = 1; k <= r_ && k < 8; ++k) span_[k] = elemSpanAt(target, k - 1);
+    for (int k = 1; k <= r_; ++k) span_[k] = elemSpanAt(target, k - 1);
     span_[r_] = 1;   // 一个标量占 1 格
   }
 
@@ -229,8 +229,8 @@ class Flattener {
   FlatSlots& out_;
   int r_ = 0;
   int64_t total_ = 0;
-  int64_t span_[8] = {1, 1, 1, 1, 1, 1, 1, 1};
-  int64_t dim_[8] = {1, 1, 1, 1, 1, 1, 1, 1};
+  std::vector<int64_t> span_;   // 大小 r_+1（见构造函数：不设人为秩上限）
+  std::vector<int64_t> dim_;    // 大小 r_+1
   std::vector<Frame> stack_;
 };
 
@@ -244,13 +244,24 @@ void flattenInto(const InitVal* root, const Type* target, FlatSlots& out) {
   if (total <= 0) return;
   // ★ **不**按元素数分配（见 FlatSlot 的注释）：只记被写到的位置。
 
+  // ★ 标量可以带花括号（`int x = {1};`）——与 SemaDecl.cpp 的 doInitRoot 同一条规则
+  //   （C11 §6.7.9：标量加花括号合法，多于一个元素才非法）。剥到最内层单元素；
+  //   空组 `{}` ⇒ 全零。⚠️ 早先没剥，`= {1}` 被当成全零，值被悄悄丢掉。
+  if (r == 0) {
+    const InitVal* inner = root;
+    while (inner->expr == nullptr && inner->list.size() == 1) inner = inner->list[0].get();
+    if (inner->expr != nullptr) out.push_back(FlatSlot{0, inner->expr.get()});
+    return;
+  }
+
   // 数组对象的初始化器**必须**是花括号组（`a[4] = 4` 由 S03 报 E-INIT-SHAPE）。
   // 若树形不完整（Sema 报错后仍走到这里），保守地当成"标量写一格"。
   if (root->expr != nullptr) {
     out.push_back(FlatSlot{0, root->expr.get()});
     return;
   }
-  if (r <= 0 || r > 7) return;   // 维度非法（已报错）：保守地按全零处理
+  if (r <= 0) return;   // 标量由上面的分支处理
+  // ★ 这里**没有**秩上限：Flattener 的容量随秩走（合法 SysY 没有秩上限）。
   Flattener fl(target, out);
   fl.run(root);
   // 排序：`--emit=initplan` 的 `:data` 契约要求偏移升序，而借用的下钻可能
@@ -498,12 +509,9 @@ class Walker {
       const auto* fd = static_cast<const FuncDef*>(f.node);
       funcName_ = fd->name;
       if (fd->body != nullptr) {
-        // ★ 函数体处理完之后必须把 `funcName_` 清掉 —— 否则**下一个**顶层
-        //   `Decl` 会被当成"上一个函数的局部变量"。
-        //   实测症状：`int f(){…} int buffer[50000000] = {};` 里 `buffer`
-        //   变成 `(Local f/buffer …)`，`--emit=initplan` 里根本没有 `Global`，
-        //   而 S05 的 IRGen 会把一个全局对象放到栈上 —— 那是会崩的。
-        //   语料里 `23_json.sy` 正是"先是一堆函数、再是 50 MB 全局数组"的形状。
+        // ★ 函数体处理完必须清掉 `funcName_`，否则**下一个**顶层 `Decl` 会被当成
+        //   "上一个函数的局部变量"。实测症状：`int f(){…} int b[…] = {};` 里 `b`
+        //   变成 `(Local f/b …)`，转储里根本没有 `Global`，而 490 个用例全绿。
         st.push_back(Frame{f.node, 0, false, /*resetFunc=*/true});
         st.push_back(Frame{fd->body.get(), 0, true});
       } else {

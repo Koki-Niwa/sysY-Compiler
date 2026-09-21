@@ -29,9 +29,9 @@
 82  compiler/tools/selftest/unit/bench_lexer.cpp
 99  compiler/tools/selftest/unit/run.sh
 215  compiler/tools/selftest/unit/test_diagnostic.cpp
-382  compiler/tools/selftest/unit/test_initlowering.cpp
+385  compiler/tools/selftest/unit/test_initlowering.cpp
 496  compiler/tools/selftest/unit/test_lexer.cpp
 798  compiler/tools/selftest/unit/test_parser.cpp
-414  compiler/tools/selftest/unit/test_sema.cpp
+420  compiler/tools/selftest/unit/test_sema.cpp
 135  compiler/tools/selftest/unit/test_sourcefile.cpp
-463  compiler/tools/verify.sh
+492  compiler/tools/verify.sh

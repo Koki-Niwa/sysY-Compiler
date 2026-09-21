@@ -1,0 +1,47 @@
+(InitPlan
+  (RuntimeLib
+    (RuntimeFunc getint :int)
+    (RuntimeFunc getch :int)
+    (RuntimeFunc getarray :int (Param a :t int[] (Dim)))
+    (RuntimeFunc getfloat :float)
+    (RuntimeFunc getfarray :int (Param a :t float[] (Dim)))
+    (RuntimeFunc putint :void (Param a :t int))
+    (RuntimeFunc putch :void (Param a :t int))
+    (RuntimeFunc putarray :void (Param n :t int) (Param a :t int[] (Dim)))
+    (RuntimeFunc putfloat :void (Param a :t float))
+    (RuntimeFunc putfarray :void (Param n :t int) (Param a :t float[] (Dim)))
+    (RuntimeFunc putf :void :uncallable)
+    (RuntimeFunc starttime :void)
+    (RuntimeFunc stoptime :void))
+
+  (Global zg :t int[8] :zero)
+  (Global g :t int[3][2] :data
+    (0 1)
+    (4 2)
+    (8 3)
+    (16 5)
+    (20 6))
+  (Global h :t float[2] :data
+    (0 0x1p+0)
+    (4 0x1p-1))
+  (Func main
+    (Local main/a :t int[4096] :actions
+      (StoreConst 0 :int 1)
+      (Zero 4 16380)
+    )
+    (Local main/b :t int[4] :actions
+    )
+    (Local main/c :t int[2] :actions
+      (StoreConst 0 :int 4)
+      (StoreConst 4 :int 5)
+    )
+    (Local main/k :t int :actions
+      (StoreConst 0 :int 3)
+    )
+    (Local main/d :t int[3] :actions
+      (StoreExpr 0 :int  (LVal k :obj int :int))
+      (StoreConst 4 :int 2)
+      (StoreConst 8 :int 3)
+    )
+  )
+)

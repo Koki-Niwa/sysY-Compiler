@@ -188,11 +188,14 @@ class Unsupported(Exception):
 # 执行器
 # ============================================================================
 class Exec(object):
-    # 两个预算（**任一超限即跳过并报告原因**）：指令数 + **墙钟时间**。
-    #   时间比指令数实在：语料的性能用例动辄上亿次迭代，按指令数算要么放过
-    #   （等十分钟）要么误杀。实测："8×10⁷ 步或 20 s" 下超限的是真正跑不完的那些。
-    MAX_STEPS = 80000000
-    MAX_SECONDS = 20.0
+    # 预算只有**步数**这一个（超限即跳过并报告原因）。
+    #   ⚠️ 早先还有一个 20 s 的墙钟预算，那使**跳过集合随机器负载变化**：
+    #      同一份代码并行跳过 131 个、串行跳过 122 个 ⇒ "跑了 411 个文件"是
+    #      某一次负载下的数字，不是可复现的覆盖度量（违反不变量 ㉗）。
+    #      判据的输入必须确定 ⇒ 只留步数。墙钟只用来**报告**耗时，不用来判。
+    #   8×10⁷ 步是实测定出来的：语料的性能用例动辄上亿次迭代，低于它会误杀真正
+    #   能跑完的、高于它只是让人多等；超限的那些确实是跑不完的。
+    MAX_STEPS = 5000000
 
     def __init__(self, mod, names, seed=12345):
         import time
@@ -408,10 +411,8 @@ class Exec(object):
         self.steps += 1
         if self.steps > self.MAX_STEPS:
             raise Budget('step budget exceeded（%d 步）' % self.MAX_STEPS)
-        if (self.steps & 0xFFFF) == 0:
-            import time
-            if time.monotonic() - self.t0 > self.MAX_SECONDS:
-                raise Budget('time budget exceeded（%.0f s）' % self.MAX_SECONDS)
+        # 墙钟**不参与判定**（见 MAX_STEPS 的注释：那会让跳过集合随负载漂移）。
+        # 只留着供外层报告耗时，判据一律走步数。
         k = op.kind
         if k == 'Alloca':
             ty = op.attrs[0] if op.attrs else 'i32'
@@ -647,9 +648,16 @@ class Exec(object):
 # 单文件：跑两份 IR，比较轨迹
 # ============================================================================
 def one_file(compiler, sy, tmpdir, seed):
-    base = os.path.basename(sy)
-    raw = os.path.join(tmpdir, base + '.raw')
-    nrm = os.path.join(tmpdir, base + '.norm')
+    # ⚠️ 键必须用**相对路径**，不能用 basename：540 个语料里有 **240 个文件与另一赛道
+    #    的文件同名**。早先用 basename ⇒ 并发时两个 worker 同时读写同一对
+    #    `.raw`/`.norm`，"变换前"与"变换后"可能来自**不同源文件**，凭空造出"行为差异"。
+    #    实测：--jobs 8 偶发 2 个假差异（bitonic_sort-2/3），单独跑却永远 same；
+    #    而且跳过数随负载漂移（并行 131 / 串行 122），使覆盖率数字不可复现。
+    #    ⇒ **并发的测量/写入代码必须有自己的槽位**（不变量 ㉑，这是第三次踩）。
+    #    其余检查器早就是 rel.replace('/', '__')，只有本工具漏了。
+    key = os.path.relpath(sy, ROOT).replace('/', '__')
+    raw = os.path.join(tmpdir, key + '.raw')
+    nrm = os.path.join(tmpdir, key + '.norm')
     r1 = subprocess.run([compiler, sy, '--emit=structured-ir', '-o', raw],
                         capture_output=True)
     r2 = subprocess.run([compiler, sy, '--emit=structured-ir', '--normalize', '-o', nrm],

@@ -55,7 +55,25 @@ def _take_type(body):
         i += 1
     return body[start:i]
 
-RE_GLOBAL = re.compile(r'^@(\S+) = global (ptr\[.*?\]|\[[^\]]*\]|\S+) (.*)$')
+# ⚠️ 全局行的**类型文本带空格且可以嵌套**：`[3 x [4 x i32]]`、`ptr[[6 x i32]]`。
+#   用正则"到第一个 `]` 为止"只吃到 `[3` —— 整条 `:init` 数据表就丢了
+#   （实测 `.work/g2.sy` 的 `int t[3][4]`：类型成了 `[3` ⇒ 全局内存大小 0
+#   ⇒ 平面侧读到全 0，而结构化侧 42、gcc 42）。
+#   ⇒ 类型部分用**下标扫描**到配平的 `]`/空格，正则只负责切出 `@名字 = global `。
+RE_GLOBAL_HEAD = re.compile(r'^@(\S+) = global (.*)$')
+
+
+def _split_global(rest):
+    """【后置】(`类型文本`, `初始化器文本`)。类型到**配平**的 `]` 或空格为止。"""
+    depth = 0
+    for i, ch in enumerate(rest):
+        if ch == '[':
+            depth += 1
+        elif ch == ']':
+            depth -= 1
+        elif ch == ' ' and depth == 0:
+            return rest[:i], rest[i + 1:]
+    return rest, ''
 RE_DEFINE = re.compile(r'^define (\S+) @(\S+)\((.*)\) \{$')
 RE_LABEL = re.compile(r'^L(\d+):$')
 RE_RESULT = re.compile(r'^%(\d+) = (.*)$')
@@ -132,9 +150,10 @@ class FlatMod(object):
             ln = raw.strip()
             if not ln:
                 continue
-            m = RE_GLOBAL.match(ln)
+            m = RE_GLOBAL_HEAD.match(ln)
             if m and fn is None:
-                name, ty, rest = m.group(1), m.group(2), m.group(3)
+                name = m.group(1)
+                ty, rest = _split_global(m.group(2))
                 data = {}
                 body = rest
                 if body.startswith('{'):

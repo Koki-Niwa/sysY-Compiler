@@ -1,0 +1,7 @@
+// 数组形参：a[i] 必须先把槽里的指针 load 出来再索引（gcc 912）。
+int g[3] = {7, 8, 9};
+int first(int a[]) { return a[0] * 100 + a[1] * 10 + a[2]; }
+int main() {
+  int b[3] = {1, 2, 3};
+  return first(g) + first(b);
+}

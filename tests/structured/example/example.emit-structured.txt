@@ -34,32 +34,34 @@
     }
     {
       (Int %f.17 1 @line 8)
-      (Load %f.18 i32 %f.9 @line 8)
-      (Sext %f.19 %f.18 @line 8)
-      (GetElementPtr %f.20 i32 i64 0 %f.1 %f.19 @line 8)
-      (Load %f.21 i32 %f.20 @line 8)
-      (Gt %f.22 %f.21 %f.17 @line 8)
-      (If %f.22 @line 8) {
-        (Load %f.23 i32 %f.9 @line 8)
-        (Sext %f.24 %f.23 @line 8)
-        (GetElementPtr %f.25 i32 i64 0 %f.1 %f.24 @line 8)
-        (Load %f.26 i32 %f.25 @line 8)
-        (Load %f.27 i32 %f.4 @line 8)
-        (AddI %f.28 %f.27 %f.26 @line 8)
-        (Store i32 %f.28 %f.4 @line 8)
+      (Load %f.18 ptr[i32] %f.1 @line 8)
+      (Load %f.19 i32 %f.9 @line 8)
+      (Sext %f.20 %f.19 @line 8)
+      (GetElementPtr %f.21 i32 i64 0 %f.18 %f.20 @line 8)
+      (Load %f.22 i32 %f.21 @line 8)
+      (Gt %f.23 %f.22 %f.17 @line 8)
+      (If %f.23 @line 8) {
+        (Load %f.24 ptr[i32] %f.1 @line 8)
+        (Load %f.25 i32 %f.9 @line 8)
+        (Sext %f.26 %f.25 @line 8)
+        (GetElementPtr %f.27 i32 i64 0 %f.24 %f.26 @line 8)
+        (Load %f.28 i32 %f.27 @line 8)
+        (Load %f.29 i32 %f.4 @line 8)
+        (AddI %f.30 %f.29 %f.28 @line 8)
+        (Store i32 %f.30 %f.4 @line 8)
         (Yield @line 8)
       }
       {
         (Yield @line 8)
       }
-      (Int %f.29 1 @line 9)
-      (Load %f.30 i32 %f.9 @line 9)
-      (AddI %f.31 %f.30 %f.29 @line 9)
-      (Store i32 %f.31 %f.9 @line 9)
+      (Int %f.31 1 @line 9)
+      (Load %f.32 i32 %f.9 @line 9)
+      (AddI %f.33 %f.32 %f.31 @line 9)
+      (Store i32 %f.33 %f.9 @line 9)
       (Yield @line 7)
     }
-    (Load %f.32 i32 %f.4 @line 11)
-    (Return %f.32 @line 11)
+    (Load %f.34 i32 %f.4 @line 11)
+    (Return %f.34 @line 11)
   }
   (Func "main" :ret i32 :param [] @line 13) {
     (Alloca %main.0 [4 x i32] @line 14)

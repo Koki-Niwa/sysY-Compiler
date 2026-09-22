@@ -64,6 +64,7 @@ class FlatExec(C.Machine):
         # φ 的"入值来源快照"（见 `step` 的 φ 分支）：值编号 → 跳转那刻的环境
         self._phi_env = {}
         self._phi_pred = {}
+        self._head_exit = set()      # 本轮"头走了出口边"的循环头（见 exec_func）
         C.Machine.__init__(self, seed)
         self.mod = mod
         self.env = {}
@@ -107,8 +108,18 @@ class FlatExec(C.Machine):
         """
         while stack and cur not in bodies.get(stack[-1][0], {stack[-1][0]}):
             h, n = stack.pop()
-            if self._prev_block == h and n > 0:
-                n -= 1                     # ② 最后一次进头只判了条件
+            # ② 最后一次进头只判了条件 ⇒ 扣掉。判据必须看**实际走了哪条边**：
+            #    离开的那个块是头、而入口块（`cur`，正是头跳到的那个）在体外。
+            #    ⚠️ 比"`cur` 就是头"（第一版）严格更对：头可能跳到**体内**的
+            #    另一个块（`while(i<5){…}` 的 L49 先跳 L51、L51 再跳出去），
+            #    那种形状下 `cur` 是 L51 而不是 L49 ⇒ 第一版扣不到（实测
+            #    `51_short_circuit3.sy`：结构化 `0`、平面 `1`）。
+            #    ⚠️ 也不能扣"`prev` 是头"以外的情形：`break` 出循环时 `prev`
+            #    是体内某块，那一轮**确实跑了体**，不该扣。
+            if h in self._head_exit:
+                self._head_exit.discard(h)
+                if n > 0:
+                    n -= 1
             self.loop_trace.append(n)
         if cur in self.mod.loops.get(name, ()):
             if not (stack and stack[-1][0] == cur):
@@ -146,6 +157,7 @@ class FlatExec(C.Machine):
         self.env = env
         self._phi_env = {}
         self._phi_pred = {}
+        self._head_exit = set()      # 本轮"头走了出口边"的循环头（见 exec_func）
         heads = set(self.mod.loops.get(name, []))
         stack = []            # [(头块号, 已计迭代数)]
         try:
@@ -169,6 +181,16 @@ class FlatExec(C.Machine):
                         break
                 if nxt is None:
                     break
+                # ★ "循环头走了**出口边**" ⇒ 那一轮只判了条件、体没跑，
+                #   出循环时要把它扣掉（见 `_track_loop`）。
+                #   ⚠️ 必须在这里判 —— 出口边可能先跳到**体内**的另一个块
+                #   （`while(i<5){…}` 的头 L49 先跳 L51、L51 再跳出去），
+                #   等到"进入体外块"时 `prev` 已经不是头了（实测
+                #   `51_short_circuit3.sy`：结构化 0、平面 1）。
+                if cur in heads:
+                    body = bodies.get(cur, {cur})
+                    if nxt not in body:
+                        self._head_exit.add(cur)
                 # ★ 跳转前把"前驱块 + 这一刻的值快照"记给下一条 φ 用
                 #   （见 φ 处理里的说明）。就地复制：`env` 会被后续指令改写。
                 for pid in self.mod.phi_ids.get(name, {}).get(nxt, ()):

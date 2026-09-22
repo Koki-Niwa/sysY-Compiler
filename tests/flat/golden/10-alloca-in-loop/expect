@@ -13,7 +13,7 @@
     (Int %main.9 0 @line 4)
     (Store i32 %main.9 %main.8 @line 4)
     (Alloca %main.10 i32 @line 6)
-    (Alloca %main.11 ptr[[2 x i32]] @line 7)
+    (Alloca %main.11 [2 x i32] @line 7)
     (Int %main.12 4 @line 5)
     (Load %main.13 i32 %main.0 @line 5)
     (Lt %main.14 %main.13 %main.12 @line 5)

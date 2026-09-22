@@ -17,7 +17,7 @@
     (Return %pick.7 @line 6)
   }
   (Func "main" :ret i32 :param [] @line 9) {
-    (Alloca %main.0 ptr[[3 x i32]] @line 10)
+    (Alloca %main.0 [3 x i32] @line 10)
     (Int %main.1 0 @line 10)
     (Sext %main.2 %main.1 @line 10)
     (GetElementPtr %main.3 i32 i64 0 %main.0 %main.2 @line 10)
@@ -64,7 +64,7 @@
     (Int %main.38 3 @line 14)
     (MulI %main.39 %main.37 %main.38 @line 14)
     (Sext %main.40 %main.39 @line 14)
-    (GetElementPtr %main.41 ptr[ptr[[3 x i32]]] i64 0 %.1 %main.40 @line 14)
+    (GetElementPtr %main.41 ptr[[3 x i32]] i64 0 %.1 %main.40 @line 14)
     (Int %main.42 2 @line 14)
     (Sext %main.43 %main.42 @line 14)
     (GetElementPtr %main.44 ptr[i32] i64 0 %main.41 %main.43 @line 14)

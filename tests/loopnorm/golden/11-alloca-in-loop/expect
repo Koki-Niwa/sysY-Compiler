@@ -12,7 +12,7 @@
     (GetElementPtr %main.8 i32 i64 0 %main.5 %main.7 @line 3)
     (Int %main.9 0 @line 3)
     (Store i32 %main.9 %main.8 @line 3)
-    (Alloca %main.10 ptr[[3 x i32]] @line 5)
+    (Alloca %main.10 [3 x i32] @line 5)
     (Int %main.11 4 @line 4)
     (Load %main.12 i32 %main.0 @line 4)
     (Lt %main.13 %main.12 %main.11 @line 4)

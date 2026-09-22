@@ -55,283 +55,7 @@ import loopnorm_ir as L        # noqa: E402  （只借它的"读结构化 dump"�
 
 ROOT = os.path.abspath(os.path.join(HERE, '..', '..', '..'))
 
-# ── 平面 IR 的文本形状（**由 FlatDump.cpp 唯一决定**，见设计文档 §2–§5）────
-# ⚠️ 类型**不能**用 `\S+` 取：`[6 x i32]` 里有空格（`ptr[[5 x i32]]` 里没有）。
-#   契约（`docs/handoff/03-设计/平面IR与dump格式.md` §2）给的是
-#   `"@" NAME " = global " <type> <init>`，而 `<type>` 的**数组形态带空格**。
-#   第一版用 `(\S+)` ⇒ 只吃到 `[6`，整条 `:init` 数据表都丢了
-#   ⇒ 常量池全局的内存是空的 ⇒ `llvm.memcpy` 从空内存复制
-#   ⇒ 多维数组的初始化全变 0（实测 `int c[2][3]={{1,2,3},{4,5,6}}` 的
-#   `c[1][2]`：gcc 6、我们 0）。
-
-def _take_type(body):
-    """【后置】从 `body` 的第一个记号起取一个**括号配平**的类型文本。
-
-    ★★ 为什么不能用 `body.split(' ')[1]` ★★
-      `[3 x i32]` 里有空格（`getelementptr [3 x i32], ptr[...] %b, i64 %i`），
-      按空格切只会拿到 `[3` ⇒ `size_of('[3')` = 0 ⇒ GEP 的步长变 0
-      ⇒ 三维/二维数组的读地址全落到首元素。实测：
-        `int c[2][3]={{1,2,3},{4,5,6}}; return c[1][2];`
-        GEP 的元素类型被解析成 `[3`、步长 0 ⇒ 读到 `c[0][2]` = 3
-        （gcc 是 6）。
-      `ptr[...]` 没有空格，所以第一版只在**数组类型**上错 —— 这正是
-      "语料里有数组、但小用例往往恰好是标量"时最容易漏掉的那类。
-    """
-    i = 0
-    n = len(body)
-    while i < n and body[i] == ' ':
-        i += 1
-    start = i
-    depth = 0
-    while i < n:
-        c = body[i]
-        if c == '[':
-            depth += 1
-        elif c == ']':
-            depth -= 1
-            if depth == 0:
-                return body[start:i + 1]
-        elif c == ' ' and depth == 0:
-            break
-        i += 1
-    return body[start:i]
-
-RE_GLOBAL = re.compile(r'^@(\S+) = global (ptr\[.*?\]|\[[^\]]*\]|\S+) (.*)$')
-RE_DEFINE = re.compile(r'^define (\S+) @(\S+)\((.*)\) \{$')
-RE_LABEL = re.compile(r'^L(\d+):$')
-RE_RESULT = re.compile(r'^%(\d+) = (.*)$')
-RE_OPERAND = re.compile(r'%(\d+)')
-RE_BLOCKREF = re.compile(r'\bL(\d+)\b')
-RE_LINE = re.compile(r'@line (\d+)$')
-
-
-class Inst(object):
-    """平面 IR 的一条指令（只保留执行需要的东西）。"""
-    __slots__ = ('kind', 'res', 'operands', 'blocks', 'ty', 'callee', 'intval', 'fval',
-                 'pred')
-
-    def __init__(self, kind):
-        self.kind = kind
-        self.res = None          # `%N`（无结果 → None）
-        self.operands = []       # `%N` 列表
-        self.blocks = []         # `L<n>` 列表（终结符/φ 用）
-        self.ty = ''             # 类型文本（`alloca`/`load`/`store`/`gep`/`call`）
-        self.callee = ''
-        self.intval = 0
-        self.fval = ''
-        self.pred = ''            # `icmp`/`fcmp` 的谓词
-
-
-class FlatMod(object):
-    """平面 IR 文本 → 可执行的数据结构（**只读**，不做任何变换）。"""
-
-    def __init__(self, text):
-        self.globals = {}        # 名 → (对象类型, 初始数据 {偏移: 值})
-        self.funcs = {}          # 名 → (blocks[], params[])
-        self.entries = {}        # 函数名 → 入口块号（恒 0）
-        self.loops = {}          # 函数名 → [头块号…]（按块号升序）
-        self._parse(text)
-        self.preds = {}          # (函数名, 块号) → 前驱块号集合
-        self.loop_bodies = {}    # 函数名 → {头块号: 属于该循环的块集合}
-        # ★ 每个块里的 φ 结果编号（跳转时按它记快照，见 `step` 的 φ 分支）
-        self.phi_ids = {}
-        for fn, (blocks, _p, _c) in self.funcs.items():
-            self.phi_ids[fn] = {
-                b: [it.res for it in insts if it.kind == 'phi']
-                for b, insts in blocks.items()}
-            self.phi_ids[fn] = {b: ids for b, ids in self.phi_ids[fn].items() if ids}
-        for fn, (blocks, _p, _c) in self.funcs.items():
-            pr = {}
-            for b, insts in blocks.items():
-                for it in insts:
-                    if it.kind == 'br':
-                        for t in it.blocks:
-                            pr.setdefault(t, set()).add(b)
-            for b in blocks:
-                pr.setdefault(b, set())
-            self.preds[fn] = pr
-            self.loops[fn] = self._find_loops(fn, blocks, pr)
-            self.loop_bodies[fn] = self._loop_bodies(blocks, pr, self.loops[fn])
-
-    # ── 解析 ─────────────────────────────────────────────────────────────
-    def _parse(self, text):
-        fn = None
-        blocks = None
-        params = None
-        cur = None
-        for raw in text.split('\n'):
-            ln = raw.strip()
-            if not ln:
-                continue
-            m = RE_GLOBAL.match(ln)
-            if m and fn is None:
-                name, ty, rest = m.group(1), m.group(2), m.group(3)
-                data = {}
-                body = rest
-                if body.startswith('{'):
-                    for k, v in re.findall(r'(\d+)=(-?\d+)', body):
-                        data[int(k)] = int(v) & C.MASK32
-                self.globals[name] = (ty, data)
-                continue
-            m = RE_DEFINE.match(ln)
-            if m:
-                ret_ty, name, argstr = m.group(1), m.group(2), m.group(3)
-                params = []
-                for pm in re.finditer(r'(\S+)\s+%(\d+)', argstr):
-                    params.append((int(pm.group(2)), pm.group(1)))
-                blocks = {}
-                consts = []
-                self.funcs[name] = (blocks, params, consts)
-                self.entries[name] = 0
-                fn, cur = name, None
-                continue
-            if ln == '}':
-                fn, cur = None, None
-                continue
-            m = RE_LABEL.match(ln)
-            if m:
-                cur = int(m.group(1))
-                blocks[cur] = []
-                continue
-            if fn is None:
-                continue
-            if cur is None:
-                # 函数头部的**定义区**（常量 / 全局地址）：不属于任何块
-                consts.append(self._parse_inst(ln))
-                continue
-            blocks[cur].append(self._parse_inst(ln))
-        # 函数名 → 返回类型（`call` 的结果类型在 dump 里由调用点给出，够用）
-        self.ret_ty = {}
-
-    def _parse_inst(self, ln):
-        res = None
-        m = RE_RESULT.match(ln)
-        if m:
-            res = int(m.group(1))
-            body = m.group(2)
-        else:
-            body = ln
-        body = RE_LINE.sub('', body).strip()
-        kind = body.split(' ')[0]
-        it = Inst(kind)
-        it.res = res
-        # 常量定义行（函数头部）：`i32 5` / `f32 0x1p+0` / `ptr[i32] @g`
-        if kind in ('i32', 'i64', 'f32'):
-            it.ty = kind
-            rest = body[len(kind):].strip()
-            it.fval = rest
-            return it
-        if kind.startswith('ptr['):
-            it.ty = kind
-            mm = re.search(r'@(\S+)', body)
-            it.callee = mm.group(1) if mm else ''
-            return it
-        # φ：入值与块显式配对
-        if kind == 'phi':
-            it.ty = _take_type(body[len('phi'):].lstrip())
-            for vm, bm in re.findall(r'\(%(\d+) L(\d+)\)', body):
-                it.operands.append(int(vm))
-                it.blocks.append(int(bm))
-            return it
-        if kind == 'br':
-            it.blocks = [int(x) for x in RE_BLOCKREF.findall(body)]
-            it.operands = [int(x) for x in RE_OPERAND.findall(body)]
-            return it
-        if kind == 'ret':
-            it.operands = [int(x) for x in RE_OPERAND.findall(body)]
-            if it.operands:
-                it.ty = _take_type(body[len('ret'):].lstrip())
-            return it
-        if kind == 'call':
-            mm = re.search(r'@(\S+?)\(', body)
-            it.callee = mm.group(1) if mm else ''
-            mty = re.match(r'call (\S+) @', body)
-            it.ty = '' if (mty is None or mty.group(1) == 'void') else mty.group(1)
-            it.operands = [int(x) for x in RE_OPERAND.findall(body)]
-            return it
-        # 其余：`<op> <ty>[,] <operands…>` —— 类型用**括号配平**取（见 `_take_type`）
-        rest = body[len(kind):].lstrip()
-        it.ty = _take_type(rest).rstrip(',')
-        # ★ `icmp`/`fcmp` 的第二个记号是**谓词**（`slt`/`oeq`），不是类型
-        if kind in ('icmp', 'fcmp'):
-            it.pred = it.ty
-            it.ty = ''
-        it.operands = [int(x) for x in RE_OPERAND.findall(body)]
-        return it
-
-    def _loop_bodies(self, blocks, pr, heads):
-        """每个循环头的**块集合** = 头 + 从各回边源反向可达（且不经头）的块。
-
-        ★ 为什么不能用"块号区间"近似（第一版的做法）：块号在**嵌套**与
-        `break` 之后并不连续，近似会让"回到头"被误判成"离开循环"，
-        于是一个循环被记成 N 个"1 次迭代"（实测：`[1,1,1,…]` 而不是 `[8]`）。
-        """
-        bodies = {}
-        for h in heads:
-            body = {h}
-            # 回边源：`br` 里目标 ≤ 自身块号的那些块的**源**
-            back_srcs = [b for b in blocks
-                         for it in blocks[b] if it.kind == 'br' and h in it.blocks and h <= b]
-            work = list(back_srcs)
-            while work:
-                b = work.pop()
-                if b in body:
-                    continue
-                body.add(b)
-                for p in pr.get(b, ()):
-                    if p not in body:
-                        work.append(p)
-            bodies[h] = body
-        return bodies
-
-    # ── 回边 → 自然循环（**只用于"数迭代次数"**，不改变执行）─────────────
-    def _find_loops(self, fn, blocks, pr):
-        """返回**循环头**块号的升序列表。
-
-        ★ 判据必须是**真回边**：边 `(src, dst)` 是回边 ⟺ **`dst` 支配 `src`**。
-        ⚠️ 第一版用"目标块号 ≤ 源块号"当近似 —— 那是错的：`for` 的
-        **自增块**（`Linc`，由展平器排在体之后）被体末尾 `br Linc` 指向，
-        于是它被误判成第二个循环头 ⇒ 计数与结构化侧对不上
-        （实测：`good` 用例得到 `[1,1,1,…]` 而不是 `[8]`）。
-        展平器的块序**不保证**"循环的块都编号在前"（`break` 之后还有块）。
-        ⇒ 老老实实算支配（Lengauer-Tarjan 不必；迭代数据流够用，
-           CFG 只有几十个块）。
-        """
-        dom = self._dominators(blocks, pr)
-        heads = set()
-        for b, insts in blocks.items():
-            for it in insts:
-                if it.kind != 'br':
-                    continue
-                for t in it.blocks:
-                    if t in dom.get(b, ()):      # dst 支配 src ⇒ 回边
-                        heads.add(t)
-        return sorted(heads)
-
-    @staticmethod
-    def _dominators(blocks, pr):
-        """迭代数据流求支配集（入口 = 块 0）。"""
-        if 0 not in blocks:
-            return {}
-        all_b = set(blocks)
-        dom = {b: set(all_b) for b in all_b}
-        dom[0] = {0}
-        changed = True
-        while changed:
-            changed = False
-            for b in sorted(all_b):
-                if b == 0:
-                    continue
-                ps = pr.get(b, set())
-                if not ps:
-                    new = {b}
-                else:
-                    new = set.intersection(*[dom.get(p, all_b) for p in ps]) | {b}
-                if new != dom[b]:
-                    dom[b] = new
-                    changed = True
-        return dom
-
+from flat_mod import FlatMod, Inst, _take_type  # noqa: F401
 
 class FlatExec(C.Machine):
     """平面 IR 的执行器：**只负责"下一条指令怎么取"**（基本块 + 终结符）。"""
@@ -363,6 +87,33 @@ class FlatExec(C.Machine):
         except C.Ret as r:
             ret = r.value
         return self.finish_trace(0 if ret is None else ret)
+
+
+    def _track_loop(self, name, cur, stack, bodies):
+        """【后置】把"进/出循环"折进 `stack`（轨迹计数；不改执行语义）。
+
+        ★★ 口径与结构化侧同一句话 ★★
+          `loopnorm_exec` 的 `While`：`n += 1` 在"条件为真"之后、"执行体"
+          之前 ⇒ **n = 体真正被执行的轮数**。
+        基本块层：**每一轮都经过循环头**（条件在那里判），而一批进头里
+        有且仅有**最后一次**是"条件为假、体不跑"（正常退出）。所以：
+          ① 每次进头 +1；
+          ② 真正**出循环**的时候（当前块已不属于该循环的体），把该循环
+             计数 −1 —— 前提是 `prev` 就是它的头（= 头直接走了出口边）。
+             `break` 出循环时 `prev` 是**体内某块**，不减（那一轮跑了体）。
+        ⚠️ 判据必须看**实际走了哪条边**（`prev`），不能看"头的后继里有没有
+           体内块" —— 头的后继里永远有一个体入口，静态看恒真（试过：退化
+           成"每次进头 +1"，`lc.sy` 得 4、应为 3）。
+        """
+        while stack and cur not in bodies.get(stack[-1][0], {stack[-1][0]}):
+            h, n = stack.pop()
+            if self._prev_block == h and n > 0:
+                n -= 1                     # ② 最后一次进头只判了条件
+            self.loop_trace.append(n)
+        if cur in self.mod.loops.get(name, ()):
+            if not (stack and stack[-1][0] == cur):
+                stack.append([cur, 0])
+            stack[-1][1] += 1              # 进头（含第一次）
 
     def call(self, name, args):
         if (name in C.RUNTIME_VOID or name in C.BUILTIN_VOID or name in C.TIMING or
@@ -400,23 +151,11 @@ class FlatExec(C.Machine):
         try:
             cur = self.mod.entries[name]
             while True:
-                # ① 离开不再包含的循环 ⇒ 出栈并记轨迹（内层先出）
+                # 循环轨迹的计数全在 `_track_loop` 里（出栈 + 计数 + 扣掉
+                # "只判条件没跑体"的那一次）—— 这里**不能**再留一份出栈循环，
+                # 否则它先把栈弹空、扣减就永远轮不到（实测：`lc.sy` 得 4）。
                 bodies = self.mod.loop_bodies.get(name, {})
-                while stack and cur not in bodies.get(stack[-1][0], {stack[-1][0]}):
-                    h, n = stack.pop()
-                    self.loop_trace.append(n)
-                # ② 进/回到循环头
-                #   * 首次进入 ⇒ 压栈，计数 **0**（"迭代次数"= 体的执行次数，
-                #     而结构化侧只数**真执行**的那些轮 —— 最后一次进头时条件
-                #     已经为假、体不执行 ⇒ 首次进入不算一次迭代）；
-                #   * 从**回边**回到头 ⇒ 计数 +1（那才是"跑完一轮"）。
-                if cur in heads:
-                    if stack and stack[-1][0] == cur:
-                        if self._prev_block in self.mod.preds[name].get(cur, set()) and \
-                                self._prev_block in self.mod.loop_bodies[name].get(cur, set()):
-                            stack[-1][1] += 1
-                    else:
-                        stack.append([cur, 0])
+                self._track_loop(name, cur, stack, bodies)
                 if cur not in blocks:
                     raise C.Unsupported('jump to missing block L%d' % cur)
                 nxt = None

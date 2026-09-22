@@ -29,7 +29,7 @@
     {
       (Load %sum.17 i32 %sum.9 @line 4)
       (Sext %sum.18 %sum.17 @line 4)
-      (GetElementPtr %sum.19 ptr[i32] i64 0 %sum.1 %sum.18 @line 4)
+      (GetElementPtr %sum.19 i32 i64 0 %sum.1 %sum.18 @line 4)
       (Load %sum.20 i32 %sum.19 @line 4)
       (Load %sum.21 i32 %sum.4 @line 4)
       (AddI %sum.22 %sum.21 %sum.20 @line 4)

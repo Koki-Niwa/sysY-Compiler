@@ -52,7 +52,7 @@
           (Load %main.34 i32 %main.5 @line 10)
           (Load %main.35 i32 %main.10 @line 10)
           (Sext %main.36 %main.35 @line 10)
-          (GetElementPtr %main.37 ptr[i32] i64 0 %.0 %main.36 @line 10)
+          (GetElementPtr %main.37 i32 i64 0 %.0 %main.36 @line 10)
           (Store i32 %main.34 %main.37 @line 10)
           (Int %main.38 1 @line 11)
           (Load %main.39 i32 %main.10 @line 11)
@@ -71,7 +71,7 @@
     }
     (Int %main.44 0 @line 15)
     (Sext %main.45 %main.44 @line 15)
-    (GetElementPtr %main.46 ptr[i32] i64 0 %.0 %main.45 @line 15)
+    (GetElementPtr %main.46 i32 i64 0 %.0 %main.45 @line 15)
     (Load %main.47 i32 %main.46 @line 15)
     (Return %main.47 @line 15)
   }

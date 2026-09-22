@@ -56,7 +56,47 @@ import loopnorm_ir as L        # noqa: E402  （只借它的"读结构化 dump"�
 ROOT = os.path.abspath(os.path.join(HERE, '..', '..', '..'))
 
 # ── 平面 IR 的文本形状（**由 FlatDump.cpp 唯一决定**，见设计文档 §2–§5）────
-RE_GLOBAL = re.compile(r'^@(\S+) = global (\S+) (.*)$')
+# ⚠️ 类型**不能**用 `\S+` 取：`[6 x i32]` 里有空格（`ptr[[5 x i32]]` 里没有）。
+#   契约（`docs/handoff/03-设计/平面IR与dump格式.md` §2）给的是
+#   `"@" NAME " = global " <type> <init>`，而 `<type>` 的**数组形态带空格**。
+#   第一版用 `(\S+)` ⇒ 只吃到 `[6`，整条 `:init` 数据表都丢了
+#   ⇒ 常量池全局的内存是空的 ⇒ `llvm.memcpy` 从空内存复制
+#   ⇒ 多维数组的初始化全变 0（实测 `int c[2][3]={{1,2,3},{4,5,6}}` 的
+#   `c[1][2]`：gcc 6、我们 0）。
+
+def _take_type(body):
+    """【后置】从 `body` 的第一个记号起取一个**括号配平**的类型文本。
+
+    ★★ 为什么不能用 `body.split(' ')[1]` ★★
+      `[3 x i32]` 里有空格（`getelementptr [3 x i32], ptr[...] %b, i64 %i`），
+      按空格切只会拿到 `[3` ⇒ `size_of('[3')` = 0 ⇒ GEP 的步长变 0
+      ⇒ 三维/二维数组的读地址全落到首元素。实测：
+        `int c[2][3]={{1,2,3},{4,5,6}}; return c[1][2];`
+        GEP 的元素类型被解析成 `[3`、步长 0 ⇒ 读到 `c[0][2]` = 3
+        （gcc 是 6）。
+      `ptr[...]` 没有空格，所以第一版只在**数组类型**上错 —— 这正是
+      "语料里有数组、但小用例往往恰好是标量"时最容易漏掉的那类。
+    """
+    i = 0
+    n = len(body)
+    while i < n and body[i] == ' ':
+        i += 1
+    start = i
+    depth = 0
+    while i < n:
+        c = body[i]
+        if c == '[':
+            depth += 1
+        elif c == ']':
+            depth -= 1
+            if depth == 0:
+                return body[start:i + 1]
+        elif c == ' ' and depth == 0:
+            break
+        i += 1
+    return body[start:i]
+
+RE_GLOBAL = re.compile(r'^@(\S+) = global (ptr\[.*?\]|\[[^\]]*\]|\S+) (.*)$')
 RE_DEFINE = re.compile(r'^define (\S+) @(\S+)\((.*)\) \{$')
 RE_LABEL = re.compile(r'^L(\d+):$')
 RE_RESULT = re.compile(r'^%(\d+) = (.*)$')
@@ -188,7 +228,7 @@ class FlatMod(object):
             return it
         # φ：入值与块显式配对
         if kind == 'phi':
-            it.ty = body.split(' ')[1]
+            it.ty = _take_type(body[len('phi'):].lstrip())
             for vm, bm in re.findall(r'\(%(\d+) L(\d+)\)', body):
                 it.operands.append(int(vm))
                 it.blocks.append(int(bm))
@@ -200,7 +240,7 @@ class FlatMod(object):
         if kind == 'ret':
             it.operands = [int(x) for x in RE_OPERAND.findall(body)]
             if it.operands:
-                it.ty = body.split(' ')[1]
+                it.ty = _take_type(body[len('ret'):].lstrip())
             return it
         if kind == 'call':
             mm = re.search(r'@(\S+?)\(', body)
@@ -209,16 +249,13 @@ class FlatMod(object):
             it.ty = '' if (mty is None or mty.group(1) == 'void') else mty.group(1)
             it.operands = [int(x) for x in RE_OPERAND.findall(body)]
             return it
-        # 其余：`<op> <ty>[,] <operands…>`
-        parts = body.split(' ')
-        if len(parts) >= 2:
-            it.ty = parts[1].rstrip(',')
+        # 其余：`<op> <ty>[,] <operands…>` —— 类型用**括号配平**取（见 `_take_type`）
+        rest = body[len(kind):].lstrip()
+        it.ty = _take_type(rest).rstrip(',')
         # ★ `icmp`/`fcmp` 的第二个记号是**谓词**（`slt`/`oeq`），不是类型
         if kind in ('icmp', 'fcmp'):
             it.pred = it.ty
             it.ty = ''
-        if kind == 'alloca':
-            it.ty = parts[1]
         it.operands = [int(x) for x in RE_OPERAND.findall(body)]
         return it
 

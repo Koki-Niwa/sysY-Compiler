@@ -35,7 +35,7 @@
       (Int %main.25 1 @line 8)
       (Load %main.26 i32 %main.5 @line 8)
       (Sext %main.27 %main.26 @line 8)
-      (GetElementPtr %main.28 ptr[i32] i64 0 %.0 %main.27 @line 8)
+      (GetElementPtr %main.28 i32 i64 0 %.0 %main.27 @line 8)
       (Load %main.29 i32 %main.28 @line 8)
       (Eq %main.30 %main.29 %main.25 @line 8)
       (If %main.30 @line 8) {
@@ -60,7 +60,7 @@
         (For "%main.34" %main.10 %main.40 %main.37 %main.41 @line 10) {
           (Load %main.42 i32 %main.10 @line 10)
           (Sext %main.43 %main.42 @line 10)
-          (GetElementPtr %main.44 ptr[i32] i64 0 %.0 %main.43 @line 10)
+          (GetElementPtr %main.44 i32 i64 0 %.0 %main.43 @line 10)
           (Load %main.45 i32 %main.44 @line 10)
           (Load %main.46 i32 %main.15 @line 10)
           (AddI %main.47 %main.46 %main.45 @line 10)

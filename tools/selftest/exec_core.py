@@ -376,21 +376,37 @@ class Machine(object):
                     self.out.append('f%08x' % (self.load_word(p, i * 4, 4) & MASK32))
                 return None
         if name in BUILTIN_VOID:
+            # ★★ 两个内建的**字节数 = n × 元素宽度** ★★
+            #   LLVM 的签名是 `memcpy(dst, src, n, align)` / `memset(dst, val, n, align)`
+            #   且 `n` 是**字节数**；它的"批量宽度"在 LLVM 里是 `align` 之外的
+            #   指令属性，而我们这一层的发射器按 `iset.txt` 的口径把**元素宽度**
+            #   放在第 4 个参数上（对齐/宽度这一个槽）。
+            #   ⚠️ 第一版把 `args[3]` **整个忽略**、并把 `n` 当元素个数用：
+            #     发射器给的是 `n = 24（字节）`、宽度 4 ⇒ 只该复制 24 字节，
+            #     却被当成"24 个元素" = 96 字节 ⇒ 越界复制、把后面的数据冲掉。
+            #     实测 `int c[2][3] = {{1,2,3},{4,5,6}}; return c[1][2];`
+            #     gcc 是 6、我们算 0（元素在错误的偏移上）。
+            #   判据与 `Mem.write_word(off, width, v)` 的 `width` 同一口径。
+            esz = int(args[3]) if len(args) > 3 else 1
+            if esz <= 0:
+                esz = 1
+            _ = esz   # 见下：`n` 已经是字节数，宽度只决定**怎么走**
             if name == 'llvm.memset':
                 p, val, n = args[0], int(args[1]) & MASK32, int(args[2])
                 if val != 0:
                     raise Unsupported('memset with non-zero value')
                 if n > 10 ** 7:
                     raise Unsupported('memset too large (%d)' % n)
-                for off in range(0, n & ~3, 4):
+                for off in range(0, n, esz):
                     p.mem.cells.pop((p.off + off) & MASK64, None)
                 return None
             # llvm.memcpy
             dst, src, n = args[0], args[1], int(args[2])
             if n > 10 ** 7:
                 raise Unsupported('memcpy too large (%d)' % n)
+            step = esz if esz in (1, 2, 4, 8) else 4
             words = {}
-            for off in range(0, n & ~3, 4):
+            for off in range(0, n, step):
                 v = src.mem.cells.get((src.off + off) & MASK64)
                 if v:
                     words[off] = v

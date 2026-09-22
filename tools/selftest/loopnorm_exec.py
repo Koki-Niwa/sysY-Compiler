@@ -97,13 +97,26 @@ class Exec(C.Machine):
             if ':init' in op.attrs:
                 i0 = op.attrs.index(':init')
                 if i0 + 1 < len(op.attrs) and op.attrs[i0 + 1].startswith('"data'):
-                    for t in op.attrs[i0 + 2:]:
-                        if '=' in t:
-                            a_str, _, b_str = t.partition('=')
+                    # ★★ 数据表是**三个记号一组**：`<偏移> = <值>` ★★
+                    #   `loopnorm_ir.tokenize` 把 `=` 与 `,` 都切成**独立的记号**
+                    #   （实测 `0=1` → `'0' '=' '1'`），所以不能按
+                    #   "一个记号里有 `=`"去找 —— 第一版就是这么写的，
+                    #   于是**一次都没写进去**：常量池全局的内存全空，
+                    #   `llvm.memcpy` 从空内存复制 ⇒ 多维数组的初始化整体丢失。
+                    #   实测 `int c[2][3]={{1,2,3},{4,5,6}}; return c[1][2];`
+                    #   gcc 是 6、结构化侧算 0（平面侧另有它自己的两处解析 bug）。
+                    #   判据：跳过 `{` `}` `,`，遇到"数字 = 数字"就写一个字。
+                    toks2 = [t for t in op.attrs[i0 + 2:] if t not in ('{', '}', ',')]
+                    k2 = 0
+                    while k2 + 2 < len(toks2) + 1:
+                        if k2 + 2 <= len(toks2) - 1 + 1 and toks2[k2 + 1] == '=':
                             try:
-                                mem.write_word(int(a_str), 4, int(b_str) & MASK32)
+                                mem.write_word(int(toks2[k2]), 4, int(toks2[k2 + 2]) & MASK32)
                             except ValueError:
                                 pass
+                            k2 += 3
+                        else:
+                            k2 += 1
             p = Ptr(mem, 0)
             # ★ 摘要用的键是**全局的声明名**（`g`/`a`…），**不是** `GetGlobal`
             #   的结果名（`%.0`）。两条赛道必须用同一套键，否则"同一份内存"在

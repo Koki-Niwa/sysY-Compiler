@@ -5,11 +5,11 @@
     (Int %main.0 1 @line 4)
     (Int %main.1 0 @line 4)
     (Sext %main.2 %main.1 @line 4)
-    (GetElementPtr %main.3 ptr[i32] i64 0 %.0 %main.2 @line 4)
+    (GetElementPtr %main.3 i32 i64 0 %.0 %main.2 @line 4)
     (Store i32 %main.0 %main.3 @line 4)
     (Int %main.4 0 @line 5)
     (Sext %main.5 %main.4 @line 5)
-    (GetElementPtr %main.6 ptr[i32] i64 0 %.0 %main.5 @line 5)
+    (GetElementPtr %main.6 i32 i64 0 %.0 %main.5 @line 5)
     (Load %main.7 i32 %main.6 @line 5)
     (Return %main.7 @line 5)
   }

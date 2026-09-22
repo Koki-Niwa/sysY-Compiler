@@ -28,7 +28,7 @@
       (Int %sum_upto.17 1 @line 7)
       (Load %sum_upto.18 i32 %sum_upto.2 @line 7)
       (Sext %sum_upto.19 %sum_upto.18 @line 7)
-      (GetElementPtr %sum_upto.20 ptr[i32] i64 0 %.1 %sum_upto.19 @line 7)
+      (GetElementPtr %sum_upto.20 i32 i64 0 %.1 %sum_upto.19 @line 7)
       (Load %sum_upto.21 i32 %sum_upto.20 @line 7)
       (Eq %sum_upto.22 %sum_upto.21 %sum_upto.17 @line 7)
       (If %sum_upto.22 @line 7) {
@@ -84,7 +84,7 @@
       (Load %main.17 i32 %main.5 @line 17)
       (Load %main.18 i32 %main.5 @line 17)
       (Sext %main.19 %main.18 @line 17)
-      (GetElementPtr %main.20 ptr[i32] i64 0 %.1 %main.19 @line 17)
+      (GetElementPtr %main.20 i32 i64 0 %.1 %main.19 @line 17)
       (Store i32 %main.17 %main.20 @line 17)
       (Int %main.21 1 @line 18)
       (Load %main.22 i32 %main.5 @line 18)

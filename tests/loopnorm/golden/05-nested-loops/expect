@@ -37,7 +37,7 @@
         (MulI %main.27 %main.26 %main.25 @line 7)
         (AddI %main.28 %main.27 %main.24 @line 7)
         (Sext %main.29 %main.28 @line 7)
-        (GetElementPtr %main.30 ptr[i32] i64 0 %.0 %main.29 @line 7)
+        (GetElementPtr %main.30 i32 i64 0 %.0 %main.29 @line 7)
         (Store i32 %main.23 %main.30 @line 7)
         (Int %main.31 1 @line 7)
         (Load %main.32 i32 %main.5 @line 7)
@@ -51,7 +51,7 @@
     }
     (Int %main.37 0 @line 10)
     (Sext %main.38 %main.37 @line 10)
-    (GetElementPtr %main.39 ptr[i32] i64 0 %.0 %main.38 @line 10)
+    (GetElementPtr %main.39 i32 i64 0 %.0 %main.38 @line 10)
     (Load %main.40 i32 %main.39 @line 10)
     (Return %main.40 @line 10)
   }

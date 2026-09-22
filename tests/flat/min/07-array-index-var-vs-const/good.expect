@@ -21,7 +21,7 @@
     (GetElementPtr %main.14 i32 i64 0 %main.11 %main.13 @line 4)
     (Load %main.15 i32 %main.6 @line 4)
     (Sext %main.16 %main.15 @line 4)
-    (GetElementPtr %main.17 ptr[i32] i64 0 %main.0 %main.16 @line 4)
+    (GetElementPtr %main.17 i32 i64 0 %main.0 %main.16 @line 4)
     (Load %main.18 i32 %main.17 @line 4)
     (Store i32 %main.18 %main.14 @line 4)
     (Load %main.19 i32 %main.11 @line 5)

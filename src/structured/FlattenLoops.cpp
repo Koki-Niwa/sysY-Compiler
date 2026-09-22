@@ -73,18 +73,35 @@ Action FlatBuilder::lowerIf(Op* op, Frame& fr) {
   finElse.finish = [this, elseB, pre]() { enterBlock(elseB, pre); };
   Frame finJoin;
   finJoin.kind = FrameKind::Finish;
-  finJoin.finish = [this, join, thenB, elseB, thenSlot, elseSlot, op]() {
-    // ★ 入边的"源块"必须是各分支**实际走到的出口块**（可能有内层 if 的汇合块），
-    //   不是分支的入口块 —— 见 Frame::finishSlot 的说明。
-    BasicBlock* tExit = exitBlockOf(thenSlot);
-    BasicBlock* eExit = exitBlockOf(elseSlot);
-    if (tExit == nullptr) tExit = thenB;
-    if (eExit == nullptr) eExit = elseB;
-    // 已经终结的块（`break`/`return`/`if` 的自分支跳转）**不能再补跳转**
-    if (!hasTerm(tExit)) { cur_ = tExit; emit(createBr(join, op->loc)); }
-    if (!hasTerm(eExit)) { cur_ = eExit; emit(createBr(join, op->loc)); }
-    std::vector<Env> envs{exitEnvOf(thenSlot), exitEnvOf(elseSlot)};
-    std::vector<BasicBlock*> edges{tExit, eExit};
+  // ⚠️ 不要把 `thenB`/`elseB` 捕进来：判据改成 `reachesTarget` 之后它们
+  //   不再被用到，多捕一个就多一条 `-Wunused-lambda-capture`（`-Werror`）。
+  finJoin.finish = [this, join, thenSlot, elseSlot, op]() {
+    // ★ 入边的"源块"必须是各分支**实际走到的出口块**（可能是内层 if 的汇合块
+    //   或循环的出口块），不是分支的入口块 —— 见 Frame::finishSlot 的说明。
+    //   ⚠️ 而且**只有真的会走到 `join` 的出口块**才算一条入边（见
+    //   `reachesTarget` 的说明）：分支里若有循环，它的出口块会跳回循环头，
+    //   那条边不存在。
+    std::vector<Env> envs;
+    std::vector<BasicBlock*> edges;
+    BasicBlock* const tExit = exitBlockOf(thenSlot);
+    BasicBlock* const eExit = exitBlockOf(elseSlot);
+    if (tExit != nullptr && !hasTerm(tExit)) { cur_ = tExit; emit(createBr(join, op->loc)); }
+    if (eExit != nullptr && !hasTerm(eExit)) { cur_ = eExit; emit(createBr(join, op->loc)); }
+    if (reachesTarget(thenSlot, join)) { envs.push_back(exitEnvOf(thenSlot)); edges.push_back(tExit); }
+    if (reachesTarget(elseSlot, join)) { envs.push_back(exitEnvOf(elseSlot)); edges.push_back(eExit); }
+    if (envs.empty()) {
+      // 两个分支都不落到汇合块（都 `return`/`break` 了）⇒ 汇合块**不可达**：
+      //   不放 φ（放了就是"入值块集合 ≠ 真实前驱"）。
+      //   ⚠️ 收尾的那条 `unreachable` 也必须判 `hasTerm` —— 外层收尾帧可能
+      //   已经把这个块终结了，无条件补就变成"块里有 2 个终结符"（实测）。
+      cur_ = join;
+      if (!hasTerm(join)) emit(createUnreachable(op->loc));
+      // ★ 把 then/else 两个槽标成"死"：否则收尾帧还会把这个汇合块写进
+      //   出口表、再补一条到续点的跳转 ⇒ 块里两条终结符（实测）。
+      markExitDead(thenSlot);
+      markExitDead(elseSlot);
+      return;
+    }
     enterJoin(join, envs, op->loc, edges);
   };
   stack_.push_back(finJoin);

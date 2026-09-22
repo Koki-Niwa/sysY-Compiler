@@ -1,8 +1,7 @@
 // ============================================================================
 //   …（原有 2 行说明）
 // ============================================================================
-#include <cstdio>
-#include <cstdlib>
+#include <algorithm>
 #include <cstring>
 #include <string>
 #include <unordered_map>
@@ -55,17 +54,15 @@ class Reader {
     //   阶段出过**任何**一次错（哪怕只是"引用了尚未登记的 φ"这种自造成错），
     //   整个模块就被丢掉 ⇒ 读回产物为空 ⇒ 逐字节比对必然失败。
     //   症状极具误导性：报的是"引用了未定义的值 %14"，而 %14 就是那个 φ。
-    finish();                 // 建 φ（它要引用后面才出现的块）
-    // 回填"建指令时还不存在、finish 之后才有的"操作数（见 `fixups_` 的说明）
-    for (const OperandFixup& fx : fixups_) {
-      const auto it = values_.find(fx.id);
-      if (it == values_.end() || fx.inst == nullptr) continue;
-      if (fx.inst->numOperands() == 0) fx.inst->addOperand(it->second);
-      else fx.inst->setOperand(0, it->second);
-    }
+    // φ 的插入与回填**已经按函数做完了**（见 `parseFunction` 末尾）；
+    //   这里只剩"非 φ 的前向引用"要回填，以及未定义引用的判定。
+    // ⚠️ 前向引用的**回填**已经在 `parseFunction` 末尾按函数做完了
+    //   （见 `resolveForwardRefs`）：内部号是全模块唯一的，拖到这里会让
+    //   一条 fixup 匹配上**别的函数**里编号相同的指令，把它的操作数改错
+    //   （实测：`%12 = icmp eq i32 %11, %10` 变成 `%11, %11`）。
     // 现在 `values_` 才是完整的 ⇒ 判定那些**真正**未定义的引用。
     for (const DeferredRef& d : deferred_) {
-      if (values_.count(d.id) == 0) {
+      if (values_.count(mapId(d.id)) == 0) {
         err(d.lineNo, std::string("引用了未定义的值 %") + std::to_string(d.id) + "（" +
                           d.what + "）");
       }
@@ -149,87 +146,8 @@ class Reader {
     g->setInitData(std::move(data));
   }
 
-  // ── 函数 ──────────────────────────────────────────────────────────────
-  // 【后置】返回**下一个**待处理行的下标。
-  // 【后置】预扫函数正文：把正文里**出现的每个 `%N` 定义**按出现顺序编号
-  //   0,1,2,…，写进 `idMap_`。
-  //   ★★ 为什么必须有这一步（这是读回器最关键的约定）★★
-  //     打印器（`numberFunction`）按**打印顺序**发号：参数 → φ（块首）→
-  //     各块的指令（常量在首次被引用时插进函数头部）。
-  //     而读回器是**按文本顺序**建指令的，φ 还必须延后建（它的入值要引用
-  //     后面才出现的块）—— 于是"创建顺序"与"打印顺序"不一致，
-  //     直接沿用文本号会在**任何有 φ 的函数**上整体错位
-  //     （实测：`17_div.sy` 的 `%14` vs `%12`，内容一样、只有编号不同）。
-  //   ⇒ 读回时把"文本里的 `%N`"翻译成"我们自己的 0..n-1 号"，
-  //     而 `dumpModule` 再按打印规则印回同样的号 ⇒ 往返逐字节相同。
-  void prescanIds(size_t start, size_t end) {
-    idMap_.clear();
-    uint32_t next = 0;
-    for (size_t i = start; i < end && i < lines_.size(); ++i) {
-      const std::string ln = trim(lines_[i]);
-      if (ln.empty()) continue;
-      if (ln.compare(0, 7, "define ") == 0) {
-        // 形参：`define <ty> @f(<ty> %N, …)`
-        std::vector<std::string> tok;
-        detail::tokenizeLine(ln, tok);
-        for (const std::string& t : tok) {
-          uint32_t id = 0;
-          if (detail::parseValueRef(t, id) && idMap_.find(id) == idMap_.end()) {
-            idMap_[id] = next++;
-          }
-        }
-        continue;
-      }
-      if (ln[0] == '%') {
-        const size_t eq = ln.find(" = ");
-        if (eq == std::string::npos) continue;
-        uint32_t id = 0;
-        if (detail::parseValueRef(ln.substr(0, eq), id) && idMap_.find(id) == idMap_.end()) {
-          idMap_[id] = next++;
-        }
-      }
-    }
-  }
-  // 【后置】把文本号翻成内部号（未登记 ⇒ 原样，`ref()` 会报未定义）。
-  uint32_t mapId(uint32_t textId) const {
-    const auto it = idMap_.find(textId);
-    return it == idMap_.end() ? textId : it->second;
-  }
-
-  size_t parseFunction(Module& m, size_t start) {
-    const std::string& head = lines_[start];
-    std::vector<std::string> tok;
-    detail::tokenizeLine(head, tok);
-    // tok = [define, <retTy>, @name, (, <pty>, %p, ,, ... , ), {]
-    if (tok.size() < 4 || tok[0] != "define" || tok[2].empty() || tok[2][0] != '@') {
-      err(start + 1, "define 行格式错误");
-      return start + 1;
-    }
-    size_t pos = 0;
-    const Type* retTy = parseTypeText(tok[1], pos);
-    if (retTy == nullptr || pos != tok[1].size()) {
-      err(start + 1, "函数返回类型无法解析：" + tok[1]);
-      return start + 1;
-    }
-    // ★★ 每个函数有**自己的** `%N` 与 `L<n>` 命名空间 ★★
-    //   `values_` / `blocks_` 必须在这里清空 —— 它们原来跨函数复用，
-    //   于是第二个函数的 `L0` 被判成"重复的标签"，随后整个函数体被当成
-    //   "函数体外的行"（实测：`01_var_defn2.sy` 的两函数版本）。
-    //   ⚠️ 清空**不影响**模块级的全局地址：它们在各自函数头部重新定义
-    //   （每个函数里都有一行 `%N = ptr[T] @g`），所以不需要跨函数保留。
-    values_.clear();
-    blocks_.clear();
-    declared_.clear();
-    nextBlockIdx_ = 0;
-    // 预扫的终点：下一个 `define` 或文件末尾
-    {
-      size_t end = lines_.size();
-      for (size_t q = start + 1; q < lines_.size(); ++q) {
-        if (trim(lines_[q]).compare(0, 7, "define ") == 0) { end = q; break; }
-      }
-      prescanIds(start, end);
-    }
-    Function* f = m.createFunction(tok[2].substr(1), retTy);
+#include "ir/FlatReaderFunc.inc"
+  Function* f = m.createFunction(tok[2].substr(1), retTy);
     f->setLoc(SourceLoc());
     // ⚠️ **不要**在这里预先建入口块：`L0:` 标签会通过 `createBlock` 建它。
     //   预建 + 标签再建会让同一个函数里出现**两个块**（一个空入口 + 一个真块），
@@ -268,6 +186,23 @@ class Reader {
         // 返回"**下一个待处理行**的下标"（= `}` 的下一行）。
         //   调用点赋值后**直接 continue**（不经过主循环末尾的 `++i`）⇒
         //   语义就是"从这一行继续"。契约写在 `parseFunction` 的注释上。
+        // ★★ 本函数的 φ **在这里**插进块首并回填入值 ★★
+        //   必须在 `blocks_` 还活着的时候做（入值的前驱块要按本函数的块号查），
+        //   而且做完就清 `pendingPhis_`（它的下标是**每函数**的）。
+        // ★ 顺序**必须是**先 `finishFunction()`、后 `resolvePhiBlockFixups()` ★
+        //   `finishFunction()` 会把"还没有前驱"的条目保守改写成"自己"
+        //   （畸形输入的兜底），所以块前向引用要在它**之后**覆盖，
+        //   否则会被它盖掉（实测：回边的槽位仍然是"自己"，V3 报
+        //   "φ 的前驱 {L1 L0} vs 块前驱 {L3 L0}"）。
+        finishFunction();
+        resolvePhiBlockFixups();
+        resolveForwardRefs();
+        pendingPhis_.clear();
+        // ⚠️ `fixups_` 里**非 φ** 的条目（`ret`/`br` 的前向引用）与 `deferred_`
+        //   **不能**在这里清：它们的回填/判定要等全部函数读完（值表齐全）。
+        fixups_.erase(std::remove_if(fixups_.begin(), fixups_.end(),
+                                     [](const OperandFixup& f) { return f.phiIdx >= 0; }),
+                      fixups_.end());
         return i + 1;
       }
       // 常量定义行（在第一条指令之前）：`%7 = i32 5 @line 3`
@@ -336,6 +271,41 @@ class Reader {
       return true;
     }
     return rhs.compare(0, 4, "ptr[") == 0 && rhs.find('@') != std::string::npos;
+  }
+
+  // 【后置】把 φ 的**前驱块前向引用**填好。
+  //   【为什么必须在 `parseFunction` 末尾做】`blocks_` 是**每函数**的命名空间
+  //   （读到下一个 `define` 就清空），而 `finish()` 是在**整个模块**读完才跑
+  //   —— 那时 `blocks_` 里只剩最后一个函数的块 ⇒ 拿 `L18` 去查会查到**别的
+  //   函数**的同名块（实测：φ 的前驱被填成 L12，V3 报"前驱集合不同"）。
+  //   ⇒ 解析点必须在"本函数的块表还活着"的时候。
+  // 【后置】把本函数"前向引用"的操作数（`ret`/`br` 的值）填好。**按函数**做：
+  //   拖到全模块读完再扫，一条 fixup 会匹配上编号相同的**别的函数**的指令
+  //   （实测把 icmp 的第二个操作数改成了第一个）。
+  void resolveForwardRefs() {
+    for (const OperandFixup& fx : fixups_) {
+      if (fx.phiIdx >= 0 || fx.inst == nullptr) continue;   // φ 有自己的通道
+      const auto it = values_.find(mapId(fx.id));
+      if (it == values_.end()) continue;
+      if (fx.operandIdx != static_cast<size_t>(-1)) {
+        fx.inst->setOperand(fx.operandIdx, it->second);
+      } else if (fx.inst->numOperands() == 0) {
+        fx.inst->addOperand(it->second);
+      } else {
+        fx.inst->setOperand(0, it->second);
+      }
+    }
+  }
+
+  void resolvePhiBlockFixups() {
+    for (const OperandFixup& fx : fixups_) {
+      if (fx.blockId < 0 || fx.phiIdx < 0) continue;
+      const auto bit = blocks_.find(static_cast<uint32_t>(fx.blockId));
+      if (bit == blocks_.end() || bit->second == nullptr) continue;
+      if (static_cast<size_t>(fx.phiIdx) >= pendingPhis_.size()) continue;
+      Instruction* inst = pendingPhis_[static_cast<size_t>(fx.phiIdx)].inst;
+      if (inst != nullptr) inst->setSucc(fx.operandIdx, bit->second);
+    }
   }
 
   // ── 定义区的两种行（由 `parseFunction` 按前缀分派，互不干扰）──────────
@@ -414,7 +384,10 @@ class Reader {
       //   所以"读到 `ret` 时它引用的 φ 还没定义"是**正常的前向引用**。
       //   这里只记下来，`run()` 末尾（finish 之后）统一判定 —— 那时还没定义
       //   的才是真的未定义。
-      deferred_.push_back({id, lineNo, what});
+      // ⚠️ 记**文本号**，判定时再翻一次：预扫是**按函数**做的，读到这一行时
+      //   后面函数的 `%N` 还没进 `idMap_` ⇒ 当场翻出来的号以后会变
+      //   （而重复引用同一个文本号会前后翻出不同的号）。
+      deferred_.push_back({textId, lineNo, what});
       return nullptr;
     }
     return it->second;
@@ -445,42 +418,54 @@ class Reader {
   // ── 收尾：把 φ 与"编号 ↔ 指令"的对应补齐 ────────────────────────────────
   //   φ 为什么必须延后：它的入值里带**前驱块号**，而那些块的正文可能出现在
   //   φ 之后（回边就是这种形状）⇒ 必须等全部块都读完再建。
-  void finish() {
+  // 【前置】只处理**当前** `pendingPhis_` 里那批（= 刚刚读完的那个函数）。
+  //   【为什么按函数做】φ 的入值/前驱块要引用**本函数**的块与值；`blocks_`
+  //   是每函数的命名空间，`finish()` 拖到全模块读完再跑就会查错块
+  //   （实测：前驱被填成别的函数的同名块）。而且 `pendingPhis_` 也必须在
+  //   函数结束时清掉，否则下标会跨函数串。
+  void finishFunction() {
     for (const PendingPhi& p : pendingPhis_) {
       std::vector<BasicBlock*> preds = p.preds;
       for (BasicBlock*& pb : preds) {
         if (pb == nullptr) pb = p.bb;   // 畸形输入：保守指向自己（检查器会报红）
       }
-      Instruction* inst = createPhi(p.vals.empty() ? typePool().i32() : p.vals[0]->type(),
-                                    p.vals, preds, p.loc);
-      ownedModule_->ownInst(inst);
-      // ★ φ 必须排在**块首**（后端契约 4 / V3：φ 只在块首连续排列）。
-      //   φ 是**延后**建的 ⇒ 此刻块里已经有其它指令了（它们可能还在 φ 之前
-      //   被读到）⇒ 不能 `addInst`（那会插到终结符之后 —— 实测报
-      //   "终结符不是最后一条：ret 后面还有指令"）。按"已有 φ 的个数"插入。
+      // 用**解析期就已经建好并登记过**的那条指令填两个字段：`parseInstLine`
+      //   当场建 φ 并登记结果名（否则同一函数里对它的引用解析不了 —— 实测
+      //   126 个文件报"条件 br 的分支无法解析"，那个"条件"就是一条 φ），
+      //   只有"入值 + 前驱块"这两样（依赖后面的块）留到这里补。
+      Instruction* inst = p.inst;
+      for (size_t z = 0; z < p.vals.size(); ++z) {
+        if (p.vals[z] != nullptr) inst->setOperand(z, p.vals[z]);   // nullptr = 待回填
+      }
+      for (size_t z = 0; z < preds.size(); ++z) {
+        if (preds[z] != nullptr) inst->setSucc(z, preds[z]);   // nullptr = 待回填
+      }
+      // φ 必须排在**块首**（后端契约 4/V3）：此刻块里已有其它指令（可能还在
+      //   φ 之前被读到）⇒ 不能 `addInst`（会插到终结符之后）。按已有 φ 数插入。
       size_t at = 0;
       while (at < p.bb->size() && p.bb->at(at) != nullptr &&
              p.bb->at(at)->op() == Opcode::Phi) {
         ++at;
       }
       p.bb->insertInst(at, inst);
-      if (p.hasResult) values_[mapId(p.resultId)] = inst;
+      // ★ φ 的**前向引用入值**在这时回填（此刻 `values_` 已经齐全）
+      const size_t thisIdx = static_cast<size_t>(&p - pendingPhis_.data());
+      for (const OperandFixup& fx : fixups_) {
+        if (fx.phiIdx < 0 || static_cast<size_t>(fx.phiIdx) != thisIdx) continue;
+        const auto it = values_.find(mapId(fx.id));
+        if (it != values_.end()) inst->setOperand(fx.operandIdx, it->second);
+      }
     }
   }
 
  private:
   struct PendingPhi {
-    BasicBlock* bb;
+    BasicBlock* bb = nullptr;
+    Instruction* inst = nullptr;   // 解析期就建好、已登记进 `values_`
     std::vector<Value*> vals;
     std::vector<BasicBlock*> preds;
     SourceLoc loc;
-    size_t lineNo;
-    uint32_t resultId = 0;
-    // ★ 必须与 `resultId` 分开：结果号**从 0 开始**（`%0` 是合法的结果名），
-    //   用 `resultId != 0` 当"有没有结果"的哨兵会让 `%0` 的 φ 永远不登记
-    //   （症状：后续引用报"引用了未定义的值 %0"）。
-    //   这是"**哨兵值撞上合法值**"这一类 bug —— 判存在性就要用 bool。
-    bool hasResult = false;
+    size_t lineNo = 0;
   };
   Module* ownedModule_ = nullptr;
   const std::string& text_;
@@ -494,6 +479,7 @@ class Reader {
   std::unordered_set<uint32_t> declared_;
   // 文本号（dump 里印的 `%N`）→ 内部号（我们按打印顺序重排后的 0..n-1）
   std::unordered_map<uint32_t, uint32_t> idMap_;
+  uint32_t nextReadId_ = 0;      // 全模块唯一的"读回内部号"计数器
   uint32_t nextBlockIdx_ = 0;                         // 下一个可用的块号
   std::vector<PendingPhi> pendingPhis_;
   struct DeferredRef {
@@ -508,10 +494,23 @@ class Reader {
   //   而它引用的 φ 要等 `finish()` 才存在 ⇒ 先建成"空操作数"，
   //   再在 finish 之后补上（`ret` 的操作数个数由**值**决定 ⇒ 用 addOperand）。
   struct OperandFixup {
-    Instruction* inst;
-    uint32_t id;
-    size_t lineNo;
+    Instruction* inst = nullptr;
+    // φ 的"前驱块"前向引用（回边/后面的块）也要延后解析：
+    //   解析那行时 `blocks_` 里还没有那个标签 ⇒ 第一版把 `nullptr` 前驱
+    //   保守改写成"自己"⇒ 与真实前驱集合不符（实测 V3 报
+    //   "φ 的前驱 {L12 L10} vs 块前驱 {L18 L10}"）。
+    long blockId = -1;
+    uint32_t id = 0;    // **文本号**（判定时再 `mapId`，见 `deferred_` 的说明）
+    size_t lineNo = 0;
     std::string what;
+    // 回填的操作数下标（`size_t` 越界值 = "第一条缺操作数的指令"那个旧语义）。
+    //   φ 的入值要**按位**回填（第 k 条入值对应第 k 个前驱块），
+    //   不能"补到第一个空位上"。
+    size_t operandIdx = static_cast<size_t>(-1);
+    // ≥0 ⇒ 回填的是 `pendingPhis_[phiIdx]` 这条 φ 的入值。
+    //   ⚠️ 存**下标**而不是指针：`pendingPhis_` 是 `vector`，`push_back`
+    //   会让先前取到的元素指针失效 —— 这正是"持有容器内部指针"这一类 bug。
+    long phiIdx = -1;
   };
   std::vector<OperandFixup> fixups_;
   bool bad_ = false;

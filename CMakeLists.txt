@@ -62,6 +62,11 @@ add_executable(compiler
   src/ir/IR.cpp
   src/ir/FlatDump.cpp
   src/ir/FlatReader.cpp
+  # ⚠️ `.inc` 必须显式列成依赖：CMake **看不见** `#include "*.inc"`，
+  #   改了它而不同时碰 `.cpp` 时**不会重编** —— 实测踩到：修好读回器的
+  #   条件分支解析后 `.o` 还是旧的，白跑了一轮验证。
+  src/ir/FlatReaderInst.inc
+  src/ir/FlatReaderFunc.inc
   src/ir/FlatVerifier.cpp
   # ── S05：两层 IR 的第一层（结构化 IR）────────────────────────────────────
   src/structured/StructuredIR.cpp

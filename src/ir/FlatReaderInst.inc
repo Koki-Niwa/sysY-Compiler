@@ -86,6 +86,20 @@ void Reader::parseInstLine(Module& m, Function& f, BasicBlock* bb, const std::st
     return nullptr;
   };
 
+  // 【后置】从 `from` 起第 `n` 个（1 基）`%N` 的值；不足 ⇒ nullptr。
+  //   ⚠️ 不能用 `nextVal(k+1)` 取"第二个操作数"：那只是把**搜索起点**后移一位，
+  //   而 `nextVal` 找的是"从起点起的**第一个**" ⇒ 两次调用会返回**同一个值**
+  //   （实测：`%12 = icmp eq i32 %11, %10` 读回来变成 `%11, %11`）。
+  auto nthVal = [&](size_t from, int n) -> Value* {
+    int seen = 0;
+    for (size_t j = from; j < tok.size(); ++j) {
+      uint32_t id = 0;
+      if (!detail::parseValueRef(tok[j], id)) continue;
+      if (++seen == n) return ref(id, lineNo, opName.c_str());
+    }
+    return nullptr;
+  };
+
   Instruction* inst = nullptr;
   switch (op) {
     case Opcode::Ret:
@@ -108,19 +122,35 @@ void Reader::parseInstLine(Module& m, Function& f, BasicBlock* bb, const std::st
         Value* v = (j < tok.size()) ? ref(rid, lineNo, opName.c_str()) : nullptr;
         inst = createRet(v, loc);
         if (v == nullptr && j < tok.size()) {
-          fixups_.push_back(OperandFixup{inst, rid, lineNo, "ret"});
+          // 记**文本号**：回填时统一 `mapId`（与 `deferred_` 同一口径）。
+          OperandFixup fx;
+          fx.inst = inst;
+          fx.id = rid;
+          fx.lineNo = lineNo;
+          fx.what = "ret";
+          fixups_.push_back(fx);
         }
       }
       break;
     case Opcode::Br:
       if (k < tok.size() && tok[k] == "i1") {
-        Value* c = val(k + 1);
-        // `br i1 %c, label L1, label L2`：从 k+2 起找两个 `label L<n>`
-        size_t j = k + 2;
+        // ⚠️ 条件值要按**"找下一个 `%N`"**取：`val(k+1)` 写死了下标，
+        //   而 k+1 未必正好是那个值记号 ⇒ 条件读成 nullptr ⇒ 报
+        //   "条件 br 的分支无法解析"。`nextVal` 是全文件统一的取值口径。
+        Value* c = nthVal(k, 1);
+        // `br i1 %c, label L1, label L2`。
+        // ★★ `k` 是**操作数起点**（`br` 的 `i1` 就在 k），**不是** opcode 下标
+        //   —— 第一版按"opcode 在 k-1"写成 `k+2`，于是 j 落到 `L1` 上：
+        //   `label(j)` 拿到 `L1`（t 侥幸对了），接着"找逗号"从同一个 j 起走、
+        //   立刻停住 ⇒ e 又拿到 `L1` 或 `label` ⇒ 每条条件分支都读不回来
+        //   （实测 126 个文件报"条件 br 的分支无法解析"，而**只有**不带条件
+        //   分支的文件能往返成功）。这一处同时踩了"下标差一"与
+        //   "`label` 关键字没跳过"两个坑。
+        size_t j = k + 3;                       // 起点：`i1 %c` 之后的那个逗号
         while (j < tok.size() && tok[j] == ",") ++j;
-        BasicBlock* t = label(j);
+        BasicBlock* t = label(j);               // `label` 由 `label()` 跳过
         while (j < tok.size() && tok[j] != ",") ++j;
-        if (j < tok.size()) ++j;
+        if (j < tok.size()) ++j;                // 跳过 ","
         BasicBlock* e = label(j);
         if (c == nullptr || t == nullptr || e == nullptr) {
           err(lineNo, "条件 br 的分支无法解析");
@@ -128,7 +158,7 @@ void Reader::parseInstLine(Module& m, Function& f, BasicBlock* bb, const std::st
         }
         inst = createCondBr(c, t, e, loc);
       } else {
-        BasicBlock* t = label(k);
+        BasicBlock* t = label(k);   // 单向 `br L3`：标签就在 k
         if (t == nullptr) { err(lineNo, "br 的目标块无法解析"); return; }
         inst = createBr(t, loc);
       }
@@ -210,8 +240,8 @@ void Reader::parseInstLine(Module& m, Function& f, BasicBlock* bb, const std::st
       const bool ok = (op == Opcode::ICmp) ? ipredFromName(tok[k], ip)
                                            : fpredFromName(tok[k], fp);
       if (!ok) { err(lineNo, "比较谓词无法识别：" + tok[k]); return; }
-      Value* a = nextVal(k);
-      Value* b = nextVal(k + 1);
+      Value* a = nthVal(k, 1);
+      Value* b = nthVal(k, 2);
       if (a == nullptr || b == nullptr) { err(lineNo, "比较的操作数无法解析"); return; }
       inst = (op == Opcode::ICmp) ? createICmp(ip, a, b, loc) : createFCmp(fp, a, b, loc);
       break;
@@ -287,36 +317,64 @@ void Reader::parseInstLine(Module& m, Function& f, BasicBlock* bb, const std::st
           return;
         }
         Value* v = ref(vid, lineNo, "phi");
-        if (v == nullptr) return;
+        const size_t slot = vals.size();
+        // ★ φ 的**前向引用**（回边/后面的 φ 当入值）必须能建出来：
+        //   先放占位 nullptr，等 `finish()` 之后按**入值下标**回填。
+        //   第一版在这里 `if (v == nullptr) return;` —— 于是**整条 φ 都没建**，
+        //   结果"用了它的地方"全部报未定义（实测：`21_if_test2.sy` 的
+        //   `%2 = phi [(%25 L10), (%5 L18)]`，其中 `%5` 是后面块里的 φ ⇒
+        //   `%2` 被整条丢掉 ⇒ `ret %2` 报未定义）。
+        //   ⚠️ 回填的位置必须记**下标**：φ 的入值与前驱块一一对应，
+        //      "补到第一个空位"会把两条入值搞反。
+        if (v == nullptr) {
+          OperandFixup fx;
+          fx.id = vid;
+          fx.lineNo = lineNo;
+          fx.what = "phi";
+          fx.operandIdx = slot;
+          fx.phiIdx = static_cast<long>(pendingPhis_.size());   // 本条 φ 即将 push 的下标
+          fixups_.push_back(fx);
+        }
         const auto bit = blocks_.find(bid);
-        preds.push_back(bit == blocks_.end() ? nullptr : bit->second);
+        const bool blkMissing = (bit == blocks_.end() || bit->second == nullptr);
+        preds.push_back(blkMissing ? nullptr : bit->second);
         vals.push_back(v);
+        if (blkMissing) {
+          OperandFixup bfx;
+          bfx.id = 0;                 // 该位置没有值要回填
+          bfx.lineNo = lineNo;
+          bfx.what = "phi-block";
+          bfx.operandIdx = slot;
+          bfx.blockId = static_cast<long>(bid);
+          bfx.phiIdx = static_cast<long>(pendingPhis_.size());
+          fixups_.push_back(bfx);
+        }
         k += 4;
       }
+      // ★★ 指令**当场**建好并登记结果名 ★★
+      //   "入值 + 前驱块"两样依赖后面的块，留到 `finish()` 补；但**结果名**
+      //   必须现在就能查到 —— 否则同一函数里任何对这条 φ 的引用都解析不了
+      //   （实测：条件分支 `br i1 %0` 里的 `%0` 正是一条 φ ⇒ 126 个文件
+      //   读不回来）。占位入值用 `nullptr`，`finish()` 会逐个覆盖。
+      Instruction* inst = createPhi(ty, std::vector<Value*>(vals.size(), nullptr),
+                                    std::vector<BasicBlock*>(preds.size(), nullptr), loc);
+      ownedModule_->ownInst(inst);
+      if (hasResult) values_[mapId(resultId)] = inst;
       PendingPhi pp;
       pp.bb = bb;
+      pp.inst = inst;
       pp.vals = std::move(vals);
       pp.preds = std::move(preds);
       pp.loc = loc;
       pp.lineNo = lineNo;
-      pp.resultId = resultId;
-      pp.hasResult = hasResult;
       pendingPhis_.push_back(std::move(pp));
       return;
     }
     case Opcode::Select: {
       Value* c = val(k);
       // `select i1 %c, <ty> %a, <ty> %b` ⇒ `%a` 是第一个值之后的**下一个** `%N`
-      Value* a = nextVal(k + 1);
-      Value* b = nullptr;
-      {   // `%a` 之后的第二个 `%N` 是 `%b`
-        int seen = 0;
-        for (size_t j = k; j < tok.size(); ++j) {
-          uint32_t id = 0;
-          if (!detail::parseValueRef(tok[j], id)) continue;
-          if (++seen == 2) { b = ref(id, lineNo, opName.c_str()); break; }
-        }
-      }
+      Value* a = nthVal(k, 2);      // 第 1 个是条件 `%c`
+      Value* b = nthVal(k, 3);
       if (c == nullptr || a == nullptr || b == nullptr) {
         err(lineNo, "select 的操作数无法解析");
         return;

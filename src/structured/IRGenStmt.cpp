@@ -409,7 +409,17 @@ void Gen::genGlobals() {
     Op* get = mk(OpKind::GetGlobal, g.loc);
     get->addAttr(Attr::ofStr(g.name));
     get->addAttr(Attr::ofType(toIrType(&g.type)));
-    Value ref = get->addResult(ptrTo(toIrType(&g.type)));
+    // ★★ 结果类型 = "这个全局对象的**地址**类型"，而**不是**再包一层指针 ★★
+    //   `toIrType` 对数组**已经**返回 `ptr[对象类型]`（见 IRGenTypes.cpp：
+    //   `int[5]` → `ptr[[5 x i32]]`），所以这里不能再 `ptrTo` —— 那会得到
+    //   `ptr[ptr[[5 x i32]]]`（一个"指向数组的指针的指针"）。
+    //   实测后果：`const int a[5]; return a[4];` 的 `a[i]` 基址类型错一层 ⇒
+    //   GEP 的元素类型落到 `ptr[i32]` 上 ⇒ `load` 出来是 `ptr[[5 x i32]]`
+    //   ⇒ `ret` 的值类型与函数返回类型不符（34 个文件报 V4）。
+    //   ⚠️ 标量全局：`toIrType(int)` 是 `i32`（不是地址）⇒ 只有它才需要包一层。
+    const Type* addrTy = toIrType(&g.type);
+    if (addrTy != nullptr && !addrTy->isPtr()) addrTy = ptrTo(addrTy);
+    Value ref = get->addResult(addrTy);
     globalOps_.push_back(get);
     globals_.emplace_back(g.name, GlobalRef{ref, &g.type});
   }

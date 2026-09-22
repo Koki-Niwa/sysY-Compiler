@@ -182,6 +182,15 @@ class FlatBuilder {
   Value* kFlt(uint32_t bits, SourceLoc loc);
   Value* constInt(int64_t v, const Type* ty, SourceLoc loc);
   Value* zeroOfSlot(Value* slot, SourceLoc loc);
+  // 【后置】`v` 若**与函数返回类型不符**且是"字面量 0"，返回一个**正确类型**的 0；
+  //   否则原样返回 `v`。
+  //   ★ 为什么需要：IRGen 会给"函数体末尾没有 return"的函数补一条兜底
+  //     `return 0`（S05 的行为），而那个 `Int 0` 在结构化层的类型是 `i32`
+  //     —— `float f(){ if(c) return a; else return b; }` 这种（真的缺末尾
+  //     return）会产出 `ret i32 0` 而签名是 `f32` ⇒ V4 报"ret 的值类型与
+  //     函数返回类型不符"。实测：`39_fp_params.sy` 的 `params_f40`。
+  //   ⚠️ 只对"0"做这件事：非 0 的不符是**真**的类型错误，不许静默改。
+  Value* retValueFor(Value* v, SourceLoc loc);
   // 【后置】取"循环前求值一次"的操作数；若它就是 IV 的 φ，则在**当前块**
   //         （= 循环前块）重发一条 load（见 FlattenLower.cpp 的说明）。
   // 【前置】`bb` 是循环前块（`cur_` 可能已经不是它了 —— `newBlock` 会改 `cur_`）。
@@ -259,6 +268,8 @@ class FlatBuilder {
   std::vector<Env> frameEnvs_;
   uint32_t frameEnvSeq_ = 0;
   // 每个 Region 的"出口块 / 出口环境"（按 `finishSlot` 索引）
+  // 哨兵：这个 Region 的出口**已知走不到续点**（两个分支都 return/break）
+  static BasicBlock* const kDeadExit;
   std::vector<BasicBlock*> frameExitBlocks_;
   std::vector<Env> frameExitEnvs_;
   // 【后置】分配一个"出口块/出口环境"槽位。
@@ -268,11 +279,49 @@ class FlatBuilder {
     frameExitEnvs_.emplace_back();
     return s;
   }
+  // 【后置】`slot` 这个 Region 的出口块**是否真的会走到 `target`**。
+  //   判据：出口块还没终结（收尾帧会给它补一条跳转）**或者**它已经以
+  //   `br target` 终结。
+  //   ★★ 为什么必须有这个判据 ★★
+  //     `lowerIf` 原来无条件把分支的**出口块**当成汇合块的一条入边 ——
+  //     但分支里若有循环，它的出口块是**循环的出口**，而循环出口会
+  //     `br` 回**循环头**（而不是汇合块）⇒ 那条边**不存在**，
+  //     φ 却宣称它存在 ⇒ "φ 的入值个数与前驱个数不符"（实测：`multiply`
+  //     的 `L6 want={L5} got={L5 L9}`）。这与平面执行器里"φ 按真实前驱选"
+  //     是**同一个误解**（今天第三次遇到）。
+  //   ⚠️ 判据的**唯一**形式就是"出口块自己会不会跳到 target"：
+  //     · `exitBlockOf` 返回 nullptr = 这个 Region 的出口块已经终结且**不**
+  //       落到续点（`return`/`break`/回边）⇒ **不算**入边。★ 不能退回去用
+  //       "分支的起始块"当兜底 —— 起始块是新建的空块，它**恰好**满足
+  //       "还没终结" ⇒ 会把一条不存在的边算进去（实测：`52_scope.sy` 的
+  //       `func` 两个分支都 `return`，汇合块 L3 **不可达**、真实前驱为空，
+  //       φ 却拿着 `{L1 L2}`）。
+  bool reachesTarget(int slot, BasicBlock* target) const {
+    BasicBlock* b = exitBlockOf(slot);
+    if (b == nullptr) return false;
+    Instruction* t = b->terminator();
+    if (t == nullptr) return true;                  // 还没终结 ⇒ 会补跳转
+    if (t->op() != Opcode::Br || t->numSuccs() != 1) return false;
+    return t->succ(0) == target;
+  }
+
   BasicBlock* exitBlockOf(int s) const {
     return (s >= 0 && static_cast<size_t>(s) < frameExitBlocks_.size())
                ? frameExitBlocks_[static_cast<size_t>(s)]
                : nullptr;
   }
+  // 【后置】把槽 `s` 标成"**走不到续点**"（哨兵值 `kDeadExit`）。
+  //   为什么需要哨兵，而不是直接写 `nullptr`：`nullptr` 是"槽**还没被填**"
+  //   的初值，收尾帧 `walk` 最后还会无条件把 `cur_` 写进去 —— 于是"死掉"的
+  //   事实会被覆盖，收尾帧再补一条跳转 ⇒ **块里两条终结符**（实测 `52_scope`
+  //   的 `func`：L3 同时有 `unreachable` 和 `br`）。哨兵让"已知死掉"与
+  //   "还不知道"分得开。
+  void markExitDead(int s) {
+    if (s >= 0 && static_cast<size_t>(s) < frameExitBlocks_.size()) {
+      frameExitBlocks_[static_cast<size_t>(s)] = kDeadExit;
+    }
+  }
+  bool exitIsDead(int s) const { return exitBlockOf(s) == kDeadExit; }
   const Env& exitEnvOf(int s) const {
     static const Env kEmpty;
     return (s >= 0 && static_cast<size_t>(s) < frameExitEnvs_.size())

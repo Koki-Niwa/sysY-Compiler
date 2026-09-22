@@ -99,13 +99,12 @@ bool FlatBuilder::lowerTerminator(Op* op, Frame& fr) {
     return true;
   }
   if (op->kind == OpKind::Return) {
-    Value* v = op->numOperands() > 0 ? map(op->operand(0)) : nullptr;
-    if (v != nullptr) {
-      cur_->addInst(createRet(v, op->loc));
-    } else {
-      cur_->addInst(createRet(nullptr, op->loc));
-    }
-    ownInst(cur_->back());
+    Value* v = retValueFor(op->numOperands() > 0 ? map(op->operand(0)) : nullptr, op->loc);
+    // ⚠️ 必须走 `emit`（它负责"`cur_` 已终结时另起死块"），不能直接
+    //   `cur_->addInst`：本函数体末尾的兜底 `Return`（IRGen 总会补一条）
+    //   正好落在"两个分支都 return 过的不可达汇合块"上 ⇒ 直接 addInst 会
+    //   让那个块出现**第二条终结符**、且 `unreachable` 后面还有指令（实测）。
+    emit(v != nullptr ? createRet(v, op->loc) : createRet(nullptr, op->loc));
     return true;
   }
   if (op->kind == OpKind::Unreachable) {
@@ -155,7 +154,16 @@ Action FlatBuilder::lower(Op* op) {
       //   显式分步，顺序就是确定的。
       sir::Value r = op->result(0);
       const int64_t v = op->intAttr(0);
-      Value* c = kInt(static_cast<int32_t>(v), op->loc);
+      // ★ 常量的类型**跟着结果类型走**，不能一律 `i32`
+      //   （`Int` 在结构化层是通用常量：IRGen 的兜底 `return 0` 按函数返回类型
+      //   建 `Int`，所以 `float f(){}` 的兜底常量结果类型是 `f32`）。
+      //   一律发 `i32` 的后果：`ret i32` 与签名 `f32` 不符（实测
+      //   `39_fp_params.sy` 的 `params_f40`，3 个函数报 V4）。
+      const Type* cty = r != nullptr ? toFlatType(r->type) : nullptr;
+      Value* c = (cty != nullptr && cty->isFloat())
+                     ? kFlt(static_cast<uint32_t>(v), op->loc)
+                     : (cty == typePool().i64() ? kI64(v, op->loc)
+                                                : kInt(static_cast<int32_t>(v), op->loc));
       bind(r, c);
       return Action::kOk;
     }
@@ -225,18 +233,14 @@ Action FlatBuilder::lower(Op* op) {
       //     ⇒ `load` 的类型是 `ptr[i32]`（不是 `i32`），这正是 `a[i]` 的基址。
       //   直接 `load` 槽（`p` 不是 GEP）时结构化层的 `<ty>` 是对的
       //   （局部数组对象读 `i32` 元素、标量槽读标量）。
+      //   ⚠️⚠️ 第一版在这里加了一条"假指针 GEP"的**纠正**：若地址是 GEP 且
+      //      `<ty> != 基址的元素类型`，就改用基址的元素类型。那条纠正**只**是
+      //      为了绕开一个**已修掉的生成端 bug**（全局数组的 `GetGlobal` 结果
+      //      多包了一层指针 ⇒ GEP 的元素类型落到 `ptr[i32]`）。生成端修好之后，
+      //      这条纠正会把**正确**的 `a[i]` 读成整个数组
+      //      （实测 `const int a[5]; return a[4];` 变成 `ret [5 x i32]`）。
+      //      ⇒ 判据回到唯一的一条：**读出来的类型就是结构化层 `Load` 的 `<ty>`**。
       const Type* ty = toFlatType(op->typeAttr(0));
-      if (p != nullptr && p->isInst()) {
-        Instruction* pi = static_cast<Instruction*>(p);
-        if (pi->op() == Opcode::GEP) {
-          Value* base = pi->operand(0);
-          const Type* et = pi->srcElemType();
-          const Type* bt = base != nullptr ? base->type() : nullptr;
-          if (bt != nullptr && bt->isPtr() && et != bt->elem) {
-            ty = bt->elem;   // "假指针 GEP"：读出来是基址指向的那个对象
-          }
-        }
-      }
       if (ty == nullptr || p == nullptr) {
         giveUp("Load 的操作数/类型缺失", op->loc);
         return Action::kOk;

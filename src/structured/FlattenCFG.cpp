@@ -52,10 +52,31 @@ Module* flattenModule(const sir::Op* smod, Module& out, DiagnosticEngine& diags)
   }
   out.setSourceName(smod->strAttr(0));
 
+  // ★★ 全局的"对象类型"从哪来 ★★
+  //   结构化层的 `GlobalVar :type` 与 `GetGlobal :type` **写的是同一个东西**
+  //   （`IRGenStmt::genGlobals` 对两者都塞 `toIrType(&g.type)`），而
+  //   `toIrType` 对**数组**已经把"对象"包成了"指向对象的指针"
+  //   （`int[5]` → `ptr[[5 x i32]]`）。直接把它当对象类型用，就会得到
+  //   "指向数组的指针的指针"：实测 `const int a[5]; return a[4];` 的
+  //   `a[i]` 基址错一层 ⇒ GEP 元素类型落到 `ptr[i32]` ⇒ `load` 出
+  //   `ptr[[5 x i32]]` ⇒ `ret` 类型与签名不符（34 个文件）。
+  //   ⇒ 判据：**全局的"对象类型" = `GetGlobal :type`（地址类型）的元素类型**。
+  std::unordered_map<std::string, const Type*> globalAddrTy;
+  for (const Op* op : modRegion->ops()) {
+    if (op == nullptr || op->kind != sir::OpKind::GetGlobal) continue;
+    const Type* at = toFlatType(op->typeAttr(1));
+    if (at != nullptr && at->isPtr()) globalAddrTy[op->strAttr(0)] = at;
+  }
   // ① 全局变量（顺序 = 结构化层的声明顺序）
   for (const Op* op : modRegion->ops()) {
     if (op == nullptr || op->kind != sir::OpKind::GlobalVar) continue;
-    const Type* objTy = toFlatType(op->typeAttr(1));
+    const Type* objTy = nullptr;
+    const auto atIt = globalAddrTy.find(op->strAttr(0));
+    if (atIt != globalAddrTy.end()) {
+      objTy = atIt->second->elem;
+    } else {
+      objTy = toFlatType(op->typeAttr(1));    // 退路：直接用 `:type`
+    }
     if (objTy == nullptr) {
       diags.report(DiagLevel::Error, op->loc, "E-FLATGEN",
                    "全局对象 `" + op->strAttr(0) + "` 的类型无法映射");
@@ -145,6 +166,20 @@ BasicBlock* FlatBuilder::newBlock(const std::string& name) {
 }
 
 Instruction* FlatBuilder::emit(Instruction* i) {
+  // ★★ "终结符必须是块里最后一条" 的结构性保证 ★★
+  //   【问题】`if` 的两个分支都 `return` 时，汇合点**不可达**，展平器给它发
+  //     一条 `unreachable` 收尾；而**结构化 IR 里跟在 `if` 后面的指令还在**
+  //     （IRGen 总会给函数体末尾补一条兜底的 `Int 0; Return 0`）⇒ 那些指令
+  //     会落到**已经终结**的块里 ⇒ V4 报"`unreachable` 后面还有指令"。
+  //   【做法】**丢弃**它们（返回指令但不挂进任何块）。为什么比"另起一个死块"
+  //     更好：走到这里说明这些指令在源码里**不可达**（两个分支都返回了），
+  //     执行语义上丢掉它们没有影响；而另起死块会留下一条**孤儿块**，块里那条
+  //     `ret %2` 用的值定义在入口块，而不可达块在支配计算里只支配自己 ⇒
+  //     轨 B 的"[B2] 定义点不支配使用点"会把这条**真**违规抓出来
+  //     （实测：`52_scope.sy` 的 `func` 多出 `L4: ret i32 %2`）。
+  if (cur_ != nullptr && cur_->hasTerminator()) {
+    return i;                      // 丢弃：不 `ownInst`、不进任何块
+  }
   if (++instCount_ > kMaxInstsPerFunc) {
     if (!overflowed_) {
       overflowed_ = true;
@@ -226,6 +261,30 @@ Value* FlatBuilder::zeroOfSlot(Value* slot, SourceLoc loc) {
   ownInst(c);   // φ 的入值可能只在这里出现一次 ⇒ 由本函数负责登记
   return c;
 }
+
+Value* FlatBuilder::retValueFor(Value* v, SourceLoc loc) {
+  const Type* want = f_ != nullptr ? f_->retType() : nullptr;
+  if (v == nullptr || want == nullptr) return v;
+  if (v->type() == want) return v;
+  // 只认"字面量 0"（整型 / 浮点两种形态）
+  bool isZero = false;
+  if (v->isInst()) {
+    Instruction* c = static_cast<Instruction*>(v);
+    if (c->op() == Opcode::ConstantFP) {
+      isZero = (c->floatBits() == 0u);
+    } else if (c->op() == Opcode::ConstantInt) {
+      isZero = (c->intBits() == 0);
+    }
+  }
+  if (!isZero || want->isPtr()) return v;
+  Instruction* z = static_cast<Instruction*>(want->isFloat() ? kFlt(0u, loc)
+                                                             : constInt(0, want, loc));
+  ownInst(z);                      // 可能只在这里出现一次 ⇒ 由本函数登记
+  return z;
+}
+
+BasicBlock* const FlatBuilder::kDeadExit =
+    reinterpret_cast<BasicBlock*>(static_cast<uintptr_t>(1));
 
 void FlatBuilder::setSlot(Value* slot, Value* v) {
   if (slot == nullptr) return;
@@ -475,7 +534,7 @@ void FlatBuilder::walk(Region* body) {
       // 记下"这个 Region 走完时的环境"与**出口块**（容器的收尾帧要用）。
       //   ⚠️ 必须在 `pop_back` **之后**写 `frameEnvs_[seq]`：`fr` 那时已失效。
       if (seq != kNoEnv) frameEnvs_[seq] = env_;
-      if (slot >= 0) {
+      if (slot >= 0 && !exitIsDead(slot)) {   // 已标死 ⇒ 保留哨兵（见 markExitDead）
         frameExitBlocks_[static_cast<size_t>(slot)] = eb;
         frameExitEnvs_[static_cast<size_t>(slot)] = env_;
       }

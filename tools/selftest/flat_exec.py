@@ -154,6 +154,16 @@ class FlatExec(C.Machine):
         for idx, (_pid, pty) in enumerate(params):
             env[idx] = args[idx] if idx < len(args) else 0
         saved = self.env
+        # ★★ `_cur_func`/`_cur_block`/`_prev_block` 也要**跟着一起存取** ★★
+        #   它们原来只被"每次进块时"改写，**函数返回后不恢复** ⇒ 外层函数在
+        #   `call` 之后仍以为自己在**被调用者**里：
+        #     · φ 按"真实前驱块"选入值时会拿被调用者的块号去比 ⇒ 选错入值；
+        #     · 循环轨迹的 `_track_loop` 用的是被调用者的 `bodies` ⇒ 计数错。
+        #   实测（`26_scope4.sy`）：`call @getA` 之后的 `store i32 %56, %38`
+        #   报 `cur_func=getA cur_block=L0`，而它其实是 `main` 的 L16 ——
+        #   于是 `i` 的两条自增一条都没生效、`while(i<3)` 只跑 2 轮、
+        #   输出 3216（gcc 与结构化侧都是 4474）。
+        saved_ctx = (self._cur_func, self._cur_block, self._prev_block)
         self.env = env
         self._phi_env = {}
         self._phi_pred = {}
@@ -209,6 +219,7 @@ class FlatExec(C.Machine):
             return r.value
         finally:
             self.env = saved
+            (self._cur_func, self._cur_block, self._prev_block) = saved_ctx
 
     def _unused_loop_contains(self, blocks, cur):
         """`cur` 这个块属于栈上哪些循环：返回"还包含它的那些循环头"的集合。

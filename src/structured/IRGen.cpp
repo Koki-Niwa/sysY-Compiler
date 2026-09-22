@@ -195,16 +195,17 @@ Value Gen::genIndexChain(const sysy::Type* startObjTy, const LVal& lv, int depth
     const sysy::Type* elemSemTy = curTy->elem;   // 取一次下标之后的"对象"
     // ⚠️ 这里要的是"指向**下一个对象**的指针" ⇒ 元素类型必须用
     //   `toIrObjType`（对象类型），不能用 `toIrType` —— 后者对数组会再包一层
-    //   指针，于是 `int[2][1][3]` 的 `c[i]` 变成 `ptr[ptr[...]]`、步长/元素类型
-    //   层层错位（实测 `.work/md2.sy` 两种形状都算 0，gcc 是 81）。
-    const Type* ptrTy = ptrTo(toIrObjType(elemSemTy));
-    const int64_t stride = elementCount(elemSemTy);
+    //   指针，于是 `int[2][1][3]` 的 `c[i]` 变成 `ptr[ptr[...]]`、元素类型
+    //   层层错位（实测 `.work/m1.sy`：两种形状都算 0）。
+    const Type* elemObj = toIrObjType(elemSemTy);
     Value iv = genExpr(idx, depth);
-    if (stride > 1) {
-      iv = bin(OpKind::MulI, i32(), iv, cInt(static_cast<int32_t>(stride), idx->loc),
-               idx->loc);
-    }
-    p = gep(ptrTy, p, sextI64(iv, idx->loc), idx->loc);
+    // ★★ **不要**再乘 stride ★★
+    //   GEP 的语义本身就是"按元素类型步进"，`<ty>` 是 `[1 x [3 x i32]]` 时
+    //   走一步就跳过 3 个 i32 —— `getelementptr` 已经把步长算进去了。
+    //   再乘一次是**旧线性模型**的遗留：那时 `<ty>` 写的是最内层标量类型。
+    //   实测（`int c[2][1][3]`，`c[1][0][1]`）：`1*3*1*1 = 3` ⇒ 读到
+    //   `c[1][1][0]`（数组边界外）⇒ 0，gcc 是 1。
+    p = gep(elemObj, p, sextI64(iv, idx->loc), idx->loc);
     curTy = elemSemTy;
   }
   return p;

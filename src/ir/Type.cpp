@@ -127,6 +127,18 @@ const Type* parseTypeText(const std::string& s, size_t& pos) {
   return nullptr;
 }
 
+int64_t typeElemCount(const Type* t) {
+  int64_t n = 1;
+  const Type* c = t;
+  while (c != nullptr && c->kind == TypeKind::Array) {
+    if (c->len < 0) return -1;
+    if (c->len != 0 && n > (INT64_MAX / c->len)) return -1;   // 溢出 ⇒ 不可知
+    n *= c->len;
+    c = c->elem;
+  }
+  return n;
+}
+
 const Type* typeElem(const Type* t) {
   if (t == nullptr || !t->isArray()) return t;
   return t->elem;

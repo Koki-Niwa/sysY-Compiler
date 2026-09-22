@@ -89,6 +89,11 @@ int64_t typeByteSize(const Type* t);
 // 【后置】该类型的元素类型（数组 → 元素；非数组 → 自身）。
 const Type* typeElem(const Type* t);
 
+// 【后置】按行主序展开的**标量个数**（`[2 x [1 x [3 x i32]]]` → 6；标量 → 1；
+//         未知/溢出 → -1）。初始化动作给的是**字节偏移**，要拆成逐维下标就得
+//         知道"某一维走一步等于多少个标量"。与 S04 的 `elementCount` 同一口径。
+int64_t typeElemCount(const Type* t);
+
 }  // namespace flat
 }  // namespace sysy
 #endif  // SYSY_IR_TYPE_H

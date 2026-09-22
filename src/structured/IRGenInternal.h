@@ -191,7 +191,9 @@ class Gen {
   Value orZero(Value v, const sysy::Type* fallbackTy, SourceLoc loc);
   void genDecl(const Decl& d, int depth);
   void genVarDef(const VarDef& v);
-  void genAction(const InitAction& a, Value slot, const Type* elemTy, SourceLoc loc);
+  void genAction(const InitAction& a, Value slot, const Type* elemTy,
+                 const Type* objTy, SourceLoc loc);
+  Value initAddr(const Type* objTy, int64_t off, Value base, SourceLoc loc);
 
   // ── 顶层 ──────────────────────────────────────────────────────────────
   void genGlobals();

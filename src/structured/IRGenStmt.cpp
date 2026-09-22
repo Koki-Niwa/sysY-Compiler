@@ -232,7 +232,9 @@ void Gen::genDecl(const Decl& d, int depth) {
 
 void Gen::genVarDef(const VarDef& v) {
   // ★ prompt §五.1：变量一律在内存 —— 每个 VarDef 一个 AllocaOp（入口 Region）。
-  Value slot = emitAlloca(toIrObjType(v.semType), v.loc);
+  // ★ 对象类型算一次：`alloca`、初始化的地址计算、形状校验都用它
+  const Type* const objTy = toIrObjType(v.semType);
+  Value slot = emitAlloca(objTy, v.loc);
   syms_.emplace_back(v.name, Sym{slot, v.semType, false});
   // ── 初始化：**完全按 S04 的 InitPlan 走**（prompt §五.11），不重新解释 InitVal ──
   //   ★ 用 `localIdx_.take()`（同名队列 + 游标），**不**按名字直接查 ——
@@ -261,31 +263,76 @@ void Gen::genVarDef(const VarDef& v) {
                        flat::typeText(toIrType(&li.type)) + "（" + std::to_string(gotBytes) +
                        " 字节）");
     }
-    for (const InitAction& a : li.actions) genAction(a, slot, elemTy, v.loc);
+    for (const InitAction& a : li.actions) genAction(a, slot, elemTy, objTy, v.loc);
   }
 }
 
 // ============================================================================
 // 初始化动作的降级（**输入是 InitPlan 的动作，不再看 InitVal**）
 // ============================================================================
-void Gen::genAction(const InitAction& a, Value slot, const Type* elemTy, SourceLoc loc) {
+// ============================================================================
+// 初始化动作的地址：`对象基址 + 字节偏移` ⇒ 指向该标量的指针（**逐维**走）
+// ============================================================================
+//   【前置】`objTy` 是**对象类型**（= `alloca` 的那个 `<ty>`），`off` 是它内部
+//          的字节偏移。【后置】一条 GEP 链，指向 `off` 处那个最内层标量。
+//   ★★ 为什么必须逐维，而不能"偏移 ÷ 元素宽度"当一个扁平下标 ★★
+//     `InitPlan` 给的是**字节偏移**，而多维数组的下标不是线性的：
+//     `int[2][1][3]` 里偏移 16 = 标量下标 4，但正确下标是 `[1][0][1]` ——
+//     拿 4 去索引顶层数组会落到对象外面。
+//   ★ 步长取 `typeElemCount(该维的元素类型)`，与读路径 `genIndexChain` 同一口径。
+Value Gen::initAddr(const Type* objTy, int64_t off, Value base, SourceLoc loc) {
+  size_t depth = 0;
+  const Type* cur = objTy;
+  while (cur != nullptr && cur->isArray()) { ++depth; cur = cur->elem; }
+  const int64_t esz = flat::typeByteSize(cur);
+  const int64_t flatIdx = esz > 0 ? off / esz : 0;
+
+  std::vector<int64_t> idx(depth, 0);
+  int64_t rem = flatIdx;
+  const Type* walk = objTy;
+  for (size_t k = 0; k < depth; ++k) {
+    const Type* elemObj = walk->elem;
+    const int64_t stride = flat::typeElemCount(elemObj);
+    idx[k] = stride > 0 ? rem / stride : 0;
+    rem -= idx[k] * stride;
+    walk = elemObj;
+  }
+  Value p = base;
+  const Type* stepTy = objTy;
+  if (depth == 0) {
+    // ★★ 标量也必须发一次 `gep <标量> <base>, 0` ★★
+    //   不是为了语义（下标 0 等于基址），而是为了**形状**：展平器的"槽"识别
+    //   与 `Load` 的假指针纠正都按"`gep … 0` 的形态"来认（见 FlattenLower 的
+    //   `rootSlot`/`Load` 两处说明）。直接返回基址会让那个槽**不进环境**
+    //   ⇒ 后续对该变量的 `load` 被当成"不可达"丢掉、地址也认不出来
+    //   （实测 `26_scope4.sy`：`int a = getA();` 少发 3 条指令，
+    //    并让 `while` 的回边源块变成不可达块 ⇒ V3 报"φ 的前驱 {L6 L0}
+    //    vs 块前驱 {L0}"）。
+    p = gep(cur, base, sextI64(cInt(0, loc), loc), loc);
+    return p;
+  }
+  for (size_t k = 0; k < depth; ++k) {
+    const Type* elemObj = stepTy->elem;
+    p = gep(elemObj, p, sextI64(cInt(static_cast<int32_t>(idx[k]), loc), loc), loc);
+    stepTy = elemObj;
+  }
+  return p;
+}
+
+void Gen::genAction(const InitAction& a, Value slot, const Type* elemTy,
+                    const Type* objTy, SourceLoc loc) {
   switch (a.kind) {
     case InitActionKind::Zero:
       emitZero(slot, static_cast<int64_t>(a.bytes), loc);
       return;
     case InitActionKind::StoreConst: {
-      // offset 是**字节偏移**（InitPlan 的契约）；GEP 的步长是元素 ⇒ 除以宽度
-      const int64_t esz = flat::typeByteSize(elemTy);
-      const int64_t idx = esz > 0 ? static_cast<int64_t>(a.offset) / esz : 0;
-      Value p = gep(elemTy, slot, sextI64(cInt(static_cast<int32_t>(idx), loc), loc), loc);
+      Value p = initAddr(objTy, a.offset, slot, loc);
       Value v = a.value.isFloat ? cFlt(a.value.bits(), loc) : cInt(a.value.i, loc);
       store(elemTy, v, p, loc);
       return;
     }
     case InitActionKind::StoreExpr: {
-      const int64_t esz = flat::typeByteSize(elemTy);
-      const int64_t idx = esz > 0 ? static_cast<int64_t>(a.offset) / esz : 0;
-      Value p = gep(elemTy, slot, sextI64(cInt(static_cast<int32_t>(idx), loc), loc), loc);
+      Value p = initAddr(objTy, a.offset, slot, loc);
       // ⚠️ StoreExpr 的表达式**只在局部**出现（全局必须是常量表达式），
       //    且此时 `cur_` 是函数的当前位置（保证"初始化的副作用顺序 = 源码顺序"）。
       Value v = orZero(genExpr(a.expr, 0), nullptr, loc);   // 兜底零值（i32）

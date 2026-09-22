@@ -30,7 +30,7 @@ import re
 # ── 冻结的指令集（S05 的 `OPKINDS`，逐条照抄；多一个就是违规）─────────────
 OPKINDS = {
     'Module', 'GlobalVar', 'Func', 'GetArg', 'Return', 'Call',
-    'For', 'While', 'If', 'Goto', 'Yield', 'Break',
+    'For', 'While', 'If', 'Goto', 'Yield', 'Break', 'Continue',
     'Alloca', 'Load', 'Store', 'GetElementPtr', 'GetGlobal', 'Bitcast',
     'AddI', 'SubI', 'MulI', 'DivI', 'ModI', 'MinusI',
     'AddF', 'SubF', 'MulF', 'DivF', 'MinusF',
@@ -40,7 +40,7 @@ OPKINDS = {
     'Select', 'Phi', 'Unreachable',
 }
 FORBIDDEN = {'AndI', 'OrI', 'XorI', 'LShift', 'RShift', 'Shl', 'LShr', 'AShr'}
-TERMINATORS = {'Yield', 'Break', 'Return', 'Goto', 'Unreachable'}
+TERMINATORS = {'Yield', 'Break', 'Continue', 'Return', 'Goto', 'Unreachable'}
 CF_CONTAINERS = {'If', 'While', 'For'}
 # ⚠️ 计时函数的名字是 `_sysy` + `starttime`（**没有**中间的下划线）——
 #    IRGen 的发射规则是 `"_sysy" + callee`（见 IRGen.cpp 的 `genCall`）。
@@ -171,7 +171,7 @@ def n_regions_of(op):
 
 def expected_results(kind, callee, fnret):
     """每个 OpKind 的结果个数（与 C++ 侧独立写一遍；这是刻意的重复）。"""
-    if kind in ('Store', 'Return', 'Goto', 'Yield', 'Break', 'Unreachable',
+    if kind in ('Store', 'Return', 'Goto', 'Yield', 'Break', 'Continue', 'Unreachable',
                 'Func', 'Module', 'GlobalVar', 'If', 'While', 'For'):
         return 0
     if kind == 'Call':

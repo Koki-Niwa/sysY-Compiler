@@ -1,0 +1,12 @@
+int main() {
+  int i = 0;
+  int s = 0;
+  while (i < 9) {
+    if (i == 6) {
+      break;
+    }
+    s = s + i * 3;
+    i = i + 1;
+  }
+  return s;
+}

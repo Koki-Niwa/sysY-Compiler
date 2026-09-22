@@ -1,0 +1,25 @@
+最小对照：同一位置的 `break` 与 `continue`（只差一个关键字）。
+
+为什么必须有这一组
+------------------
+S06 之前 IRGen 把 `break` 与 `continue` **都**降级成 `BreakOp`，于是这两个
+程序产出的结构化 IR **逐字节相同**（实测），而它们语义不同：
+    good（continue）`return i` == 8
+    bad （break）   `return i` == 5
+规范化器只能按形状猜 ⇒ 真 `break` 被猜成 `continue` ⇒ 升成 `ForOp` ⇒
+`return i` 从 5 变成 8。
+
+修法（S06）
+----------
+① `continue` 有自己的终结 Op `ContinueOp`（`StructuredIR.h`）⇒ 降级点保留信息，
+   不再需要猜；
+② `LoopRewrite`：顶层/分支末尾的 `BreakOp` ⇒ **拒绝规范化**
+   （保留 `WhileOp` 与 `Break`）；`ContinueOp` 才做消解；
+③ 执行器（`loopnorm_exec.py`）同样不再按形状猜：`Break` 只做 break、
+   `Continue` 只做 continue。
+
+期望
+----
+    good：`For` 数 1、`Break` 0、`Continue` 0（已消解）
+    bad ：`For` 数 0、`While` 1、`Break` 1
+两边的 `--normalize` 产物都必须**逐字节稳定**（runner 会查）。

@@ -1,0 +1,20 @@
+// 临界边：循环头有 2 个后继（循环体 / 循环出口），循环出口有 2 个前驱（条件假边 / break 边）
+int f(int n) {
+  int i = 0;
+  int s = 0;
+  while (i < n) {
+    if (i == 3) {
+      break;
+    }
+    if (i == 5) {
+      s = s + 100;
+    }
+    s = s + i;
+    i = i + 1;
+  }
+  return s;
+}
+
+int main() {
+  return f(9);
+}

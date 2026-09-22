@@ -1,0 +1,1 @@
+钉住数组：GlobalVar(:data) + GetGlobal、局部数组 alloca + llvm.memcpy、a[i][j] 落成两级 GetElementPtr、数组实参传首地址。

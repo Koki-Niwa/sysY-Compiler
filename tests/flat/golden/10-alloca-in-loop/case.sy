@@ -1,0 +1,12 @@
+// alloca 位置：局部变量在循环体内声明，它的 alloca 仍落在函数入口 Region
+int main() {
+  int i = 0;
+  int s = 0;
+  while (i < 4) {
+    int t = i * 2;
+    int buf[2] = {t, t + 1};
+    s = s + buf[1];
+    i = i + 1;
+  }
+  return s;
+}

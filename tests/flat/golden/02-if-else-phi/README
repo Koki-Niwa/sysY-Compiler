@@ -1,0 +1,1 @@
+钉住 φ 位点：if/else 两个分支各自 store 同一个槽，合流之后必须再 load 一次 —— 这就是未来 FlattenCFG 放 φ 的地方。

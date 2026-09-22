@@ -1,0 +1,16 @@
+// 嵌套 if：内层合流的结果，是外层合流的入值（φ 的入值本身是另一个 φ）
+int main() {
+  int a = 1;
+  int b = 2;
+  int r = 0;
+  if (a < b) {
+    if (a == 0) {
+      r = 10;
+    } else {
+      r = 20;
+    }
+  } else {
+    r = 30;
+  }
+  return r;
+}

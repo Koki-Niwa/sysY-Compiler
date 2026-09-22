@@ -1,0 +1,1 @@
+钉住"还没做 mem2reg"：同一个槽先 Store 再立刻 Load，dump 里 store 与 load 都在，return 的操作数是 Load 的结果而不是常量。

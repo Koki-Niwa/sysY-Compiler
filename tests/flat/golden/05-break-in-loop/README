@@ -1,0 +1,1 @@
+钉住真 break：分支里只有 (Break)（不含 Store）、且 break 之后体内仍有语句 ⇒ 循环保留 While，体内出现 (Break)。

@@ -1,0 +1,8 @@
+int main() {
+  int i = 0;
+  while (i < 8) {
+    if (i == 4) { i = i + 1; break; }
+    i = i + 1;
+  }
+  return i;
+}

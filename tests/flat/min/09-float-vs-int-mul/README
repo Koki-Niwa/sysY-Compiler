@@ -1,0 +1,1 @@
+唯一差别：float f = 1.5; / int f = 1;。f32 版是 I2F + MulF（返回处还有 F2I 饱和守卫）；i32 版是 MulI + I2F。

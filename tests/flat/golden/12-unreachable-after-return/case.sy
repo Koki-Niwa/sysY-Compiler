@@ -1,0 +1,22 @@
+// 不可达代码：return / break 之后的语句不产生任何 Op（IRGen 直接丢弃）
+int f(int n) {
+  int i = 0;
+  int s = 0;
+  while (i < n) {
+    if (i == 2) {
+      return s;
+      putint(99);
+    }
+    if (i == 4) {
+      break;
+      s = s + 1000;
+    }
+    s = s + i;
+    i = i + 1;
+  }
+  return s;
+}
+
+int main() {
+  return f(6);
+}

@@ -1,0 +1,17 @@
+// starttime/stoptime：调用点的行号作为实参出现在 Call 里
+int work(int n) {
+  int s = 0;
+  int i = 0;
+  while (i < n) {
+    s = s + i;
+    i = i + 1;
+  }
+  return s;
+}
+
+int main() {
+  starttime();
+  int r = work(100);
+  stoptime();
+  return r;
+}

@@ -1,0 +1,66 @@
+(Module "good.sy") {
+  (Func "main" :ret i32 :param [] @line 1) {
+    (Alloca %main.0 f32 @line 2)
+    (Int %main.1 0 @line 2)
+    (Sext %main.2 %main.1 @line 2)
+    (GetElementPtr %main.3 f32 i64 0 %main.0 %main.2 @line 2)
+    (Float %main.4 0x1.8p+0 @line 2)
+    (Store f32 %main.4 %main.3 @line 2)
+    (Alloca %main.5 i32 @line 3)
+    (Int %main.6 0 @line 3)
+    (Sext %main.7 %main.6 @line 3)
+    (GetElementPtr %main.8 i32 i64 0 %main.5 %main.7 @line 3)
+    (Int %main.9 2 @line 3)
+    (Store i32 %main.9 %main.8 @line 3)
+    (Alloca %main.10 f32 @line 4)
+    (Int %main.11 0 @line 4)
+    (Sext %main.12 %main.11 @line 4)
+    (GetElementPtr %main.13 f32 i64 0 %main.10 %main.12 @line 4)
+    (Load %main.14 i32 %main.5 @line 4)
+    (I2F %main.15 %main.14 @line 4)
+    (Load %main.16 f32 %main.0 @line 4)
+    (MulF %main.17 %main.16 %main.15 @line 4)
+    (Store f32 %main.17 %main.13 @line 4)
+    (Load %main.18 f32 %main.10 @line 5)
+    (Float %main.19 0x1p+31 @line 5)
+    (Gt %main.20 %main.18 %main.19 @line 5)
+    (Float %main.21 -0x1p+31 @line 5)
+    (Lt %main.22 %main.18 %main.21 @line 5)
+    (Ne %main.23 %main.18 %main.18 @line 5)
+    (Alloca %main.24 i32 @line 5)
+    (Alloca %main.25 i32 @line 5)
+    (Alloca %main.26 i32 @line 5)
+    (If %main.20 @line 5) {
+      (Int %main.27 2147483647 @line 5)
+      (Store i32 %main.27 %main.24 @line 5)
+      (Yield @line 5)
+    }
+    {
+      (If %main.22 @line 5) {
+        (Int %main.28 -2147483648 @line 5)
+        (Store i32 %main.28 %main.25 @line 5)
+        (Yield @line 5)
+      }
+      {
+        (If %main.23 @line 5) {
+          (Int %main.29 0 @line 5)
+          (Store i32 %main.29 %main.26 @line 5)
+          (Yield @line 5)
+        }
+        {
+          (F2I %main.30 %main.18 @line 5)
+          (Store i32 %main.30 %main.26 @line 5)
+          (Yield @line 5)
+        }
+        (Load %main.31 i32 %main.26 @line 5)
+        (Store i32 %main.31 %main.25 @line 5)
+        (Yield @line 5)
+      }
+      (Load %main.32 i32 %main.25 @line 5)
+      (Store i32 %main.32 %main.24 @line 5)
+      (Yield @line 5)
+    }
+    (Load %main.33 i32 %main.24 @line 5)
+    (Return %main.33 @line 5)
+  }
+}

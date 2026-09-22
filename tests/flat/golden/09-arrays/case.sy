@@ -1,0 +1,15 @@
+// 数组：全局数组（data 初始化）、全局多维数组、局部数组、a[i][j] 下标、数组作实参
+int g[4] = {1, 2, 3, 4};
+int m[2][3] = {{1, 2, 3}, {4, 5, 6}};
+
+int pick(int a[], int i) {
+  return a[i];
+}
+
+int main() {
+  int loc[3] = {10, 20, 30};
+  g[0] = g[0] + loc[1];
+  int v = pick(loc, 2);
+  int w = pick(g, 1);
+  return v + w + m[1][2];
+}

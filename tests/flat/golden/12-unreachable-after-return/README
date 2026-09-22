@@ -1,0 +1,1 @@
+钉住不可达代码：return/break 之后的语句在 dump 里没有任何对应 Op（既没有 Call 也没有 Store），分支 Region 直接以 Return/Break 收尾。

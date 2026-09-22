@@ -1,0 +1,19 @@
+// 函数调用：非 void 被调（add/twice）、用户 void 被调（report）、void 运行时被调（putint/putch）
+int add(int a, int b) {
+  return a + b;
+}
+
+int twice(int x) {
+  return add(x, x);
+}
+
+void report(int v) {
+  putint(v);
+  putch(10);
+}
+
+int main() {
+  int r = twice(21);
+  report(r);
+  return r;
+}

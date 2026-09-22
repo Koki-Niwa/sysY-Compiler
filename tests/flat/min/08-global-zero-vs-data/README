@@ -1,0 +1,1 @@
+唯一差别：int a[4]; / int a[4] = {0, 0, 0, 0};。零初始化 ⇒ GlobalVar :init "zero"；显式初始化 ⇒ :init "data" {0=0, ...} 而两者都有 GetGlobal。

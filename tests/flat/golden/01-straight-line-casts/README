@@ -1,0 +1,1 @@
+钉住直线代码的形态：标量算术落成 Int/AddI/MulI/SubI，int→float 落成 I2F，float→int 落成带饱和守卫的 F2I 序列（Gt/Lt/Ne + 三个临时 alloca）。

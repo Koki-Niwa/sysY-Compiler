@@ -1,0 +1,13 @@
+// 循环里的 break：这是**真 break**（它后面还有语句）⇒ 循环保留 While，体内出现 BreakOp
+int main() {
+  int s = 0;
+  int n = 0;
+  while (s < 100) {
+    s = s + n;
+    if (s > 20) {
+      break;
+    }
+    n = n + 3;
+  }
+  return s;
+}

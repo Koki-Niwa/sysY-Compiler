@@ -1,0 +1,1 @@
+钉住 continue 消解：循环升成 For，continue 所在分支以 (Yield) 收尾，剩余体被 Eq C 0 守卫包成嵌套 If 的 else 分支。

@@ -1,0 +1,10 @@
+// while 循环：可规范化的计数循环（--normalize 后成 For，条件里的 IV 读被单独提出来）
+int main() {
+  int i = 0;
+  int s = 0;
+  while (i < 10) {
+    s = s + i * 2;
+    i = i + 1;
+  }
+  return s;
+}

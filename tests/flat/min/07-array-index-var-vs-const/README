@@ -1,0 +1,1 @@
+唯一差别：下标 a[i] / a[2]。变量下标 ⇒ Load(i)→Sext→GetElementPtr；常量下标 ⇒ Int 2→Sext→GetElementPtr，少一条 Load。

@@ -1,0 +1,14 @@
+// 循环里的 continue：continue 消解成「if (!cond) { 剩余体 }」，分支里留下 (Yield)
+int main() {
+  int i = 0;
+  int s = 0;
+  while (i < 8) {
+    if (i == 4) {
+      i = i + 1;
+      continue;
+    }
+    s = s + i * i;
+    i = i + 1;
+  }
+  return s;
+}

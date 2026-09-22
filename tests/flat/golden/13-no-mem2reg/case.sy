@@ -1,0 +1,8 @@
+// 不做 mem2reg 的证据：变量先 store 再立刻 load，dump 里 store 与 load 都在
+int main() {
+  int x = 0;
+  x = 7;
+  int y = x + 1;
+  x = y;
+  return x;
+}

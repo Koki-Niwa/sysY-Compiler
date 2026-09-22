@@ -59,179 +59,28 @@ import loopnorm_ir as L  # noqa: E402
 
 ROOT = os.path.abspath(os.path.join(HERE, '..', '..', '..'))
 
-MASK32 = 0xFFFFFFFF
-MASK64 = 0xFFFFFFFFFFFFFFFF
+import exec_core as C   # noqa: E402  ★ S06：与平面执行器**共用同一份语义**
+
+MASK32 = C.MASK32
+MASK64 = C.MASK64
+s32, s64, f32 = C.s32, C.s64, C.f32
+bits_of_f32, f32_of_bits = C.bits_of_f32, C.f32_of_bits
+Mem, Ptr = C.Mem, C.Ptr
+Ret, BreakLoop, ContinueLoop = C.Ret, C.BreakLoop, C.ContinueLoop
+Budget, Unsupported = C.Budget, C.Unsupported
+size_of = C.size_of
 
 
-def s32(v):
-    v &= MASK32
-    return v - (1 << 32) if v >= (1 << 31) else v
-
-
-def s64(v):
-    v &= MASK64
-    return v - (1 << 64) if v >= (1 << 63) else v
-
-
-def f32(v):
-    return struct.unpack('<f', struct.pack('<f', float(v)))[0]
-
-
-def bits_of_f32(v):
-    return struct.unpack('<I', struct.pack('<f', float(v)))[0]
-
-
-def f32_of_bits(b):
-    return struct.unpack('<f', struct.pack('<I', b & MASK32))[0]
-
-
-# ============================================================================
-# 类型：字节大小
-# ============================================================================
-def size_of(ty):
-    """结构化 IR 的类型文本 → 字节数（`i32`=4 · `f32`=4 · `i64`=8 · `[N x T]`）。"""
-    ty = ty.strip()
-    if ty in ('i32', 'f32', 'i1', 'i8'):
-        return 4 if ty != 'i1' and ty != 'i8' else 1
-    if ty == 'i64':
-        return 8
-    if ty == 'void':
-        return 0
-    if ty.startswith('[') and ty.endswith(']'):
-        inner = ty[1:-1]
-        n_str, _, elem = inner.partition(' x ')
-        try:
-            n = int(n_str.strip())
-        except ValueError:
-            return 0
-        return n * size_of(elem)
-    if ty.startswith('ptr'):
-        return 8
-    return 0
-
-
-class Mem(object):
-    """**稀疏**内存：`cells[字节偏移] = 64 位字`（未写过的字恒为 0）。
-
-    为什么必须稀疏：语料里有 1.65 GB 的静态数组（`sl1-3.sy`）与 2.16 亿元素的
-    零初始化全局 —— 真的分配会立刻 OOM。
-    """
-    __slots__ = ('size', 'cells', 'name')
-
-    def __init__(self, size, name=''):
-        self.size = int(size)
-        self.cells = {}
-        self.name = name
-
-    def read_word(self, off, width):
-        off &= MASK64
-        if width == 8:
-            lo = self.cells.get(off, 0) & MASK32
-            hi = self.cells.get(off + 4, 0) & MASK32
-            return (lo | (hi << 32)) & MASK64
-        return self.cells.get(off, 0) & MASK32
-
-    def write_word(self, off, width, val):
-        off &= MASK64
-        if width == 8:
-            self.cells[off] = val & MASK32
-            self.cells[off + 4] = (val >> 32) & MASK32
-        else:
-            self.cells[off] = val & MASK32
-
-    def digest(self):
-        import hashlib
-        h = hashlib.sha256()
-        for k in sorted(self.cells):
-            h.update(struct.pack('<QQ', k, self.cells[k] & MASK64))
-        return h.hexdigest()[:16]
-
-
-class Ptr(object):
-    __slots__ = ('mem', 'off')
-
-    def __init__(self, mem, off):
-        self.mem = mem
-        self.off = off & MASK64
-
-
-class Ret(Exception):
-    def __init__(self, value):
-        Exception.__init__(self, 'return')
-        self.value = value
-
-
-class BreakLoop(Exception):
-    pass
-
-
-class ContinueLoop(Exception):
-    """`continue`：跳过本轮的剩余语句，进入下一轮。
-
-    ★ 为什么执行器必须知道这件事：S05 的 IRGen 把 `break` 与 `continue`
-      **都**降级成 `BreakOp`（形状见 `LoopNormalize.h`）。执行器按**形状**区分：
-      `BreakOp` 在**某个 `IfOp` 分支的末尾**、且该分支里有 `Store`
-      （= 源码的 `i = i + 1; continue;` 模式）⇒ 它是 `continue`。
-      其余（体顶层的 `BreakOp`）⇒ 真 `break`（保守）。
-    """
-
-
-class Budget(Exception):
-    pass
-
-
-class Unsupported(Exception):
-    pass
-
-
-# ============================================================================
-# 执行器
-# ============================================================================
-class Exec(object):
-    # 预算只有**步数**这一个（超限即跳过并报告原因）。
-    #   ⚠️ 早先还有一个 20 s 墙钟预算，那让**跳过集合随负载漂移** ⇒ 覆盖率数字不可
-    #      复现。判据的输入必须确定 ⇒ 只留步数，墙钟只用于报告耗时。
-    MAX_STEPS = 5000000
+class Exec(C.Machine):
+    """结构化 IR 的执行器：**只负责"下一条 Op 怎么取"**（Region 遍历），
+    其余语义全部来自 `exec_core.Machine`（与平面执行器**同一份**）。"""
 
     def __init__(self, mod, names, seed=12345):
-        import time
-        self.t0 = time.monotonic()
+        C.Machine.__init__(self, seed)
         self.mod = mod
         self.names = names
-        self.globals = {}          # 全局名 → Ptr
         self.funcs = {}            # 函数名 → Op
-        self.out = []
-        self.loop_trace = []
-        self.steps = 0
-        self.rng = seed
-        self.depth = 0
-        self.ptr_slots = {}        # (mem id, offset) → Ptr（指针槽；数组形参）
 
-    # ── 确定性"输入" ──────────────────────────────────────────────────────
-    def next_int(self):
-        """确定性的"输入整数"（固定种子 ⇒ 可复现）。
-
-        ★ 为什么**故意取小值**（`[-5, 10]`）而不是"看起来像真输入的大随机数"：
-          语料里的性能用例是 `n = getint(); while (i < n) { … }`。若 `getint`
-          返回一个 10 位数，循环要跑十亿次 ⇒ 只能靠"时间预算"跳过，
-          而**这些恰好是最需要行为判据的程序**（实测：大随机数下 97 个文件
-          因超出 20 秒预算被跳过）。
-          取小值后，同一个循环仍然被**真实执行**（迭代次数、边界、`continue`
-          的路径全部走到），轨迹判据的效力不降 —— 而覆盖数从 378 涨到 400+。
-          代价：数值上的"边角情形"（大数溢出等）覆盖变弱，但那是**前端降级**
-          （S03/S04）的验收范围，不是本关（控制流重编码）的。
-        """
-        x = self.rng & MASK32
-        x ^= (x << 13) & MASK32
-        x ^= (x >> 17)
-        x ^= (x << 5) & MASK32
-        self.rng = x & MASK32
-        return (self.rng % 16) - 5
-
-    def next_float(self):
-        return f32(self.next_int() % 1000) / 4.0
-
-    # ── 入口 ──────────────────────────────────────────────────────────────
     def run(self, entry='main'):
         mod_region = L.module_region(self.mod)
         for op in mod_region:
@@ -281,11 +130,13 @@ class Exec(object):
 
     # ── 函数调用 ──────────────────────────────────────────────────────────
     def call(self, name, args):
-        if name in L.RUNTIME_VOID or name in L.VOID_CALLS or name.startswith('_sysy'):
-            self.do_runtime_void(name, args)
-            return None
-        if name in L.RUNTIME_SIG:
-            return self.do_runtime_ret(name, args)
+        # 运行时库/内建 → **共用核**（唯一实现）；用户函数 → 下面那段
+        if (name in C.RUNTIME_VOID or name in C.BUILTIN_VOID or name in C.TIMING or
+                name in C.RUNTIME_RET):
+            return self.runtime(name, args, self._call_user)
+        return self._call_user(name, args)
+
+    def _call_user(self, name, args):
         fn = self.funcs.get(name)
         if fn is None:
             raise Unsupported('call to unknown function `%s`' % name)
@@ -296,90 +147,6 @@ class Exec(object):
             return self.exec_func(fn, args)
         finally:
             self.depth -= 1
-
-    def do_runtime_void(self, name, args):
-        if name in ('_sysystarttime', '_sysystoptime', '_sysy_starttime', '_sysy_stoptime'):
-            return
-        if name == 'putint':
-            self.out.append(str(int(args[0])))
-            return
-        if name == 'putch':
-            self.out.append('c%d' % (int(args[0]) & MASK32))
-            return
-        if name == 'putfloat':
-            self.out.append('f%08x' % bits_of_f32(args[0]))
-            return
-        if name == 'putarray':
-            n = int(args[0])
-            p = args[1]
-            self.out.append('a%d' % n)
-            for i in range(max(0, min(n, 1000))):
-                self.out.append(str(s32(self.load_word(p, i * 4, 4))))
-            return
-        if name == 'putfarray':
-            n = int(args[0])
-            p = args[1]
-            self.out.append('fa%d' % n)
-            for i in range(max(0, min(n, 1000))):
-                self.out.append('f%08x' % (self.load_word(p, i * 4, 4) & MASK32))
-            return
-        if name == 'llvm.memset':
-            p, val, n = args[0], int(args[1]) & MASK32, int(args[2])
-            if val != 0:
-                raise Unsupported('memset with non-zero value')
-            if n > 10 ** 7:
-                raise Unsupported('memset too large (%d)' % n)
-            for off in range(0, n & ~3, 4):
-                p.mem.cells.pop((p.off + off) & MASK64, None)
-            return
-        if name == 'llvm.memcpy':
-            dst, src, n = args[0], args[1], int(args[2])
-            if n > 10 ** 7:
-                raise Unsupported('memcpy too large (%d)' % n)
-            words = {}
-            for off in range(0, n & ~3, 4):
-                v = src.mem.cells.get((src.off + off) & MASK64)
-                if v:
-                    words[off] = v
-            for off, v in words.items():
-                dst.mem.cells[(dst.off + off) & MASK64] = v
-            return
-        raise Unsupported('unknown runtime void `%s`' % name)
-
-    def do_runtime_ret(self, name, args):
-        if name == 'getint':
-            return self.next_int()
-        if name == 'getch':
-            return 65 + (self.next_int() & 15)
-        if name == 'getfloat':
-            return self.next_float()
-        if name in ('getarray',):
-            p = args[0]
-            n = 8
-            for i in range(n):
-                self.store_word(p, i * 4, 4, self.next_int() & MASK32)
-            return n
-        if name in ('getfarray',):
-            p = args[0]
-            n = 8
-            for i in range(n):
-                self.store_word(p, i * 4, 4, bits_of_f32(self.next_float()))
-            return n
-        raise Unsupported('unknown runtime function `%s`' % name)
-
-    # ── 内存原语 ──────────────────────────────────────────────────────────
-    def load_word(self, p, off, width):
-        return p.mem.read_word(p.off + off, width)
-
-    def store_word(self, p, off, width, val):
-        p.mem.write_word((p.off + off) & MASK64, width, val)
-
-    # 指针槽：单独一张表（`id(mem)` 不能跨进程/跨运行复用，也不该进内存摘要）
-    def ptr_slot_get(self, p):
-        return self.ptr_slots.get((id(p.mem), p.off & MASK64))
-
-    def ptr_slot_set(self, p, v):
-        self.ptr_slots[(id(p.mem), p.off & MASK64)] = v
 
     def exec_func(self, fn, args):
         # ★ 帧里**预置全局引用**：全局名（`%.N`）可以在任何函数体里当操作数用，
@@ -396,11 +163,10 @@ class Exec(object):
     # ── Region 执行 ───────────────────────────────────────────────────────
     def exec_region(self, region, env, args, in_if_branch=False):
         for op in region:
-            if op.kind == 'Break':
-                # 形状判定（见 `ContinueLoop` 的说明）
-                if in_if_branch and any(x.kind == 'Store' for x in region):
-                    raise ContinueLoop()
+            if op.kind == 'Break':      # S06：Break/Continue 不再按形状猜
                 raise BreakLoop()
+            if op.kind == 'Continue':
+                raise ContinueLoop()
             self.exec_op(op, env, args, in_if_branch)
 
     def exec_op(self, op, env, args, in_if_branch=False):
@@ -410,6 +176,8 @@ class Exec(object):
         # 墙钟**不参与判定**（见 MAX_STEPS 的注释：那会让跳过集合随负载漂移）。
         # 只留着供外层报告耗时，判据一律走步数。
         k = op.kind
+        if self.try_default(k, op, env):
+            return
         if k == 'Alloca':
             ty = op.attrs[0] if op.attrs else 'i32'
             env[op.results[0]] = Ptr(Mem(size_of(ty), 'alloca'), 0)
@@ -557,6 +325,8 @@ class Exec(object):
             return
         if k == 'Break':
             raise BreakLoop()
+        if k == 'Continue':
+            raise ContinueLoop()
         if k == 'Return':
             raise Ret(env[op.operands[0]] if op.operands else None)
         if k == 'Unreachable':
@@ -576,69 +346,6 @@ class Exec(object):
                 continue
             self.exec_op(op, env, args)
         return last
-
-    def _int_bin(self, k, a, b):
-        if k == 'AddI':
-            return s32(a + b)
-        if k == 'SubI':
-            return s32(a - b)
-        if k == 'MulI':
-            return s32(a * b)
-        if k == 'DivI':
-            if b == 0:
-                return 0
-            if a == -2147483648 and b == -1:
-                return 0
-            q = abs(a) // abs(b)
-            return s32(q if (a < 0) == (b < 0) else -q)
-        if k == 'ModI':
-            if b == 0:
-                return a
-            if a == -2147483648 and b == -1:
-                return 0
-            r = abs(a) % abs(b)
-            return s32(r if a >= 0 else -r)
-        raise Unsupported(k)
-
-    # 【后置】按类型读一个值（`i32`/`f32`/`i64`/指针槽）。
-    def _load(self, p, ty):
-        if ty == 'f32':
-            return f32_of_bits(self.load_word(p, 0, 4))
-        if ty == 'i64':
-            return s64(self.load_word(p, 0, 8))
-        if ty == 'ptr' or ty.startswith('ptr'):
-            v = self.ptr_slot_get(p)
-            if v is None:
-                raise Unsupported('load of unset pointer slot')
-            return v
-        return s32(self.load_word(p, 0, 4))
-
-    def _store(self, p, ty, v):
-        if ty == 'f32':
-            self.store_word(p, 0, 4, bits_of_f32(v))
-            return
-        if ty == 'i64':
-            self.store_word(p, 0, 8, v & MASK64)
-            return
-        if ty == 'ptr' or ty.startswith('ptr'):
-            if not isinstance(v, Ptr):
-                # ⚠️ IRGen 在**嵌套数组的初始化**里会把标量写进"子数组类型"的槽
-                #   （`int a[3][2] = {1,2,3,4,5,6}` ⇒
-                #    `(Store ptr[[2 x i32]] %int %gep)`）。这是既有（冻结）的
-                #   降级形态；执行器按 **i32 写**处理即可（两份 IR 里这段完全相同，
-                #   所以不影响"变换前后行为是否一致"的判定）。
-                self.store_word(p, 0, 4, int(v) & MASK32)
-                return
-            self.ptr_slot_set(p, v)
-            return
-        self.store_word(p, 0, 4, int(v) & MASK32)
-
-    @staticmethod
-    def _parse_float(tok):   # `%a` 十六进制浮点（与 dump 的格式一致）
-        if tok == 'nan':
-            return float('nan')
-        return f32(float.fromhex(tok) if tok.startswith('0x') or 'p' in tok else float(tok))
-
 
 # ============================================================================
 # 单文件：跑两份 IR，比较轨迹
@@ -714,6 +421,9 @@ def main():
                     help='覆盖要求：至少多少个文件两份 IR 轨迹相同')
     ap.add_argument('--seed', type=int, default=12345)
     ap.add_argument('--show-trace', default='', help='只跑这一个 .sy 并打印轨迹')
+    # 只打印"两份 IR 各自的重放子轨迹与最终轨迹"（值为 True 时**不判等价**），
+    #   用途：重构执行核时做**逐字节锚定**（同一批文件前后输出必须完全一致）。
+    ap.add_argument('--dump-traces', default='', help='只跑这一个 .sy，打印机器可比的轨迹行')
     ap.add_argument('--verbose', action='store_true')
     args = ap.parse_args()
 
@@ -723,6 +433,24 @@ def main():
         return 2
     tmp = os.path.join(ROOT, '.work', 'loopnorm_exec')
     os.makedirs(tmp, exist_ok=True)
+
+    if args.dump_traces:
+        sy = os.path.abspath(args.dump_traces)
+        key = os.path.relpath(sy, ROOT).replace('/', '__')
+        raw = os.path.join(tmp, key + '.raw')
+        nrm = os.path.join(tmp, key + '.norm')
+        r1 = subprocess.run([compiler, sy, '--emit=structured-ir', '-o', raw], capture_output=True)
+        r2 = subprocess.run([compiler, sy, '--emit=structured-ir', '--normalize', '-o', nrm],
+                            capture_output=True)
+        print('rc %d %d' % (r1.returncode, r2.returncode))
+        for tag, path in (('raw', raw), ('norm', nrm)):
+            try:
+                m, n, _ = L.parse_dump(open(path, encoding='utf-8').read())
+                t = Exec(m, n, args.seed).run()
+                print('%s %r' % (tag, t))
+            except Exception as e:                       # noqa: BLE001
+                print('%s ERR %s' % (tag, e))
+        return 0
 
     if args.show_trace:
         st, msg, a, b = one_file(compiler, os.path.abspath(args.show_trace), tmp, args.seed)

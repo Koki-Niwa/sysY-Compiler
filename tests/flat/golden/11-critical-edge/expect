@@ -1,0 +1,65 @@
+(Module "case.sy") {
+  (Func "f" :ret i32 :param [i32] @line 2) {
+    (GetArg %f.0 0 i32 @line 2)
+    (Alloca %f.1 i32 @line 2)
+    (Store i32 %f.0 %f.1 @line 2)
+    (Alloca %f.2 i32 @line 3)
+    (Int %f.3 0 @line 3)
+    (Sext %f.4 %f.3 @line 3)
+    (GetElementPtr %f.5 i32 i64 0 %f.2 %f.4 @line 3)
+    (Int %f.6 0 @line 3)
+    (Store i32 %f.6 %f.5 @line 3)
+    (Alloca %f.7 i32 @line 4)
+    (Int %f.8 0 @line 4)
+    (Sext %f.9 %f.8 @line 4)
+    (GetElementPtr %f.10 i32 i64 0 %f.7 %f.9 @line 4)
+    (Int %f.11 0 @line 4)
+    (Store i32 %f.11 %f.10 @line 4)
+    (While @line 5) {
+      (Load %f.12 i32 %f.1 @line 5)
+      (Load %f.13 i32 %f.2 @line 5)
+      (Lt %f.14 %f.13 %f.12 @line 5)
+      (Yield %f.14 @line 5)
+    }
+    {
+      (Int %f.15 3 @line 6)
+      (Load %f.16 i32 %f.2 @line 6)
+      (Eq %f.17 %f.16 %f.15 @line 6)
+      (If %f.17 @line 6) {
+        (Break @line 7)
+      }
+      {
+        (Yield @line 6)
+      }
+      (Int %f.18 5 @line 9)
+      (Load %f.19 i32 %f.2 @line 9)
+      (Eq %f.20 %f.19 %f.18 @line 9)
+      (If %f.20 @line 9) {
+        (Int %f.21 100 @line 10)
+        (Load %f.22 i32 %f.7 @line 10)
+        (AddI %f.23 %f.22 %f.21 @line 10)
+        (Store i32 %f.23 %f.7 @line 10)
+        (Yield @line 9)
+      }
+      {
+        (Yield @line 9)
+      }
+      (Load %f.24 i32 %f.2 @line 12)
+      (Load %f.25 i32 %f.7 @line 12)
+      (AddI %f.26 %f.25 %f.24 @line 12)
+      (Store i32 %f.26 %f.7 @line 12)
+      (Int %f.27 1 @line 13)
+      (Load %f.28 i32 %f.2 @line 13)
+      (AddI %f.29 %f.28 %f.27 @line 13)
+      (Store i32 %f.29 %f.2 @line 13)
+      (Yield @line 5)
+    }
+    (Load %f.30 i32 %f.7 @line 15)
+    (Return %f.30 @line 15)
+  }
+  (Func "main" :ret i32 :param [] @line 18) {
+    (Int %main.0 9 @line 19)
+    (Call "f" %main.1 %main.0 @line 19)
+    (Return %main.1 @line 19)
+  }
+}

@@ -1,0 +1,1 @@
+唯一差别：if 分支体是 i = i + 1; continue; / break;。前者升成 For（分支以 Yield 收尾），后者保留 While（分支里是真 Break）。

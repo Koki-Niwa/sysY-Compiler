@@ -1,0 +1,1 @@
+唯一差别：while (i < 3) / if (i < 3)。while ⇒ For（带 IV 槽/边界/步长四个操作数）；if ⇒ 只有 If + then/else 两个 Region。

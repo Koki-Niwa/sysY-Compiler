@@ -1,0 +1,43 @@
+(Module "bad.sy") {
+  (Func "run" :ret i32 :param [i32] @line 1) {
+    (GetArg %run.0 0 i32 @line 1)
+    (Alloca %run.1 i32 @line 1)
+    (Store i32 %run.0 %run.1 @line 1)
+    (Alloca %run.2 i32 @line 2)
+    (Int %run.3 0 @line 2)
+    (Sext %run.4 %run.3 @line 2)
+    (GetElementPtr %run.5 i32 i64 0 %run.2 %run.4 @line 2)
+    (Int %run.6 0 @line 2)
+    (Store i32 %run.6 %run.5 @line 2)
+    (Alloca %run.7 i32 @line 3)
+    (Int %run.8 0 @line 3)
+    (Sext %run.9 %run.8 @line 3)
+    (GetElementPtr %run.10 i32 i64 0 %run.7 %run.9 @line 3)
+    (Int %run.11 0 @line 3)
+    (Store i32 %run.11 %run.10 @line 3)
+    (While @line 4) {
+      (Call "getint" %run.12 @line 4)
+      (Load %run.13 i32 %run.2 @line 4)
+      (Lt %run.14 %run.13 %run.12 @line 4)
+      (Yield %run.14 @line 4)
+    }
+    {
+      (Load %run.15 i32 %run.2 @line 5)
+      (Load %run.16 i32 %run.7 @line 5)
+      (AddI %run.17 %run.16 %run.15 @line 5)
+      (Store i32 %run.17 %run.7 @line 5)
+      (Int %run.18 1 @line 6)
+      (Load %run.19 i32 %run.2 @line 6)
+      (AddI %run.20 %run.19 %run.18 @line 6)
+      (Store i32 %run.20 %run.2 @line 6)
+      (Yield @line 4)
+    }
+    (Load %run.21 i32 %run.7 @line 8)
+    (Return %run.21 @line 8)
+  }
+  (Func "main" :ret i32 :param [] @line 11) {
+    (Int %main.0 5 @line 12)
+    (Call "run" %main.1 %main.0 @line 12)
+    (Return %main.1 @line 12)
+  }
+}

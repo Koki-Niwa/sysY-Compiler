@@ -1,0 +1,1 @@
+钉住 alloca 位置：循环体内声明的 t 与 buf 的 Alloca 出现在入口 Region（循环 Op 之前），而它们的初始化 Store 留在循环体内。

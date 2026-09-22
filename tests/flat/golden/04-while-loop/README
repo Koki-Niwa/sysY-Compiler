@@ -1,0 +1,1 @@
+钉住可规范化循环：--normalize 后 While 变 For，For 头四个操作数是 IV 槽、条件里的 IV 读、循环不变边界、步长。

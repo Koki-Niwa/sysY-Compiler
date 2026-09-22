@@ -1,0 +1,12 @@
+// 直线代码：标量算术 + int/float 互转（I2F、F2I 的饱和守卫序列）
+int main() {
+  int a = 3;
+  int b = 4;
+  int area = a * b;
+  float half = 0.5;
+  float farea = area;
+  float scaled = farea * half;
+  int back = scaled;
+  int rem = area - back;
+  return rem;
+}

@@ -193,7 +193,11 @@ Value Gen::genIndexChain(const sysy::Type* startObjTy, const LVal& lv, int depth
       continue;
     }
     const sysy::Type* elemSemTy = curTy->elem;   // 取一次下标之后的"对象"
-    const Type* ptrTy = ptrTo(toIrType(elemSemTy));
+    // ⚠️ 这里要的是"指向**下一个对象**的指针" ⇒ 元素类型必须用
+    //   `toIrObjType`（对象类型），不能用 `toIrType` —— 后者对数组会再包一层
+    //   指针，于是 `int[2][1][3]` 的 `c[i]` 变成 `ptr[ptr[...]]`、步长/元素类型
+    //   层层错位（实测 `.work/md2.sy` 两种形状都算 0，gcc 是 81）。
+    const Type* ptrTy = ptrTo(toIrObjType(elemSemTy));
     const int64_t stride = elementCount(elemSemTy);
     Value iv = genExpr(idx, depth);
     if (stride > 1) {

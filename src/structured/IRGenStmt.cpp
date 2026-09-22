@@ -232,7 +232,7 @@ void Gen::genDecl(const Decl& d, int depth) {
 
 void Gen::genVarDef(const VarDef& v) {
   // ★ prompt §五.1：变量一律在内存 —— 每个 VarDef 一个 AllocaOp（入口 Region）。
-  Value slot = emitAlloca(toIrType(v.semType), v.loc);
+  Value slot = emitAlloca(toIrObjType(v.semType), v.loc);
   syms_.emplace_back(v.name, Sym{slot, v.semType, false});
   // ── 初始化：**完全按 S04 的 InitPlan 走**（prompt §五.11），不重新解释 InitVal ──
   //   ★ 用 `localIdx_.take()`（同名队列 + 游标），**不**按名字直接查 ——

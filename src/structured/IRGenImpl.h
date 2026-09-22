@@ -32,6 +32,8 @@ namespace sir {
 //   parameter is a pointer to the first element"），所以形参在 IR 里**是指针**，
 //   不是数组对象。否则 `a[i][j]` 的地址计算要为形参单开一条路径。
 const Type* toIrType(const sysy::Type* t);
+// 【后置】作为**内存对象**的类型（`alloca`/全局对象用；见 .cpp 的说明）。
+const Type* toIrObjType(const sysy::Type* t);
 
 // 【后置】"指针当前所指的数组对象"被索引一次时的**元素步长**（元素个数），
 //         即该对象去掉最外层之后剩余维度的元素总数。不可知 / 非数组 → 1。

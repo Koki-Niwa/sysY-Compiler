@@ -42,8 +42,8 @@ OPCODES = {
     # 终结符（4）
     'br', 'ret', 'unreachable', 'switch',
     # 算术 / 逻辑（i32 / i64 / f32，按 iset 的助记符）
-    'add', 'sub', 'mul', 'sdiv', 'srem', 'fadd', 'fsub', 'fmul', 'fdiv',
-    'and', 'or', 'xor', 'shl', 'ashr', 'icmp', 'fcmp',
+    'add', 'sub', 'mul', 'sdiv', 'srem', 'fadd', 'fsub', 'fmul', 'fdiv', 'fneg',
+    'and', 'or', 'xor', 'shl', 'lshr', 'ashr', 'icmp', 'fcmp',
     # 内存
     'alloca', 'load', 'store', 'getelementptr', 'bitcast',
     # 类型转换
@@ -87,7 +87,13 @@ def split_rhs(rhs):
 
 
 CONST_TYPES = {'i32', 'i64', 'f32', 'void'}
-_value_re = re.compile(r'^(-?\d+(?:\.\d+)?|@[A-Za-z_][A-Za-z0-9_.]*|%\.\d+)$')
+# ⚠️ 浮点常量是 **C99 十六进制浮点**（`0x1p+1`、`-0x1.8p+0`、`0x0p+0`），
+#   不是十进制 —— `FlatDump` 用 `%a` 打印（见它的 `appendFloat`）。
+#   只认十进制会让**每一个带浮点常量的文件**被假报 B6"发明了 opcode `f32`"。
+_value_re = re.compile(
+    r'^(-?\d+(?:\.\d+)?'
+    r'|-?0[xX][0-9a-fA-F]*(?:\.[0-9a-fA-F]*)?[pP][+-]?\d+'
+    r'|@[A-Za-z_][A-Za-z0-9_.]*|%\.\d+)$')
 # 形参行：  （dump 里形参写在 define 行内，这里留个口子备将来用）
 # ⚠️ dump 里**每条指令都带 `@line N` 后缀**（`br L3 @line 6`）⇒ 终结符的
 #   正则必须用 `\s+label` 这类**紧贴形态**，不能用 `$` 收尾（实测踩到：

@@ -22,6 +22,7 @@ TOOLS="$ROOT/compiler/tools"
 LLVM_BIN="/usr/lib/llvm-18/bin"
 WORK="${TMPDIR:-/tmp}/verify_$$"
 STAGE=""
+QUICK=0        # --quick：日常档，跳过三条最耗时的交叉验证轨（**交付前必须跑全量**）
 FAIL=0
 PASS=0
 SKIP=0
@@ -32,6 +33,7 @@ trap 'rm -rf "$WORK"' EXIT
 while [ $# -gt 0 ]; do
   case "$1" in
     --stage) STAGE="$2"; shift 2 ;;
+    --quick) QUICK=1; shift ;;
     *) echo "未知参数: $1"; exit 2 ;;
   esac
 done
@@ -42,7 +44,7 @@ c_skip() { printf '  \033[33m−\033[0m %s\n' "$1"; SKIP=$((SKIP+1)); }
 hdr()    { printf '\n\033[1m═══ %s ═══\033[0m\n' "$1"; }
 
 echo "════════════════════════════════════════════════════════════════"
-echo " 会话交付质量关卡    $(date '+%Y-%m-%d %H:%M:%S')   阶段=${STAGE:-自动}"
+echo " 会话交付质量关卡    $(date '+%Y-%m-%d %H:%M:%S')   阶段=${STAGE:-自动}$([ "$QUICK" = 1 ] && echo '   【--quick 日常档】')"
 echo "════════════════════════════════════════════════════════════════"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -489,7 +491,9 @@ else
   # ③ ★★ 独立实现的第二份 IRGen（唯一能抓"理解错了"的一条）
   if [ -f "$TOOLS/selftest/independent_irgen_check.py" ]; then
     ILOG="$WORK/iirgen.log"
-    if python3 "$TOOLS/selftest/independent_irgen_check.py" --compiler "$COMPILER" \
+    if [ "$QUICK" = 1 ]; then
+      c_skip "轨 D（独立 IRGen）--quick 档跳过 —— **交付前请跑全量**"
+    elif python3 "$TOOLS/selftest/independent_irgen_check.py" --compiler "$COMPILER" \
           --dir "$ROOT/tests" --jobs "$(nproc)" >"$ILOG" 2>&1; then
       c_ok "独立 IRGen 交叉验证：与 C++ 输出逐字节一致"
     else
@@ -549,7 +553,9 @@ else
   # ③ 独立实现的第二份规范化器
   if [ -f "$TOOLS/selftest/independent_loopnorm_check.py" ]; then
     LLOG="$WORK/iloopnorm.log"
-    if python3 "$TOOLS/selftest/independent_loopnorm_check.py" --compiler "$COMPILER" \
+    if [ "$QUICK" = 1 ]; then
+      c_skip "轨 D（独立规范化器）--quick 档跳过 —— **交付前请跑全量**"
+    elif python3 "$TOOLS/selftest/independent_loopnorm_check.py" --compiler "$COMPILER" \
           --jobs "$(nproc)" >"$LLOG" 2>&1; then
       c_ok "独立规范化器：与 C++ 输出逐字节一致"
     else
@@ -563,7 +569,9 @@ else
   # ④ 行为等价（唯一能抓 off-by-one 的一条）
   if [ -f "$TOOLS/selftest/loopnorm_exec.py" ]; then
     ELOG="$WORK/loopnorm_exec.log"
-    if python3 "$TOOLS/selftest/loopnorm_exec.py" --compiler "$COMPILER" \
+    if [ "$QUICK" = 1 ]; then
+      c_skip "轨 E（行为等价执行器）--quick 档跳过 —— **交付前请跑全量**"
+    elif python3 "$TOOLS/selftest/loopnorm_exec.py" --compiler "$COMPILER" \
           --jobs "$(nproc)" >"$ELOG" 2>&1; then
       c_ok "行为等价：变换前后两份 IR 轨迹相同"
       grep -E '轨迹相同|跳过' "$ELOG" | tail -2 | sed 's/^/      /'

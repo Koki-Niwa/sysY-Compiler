@@ -25,7 +25,7 @@
 976  compiler/tools/selftest/independent_parser_check.py
 380  compiler/tools/selftest/initplan_dump.py
 510  compiler/tools/selftest/initplan_sem.py
-792  compiler/tools/selftest/loopnorm_exec.py
+791  compiler/tools/selftest/loopnorm_exec.py
 796  compiler/tools/selftest/loopnorm_independent.py
 332  compiler/tools/selftest/loopnorm_ir.py
 123  compiler/tools/selftest/perf_tokens.py
@@ -47,4 +47,4 @@
 420  compiler/tools/selftest/unit/test_sema.cpp
 135  compiler/tools/selftest/unit/test_sourcefile.cpp
 373  compiler/tools/selftest/unit/test_structured.cpp
-679  compiler/tools/verify.sh
+687  compiler/tools/verify.sh

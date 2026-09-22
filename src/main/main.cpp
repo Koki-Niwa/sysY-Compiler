@@ -417,13 +417,22 @@ std::string renderFlatIr(const SourceFile& src, DiagnosticEngine& diags, bool fr
     diags.report(DiagLevel::Error, sysy::SourceLoc(0, 0), "E-STRUCT-VERIFY",
                  "展平之前结构化 IR 已违反不变量：\n" + sysy::sir::formatViolations(svs));
   }
+  // ★★ 平面校验只在"前面的阶段全绿"时才有意义 ★★
+  //   前端已经报错时（张量语法、越界构造…），AST 是**带病恢复**出来的，
+  //   结构化 IR 里已经出现"`load` 的操作数不是指针"这类形态 —— 再报一句
+  //   "平面 IR 违反不变量（7 条）"是**假信号**：那些文件本来就不该有产物。
+  //   实测：48 个张量文件共报 398 条 `[V6]`，全部落在**前端已拒绝**的文件里；
+  //   490 个真正产出平面 IR 的文件**一条都不报**。
+  const bool pipelineClean = !diags.hasError();
   sysy::flat::Module fmod;
   if (sysy::flat::flattenModule(smod, fmod, diags) == nullptr) return std::string();
-  const std::vector<sysy::flat::Violation> fvs = sysy::flat::verifyFlatModule(fmod);
-  if (!fvs.empty()) {
-    diags.report(DiagLevel::Error, sysy::SourceLoc(0, 0), "E-FLAT-VERIFY",
-                 "平面 IR 违反不变量（" + std::to_string(fvs.size()) + " 条）：\n" +
-                     sysy::flat::formatViolations(fvs));
+  if (pipelineClean) {
+    const std::vector<sysy::flat::Violation> fvs = sysy::flat::verifyFlatModule(fmod);
+    if (!fvs.empty()) {
+      diags.report(DiagLevel::Error, sysy::SourceLoc(0, 0), "E-FLAT-VERIFY",
+                   "平面 IR 违反不变量（" + std::to_string(fvs.size()) + " 条）：\n" +
+                       sysy::flat::formatViolations(fvs));
+    }
   }
   if (flatStats) {
     std::cerr << fmod.formatStats();

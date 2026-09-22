@@ -193,6 +193,26 @@ Value Gen::genIndexChain(const sysy::Type* startObjTy, const LVal& lv, int depth
       continue;
     }
     const sysy::Type* elemSemTy = curTy->elem;   // 取一次下标之后的"对象"
+    // ★★ 数组形参（第一维 `[]`）：槽里装的是**一根指针**，不是数组本身 ★★
+    //   `int a[]` 的 `a` 在 IR 里是 `alloca ptr[i32]`（S05 的决定：形参也
+    //   一律在内存里），所以 `a[i]` 必须**先把那根指针 load 出来**再索引。
+    //   第一版直接在槽的地址上按 `i32` 索引 ⇒ 读到的是**指针本身**而不是
+    //   它指向的数组。实测（完整最小程序）：
+    //       int g[3]={7,8,9};
+    //       int first(int a[]){return a[0]*100+a[1]*10+a[2];}
+    //       int main(){int b[3]={1,2,3}; return first(g)+first(b);}
+    //     gcc 是 **912**，改前**结构化与平面都是 0**。
+    //   ⚠️ 这一段以前是"展平器里的一条纠正"（见 FlattenLower 的假指针 GEP），
+    //      那条纠正只治平面侧、**治不了结构化侧的求值**（`0` 就是它留下的）。
+    //      治源头之后两侧同时正确，展平器那条纠正就成了兜底。
+    //   ⚠️ 逐维退化：每过一维，`curTy` 变成 `elemSemTy`；只有**第一维**
+    //      是 `kUnknownDim`（Sema 只允许第一维空），所以只需处理一次。
+    if (curTy->len == kUnknownDim) {
+      const Type* slotPtrTy = toIrType(curTy);          // ptr[元素类型]
+      p = load(slotPtrTy, p, lv.loc);
+      curTy = elemSemTy;
+      // 退化后的"当前对象"就是元素类型本身 ⇒ 落到下面用它的对象类型索引
+    }
     // ⚠️ 这里要的是"指向**下一个对象**的指针" ⇒ 元素类型必须用
     //   `toIrObjType`（对象类型），不能用 `toIrType` —— 后者对数组会再包一层
     //   指针，于是 `int[2][1][3]` 的 `c[i]` 变成 `ptr[ptr[...]]`、元素类型

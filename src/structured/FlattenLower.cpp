@@ -315,18 +315,47 @@ Action FlatBuilder::lower(Op* op) {
       //      为什么限定"标量"：基址指向 `[3 x i32]` 这类**聚合**时，
       //      `<ty>` 是"取一次下标之后的指针"（`&loc` ⇒ `ptr[[3 x i32]]`），
       //      那是正确的语义，不能动。
+      // ★★ 判据（平面语义下的唯一一条）：`gep <ty> %base, %i` 要求
+      //     `typeof(base) == ptr[ty]`。不相等时这次"索引"**不可能**在 base
+      //     上做，必须是"先把槽里的那根指针 load 出来、再索引它"。★★
+      //   为什么不能只看元素类型是不是指针（第一版的判据）：数组形参
+      //   `int a[]` 的槽是 `alloca ptr[i32]`、结构化 GEP 的 `<ty>` 是 `i32`
+      //   （它只把最内层当元素），两者都**不是**指针 ⇒ 第一版判不出来，
+      //   于是直接在槽的地址上按 i32 索引 —— 读到的是**指针本身**而不是
+      //   它指向的数组。实测（完整最小程序）：
+      //       int g[3]={7,8,9}; int first(int a[]){return a[0]*100+a[1]*10+a[2];}
+      //       int main(){int b[3]={1,2,3}; return first(g)+first(b);}
+      //     gcc 是 **144**（789+123=912），改前**结构化与平面都是 0** ——
+      //     又是一处"两条赛道一致地错"（行为等价对它无感）。
       const Type* elemTy = toFlatType(op->typeAttr(0));
       Value* base = op->numOperands() > 0 ? map(op->operand(0)) : nullptr;
       Value* idx = op->numOperands() > 1 ? map(op->operand(1)) : nullptr;
-      if (elemTy != nullptr && base != nullptr && elemTy->isPtr() && elemTy->elem != nullptr) {
-        const Type* bt = base->type();
-        if (bt != nullptr && bt->isPtr() && bt->elem != nullptr && bt->elem->isScalar()) {
-          elemTy = bt->elem;
-        }
-      }
       if (elemTy == nullptr || base == nullptr || idx == nullptr) {
         giveUp("GetElementPtr 的操作数/类型缺失", op->loc);
         return Action::kOk;
+      }
+      const Type* bt = base->type();
+      if (bt != nullptr && bt->isPtr() && bt->elem != nullptr) {
+        if (elemTy->isPtr() && elemTy->elem != nullptr && bt->elem->isScalar()) {
+          // ① 往返污染的 `<ty>`：基址指向**标量**、`<ty>` 却是个指针
+          //    ⇒ 那次"指针"不是元素类型，取基址的元素类型。
+          elemTy = bt->elem;
+        } else if (bt->elem->isPtr() && amLocalSlot(base)) {
+          // ② "假指针 GEP"（**只对真正的槽**）：槽里装着一根指针（数组形参）
+          //    ⇒ 先 load 出来再在它上面索引。
+          //    判据三条合起来：基址的元素是**指针**、且基址是**本地槽**。
+          //    ⚠️ 少了 `amLocalSlot` 这一条会误伤全局数组：`int t[3][4]` 的
+          //       `t[2]` 基址是 `GlobalAddr`（`ptr[[3 x [4 x i32]]]`、
+          //       元素是 `[4 x i32]`… 而多层全局的元素可能正是 `ptr[…]`）
+          //       ⇒ 对全局地址发 load 就是"load of unset pointer slot"
+          //       （实测 28 个文件）。
+          //    ⚠️ 也不能放宽成 `bt->elem != elemTy`：那会把数组形参的
+          //       **多维**下标（`int a[][5]` 的 `a[i]`，本来就该是**地址**）
+          //       也吞进来，结果类型错成 `ptr[i32]` 并报 V6。
+          Instruction* ld = createLoad(bt->elem, base, op->loc);
+          emit(ld);
+          base = ld;
+        }
       }
       Instruction* i = createGEP(elemTy, base, idx, op->loc);
       emit(i);

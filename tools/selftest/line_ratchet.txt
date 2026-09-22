@@ -15,11 +15,12 @@
 357  compiler/tools/selftest/check_parser.py
 707  compiler/tools/selftest/check_sema.py
 224  compiler/tools/selftest/check_sema_probe.py
-795  compiler/tools/selftest/check_structured.py
+805  compiler/tools/selftest/check_structured.py
 177  compiler/tools/selftest/check_tokens_meta.py
 171  compiler/tools/selftest/gen_manifest.py
 200  compiler/tools/selftest/iic_front.py
 144  compiler/tools/selftest/iic_sexp.py
+796  compiler/tools/selftest/independent_flatten_check.py
 709  compiler/tools/selftest/independent_irgen_check.py
 194  compiler/tools/selftest/independent_loopnorm_check.py
 976  compiler/tools/selftest/independent_parser_check.py
@@ -32,6 +33,7 @@
 16  compiler/tools/selftest/probe.c
 78  compiler/tools/selftest/proto_kindseq.py
 132  compiler/tools/selftest/run.sh
+233  compiler/tools/selftest/run_flat_cases.py
 335  compiler/tools/selftest/run_init_cases.py
 238  compiler/tools/selftest/run_loopnorm_cases.py
 207  compiler/tools/selftest/run_sema_cases.py
@@ -40,6 +42,7 @@
 82  compiler/tools/selftest/unit/bench_lexer.cpp
 99  compiler/tools/selftest/unit/run.sh
 215  compiler/tools/selftest/unit/test_diagnostic.cpp
+584  compiler/tools/selftest/unit/test_flat.cpp
 385  compiler/tools/selftest/unit/test_initlowering.cpp
 496  compiler/tools/selftest/unit/test_lexer.cpp
 484  compiler/tools/selftest/unit/test_loopnorm.cpp

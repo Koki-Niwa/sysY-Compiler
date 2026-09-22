@@ -50,6 +50,16 @@ ROOT = os.path.abspath(os.path.join(HERE, '..', '..', '..'))
 OPKINDS = {
     'Module', 'GlobalVar', 'Func', 'GetArg', 'Return', 'Call',
     'For', 'While', 'If', 'Goto', 'Yield', 'Break',
+    # ★ 有意加入（**结构化层内部**的 Op，不是后端契约）：`Continue` 与 `Break` 必须分开。
+    #   此前 IRGen 把 `continue` 与 `break` **都**降级成 `Break`，于是
+    #   `while{...break;}` 与 `while{...continue;}` 产出**逐字节相同**的结构化 IR——
+    #   事后按形状区分在信息论上不可能，而 LoopNormalize 只能按形状猜，把 `break`
+    #   当成了 `continue`（实测：正确答案 5，产出 8）。
+    #   ⇒ 这不是"多一个 Op"，是补上 IRGen 的一处**信息丢失**；设计文档 §1.2 本来就写了
+    #     "YieldOp（继续）· BreakOp（跳出）"两个，是 S05 实现合并了它们。
+    #   ⚠️ `docs/handoff/iset.txt` **不用改**：那是 LLVM IR 子集的清单，后端只看平面层，
+    #     而 `Continue` 在展平前就被消解掉了，后端见不到它。
+    'Continue',
     'Alloca', 'Load', 'Store', 'GetElementPtr', 'GetGlobal', 'Bitcast',
     'AddI', 'SubI', 'MulI', 'DivI', 'ModI', 'MinusI',
     'AddF', 'SubF', 'MulF', 'DivF', 'MinusF',

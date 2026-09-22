@@ -2,6 +2,8 @@
 //   …（原有 2 行说明）
 // ============================================================================
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <unordered_map>
@@ -61,12 +63,9 @@ class Reader {
     //   一条 fixup 匹配上**别的函数**里编号相同的指令，把它的操作数改错
     //   （实测：`%12 = icmp eq i32 %11, %10` 变成 `%11, %11`）。
     // 现在 `values_` 才是完整的 ⇒ 判定那些**真正**未定义的引用。
-    for (const DeferredRef& d : deferred_) {
-      if (values_.count(mapId(d.id)) == 0) {
-        err(d.lineNo, std::string("引用了未定义的值 %") + std::to_string(d.id) + "（" +
-                          d.what + "）");
-      }
-    }
+    // ⚠️ **未定义引用的判定已经按函数做完了**（见 `parseFunction` 的收尾）——
+    //   拖到这里做是错的：`values_` 按函数清空，跑到这里只剩**最后一个函数**
+    //   的值，前面函数的 φ/`ret` 全被误报"未定义"（实测 130 个文件）。
     if (bad_) { delete m; return nullptr; }
     m->rebuildCFG();
     m->rebuildUseDef();
@@ -149,9 +148,9 @@ class Reader {
 #include "ir/FlatReaderFunc.inc"
   Function* f = m.createFunction(tok[2].substr(1), retTy);
     f->setLoc(SourceLoc());
-    // ⚠️ **不要**在这里预先建入口块：`L0:` 标签会通过 `createBlock` 建它。
-    //   预建 + 标签再建会让同一个函数里出现**两个块**（一个空入口 + 一个真块），
-    //   而 `dump` 只印标了号的那个 ⇒ 往返不一致。
+    // ★ 块**一次建齐**（按标签顺序 ⇒ 索引 == 标签号）：前向引用会抢先建块，
+    //   否则索引与 `L<n>` 错位（见 `prescanBlocks` 的说明）。
+    prescanBlocks(m, f, start, endOfBody);
     //   块表为空时 `entry` 由 `f->entry()`（= 第 0 块）承担 —— 见下面的 `entry()`。
     auto entryOf = [&]() -> BasicBlock* { return f->entry(); };
 
@@ -285,6 +284,7 @@ class Reader {
   void resolveForwardRefs() {
     for (const OperandFixup& fx : fixups_) {
       if (fx.phiIdx >= 0 || fx.inst == nullptr) continue;   // φ 有自己的通道
+      if (fx.id == OperandFixup::kNoValueFixup) continue;   // 只填块，没有值
       const auto it = values_.find(mapId(fx.id));
       if (it == values_.end()) continue;
       if (fx.operandIdx != static_cast<size_t>(-1)) {
@@ -500,7 +500,14 @@ class Reader {
     //   保守改写成"自己"⇒ 与真实前驱集合不符（实测 V3 报
     //   "φ 的前驱 {L12 L10} vs 块前驱 {L18 L10}"）。
     long blockId = -1;
-    uint32_t id = 0;    // **文本号**（判定时再 `mapId`，见 `deferred_` 的说明）
+    // **文本号**（判定时再 `mapId`，见 `deferred_` 的说明）。
+    //   ⚠️ 它同时兼任"有没有值要回填"的哨兵 ⇒ 必须用 `kNoValueFixup` 而不是 0：
+    //   `%0` 是合法的值名，用 0 当哨兵会让"只填块前向引用"的那条顺手把
+    //   `values_[mapId(0)]`（**某条 φ 自己**）回填到那个位置。
+    //   实测：`%0 = phi [(%3 L0), (%10 L6)]` 读回来变成 `[(%3 L0), (%0 L6)]`
+    //   ——149 个文件"往返不同"、198 个"引用了未定义的值"。
+    static constexpr uint32_t kNoValueFixup = 0xFFFFFFFFu;
+    uint32_t id = kNoValueFixup;
     size_t lineNo = 0;
     std::string what;
     // 回填的操作数下标（`size_t` 越界值 = "第一条缺操作数的指令"那个旧语义）。

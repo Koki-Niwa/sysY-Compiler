@@ -35,12 +35,10 @@ void Reader::parseInstLine(Module& m, Function& f, BasicBlock* bb, const std::st
   ++k;
   const SourceLoc loc = detail::lineFromTokens(tok, k);
 
-  auto val = [&](size_t idx) -> Value* {
-    if (idx >= tok.size()) return nullptr;
-    uint32_t id = 0;
-    if (!detail::parseValueRef(tok[idx], id)) return nullptr;
-    return ref(id, lineNo, opName.c_str());
-  };
+  // ⚠️ 已经没有 `val(idx)` 这种"按下标取操作数"的用法了 —— 打印器在**每个
+  //   操作数前**都打一个类型，所以"第几个记号"随 opcode 变化，一律用
+  //   `nthVal(from, n)`（"从 from 起的第 n 个 `%N`"）。留着未使用的 lambda
+  //   会被 `-Werror=unused-but-set-variable` 拦下（实测）。
   auto typed = [&](size_t idx, const Type** ty) -> Value* {
     if (idx >= tok.size()) return nullptr;
     size_t p = 0;
@@ -326,29 +324,28 @@ void Reader::parseInstLine(Module& m, Function& f, BasicBlock* bb, const std::st
         //   `%2` 被整条丢掉 ⇒ `ret %2` 报未定义）。
         //   ⚠️ 回填的位置必须记**下标**：φ 的入值与前驱块一一对应，
         //      "补到第一个空位"会把两条入值搞反。
-        if (v == nullptr) {
+        const auto bit = blocks_.find(bid);
+        const bool blkMissing = (bit == blocks_.end() || bit->second == nullptr);
+        // ★★ 值与块**必须用同一条 fixup** ★★
+        //   第一版把它们拆成两条：值那条（`fx.id = vid`）的 `blockId` 留成 -1，
+        //   于是 `finishFunction` 回填**值**时只 `setOperand(idx, …)`、
+        //   **不填块** ⇒ 那个入值的前驱块仍是 `nullptr`（随后被
+        //   "保守指向自己"改写成 φ 自己的块）。表现：φ 的入值引用**文本更靠后
+        //   的那条 φ**（`%0 = phi [(%1 L6), …]`，而 `%1` 在 L6 里）时报
+        //   "引用了未定义的值 %1"，且即使值能解析、块号也是错的。
+        //   实测 130 个文件（`22_if_test3.sy` 起）。
+        if (v == nullptr || blkMissing) {
           OperandFixup fx;
-          fx.id = vid;
+          fx.id = (v == nullptr) ? vid : OperandFixup::kNoValueFixup;
           fx.lineNo = lineNo;
           fx.what = "phi";
           fx.operandIdx = slot;
+          fx.blockId = blkMissing ? static_cast<long>(bid) : -1;
           fx.phiIdx = static_cast<long>(pendingPhis_.size());   // 本条 φ 即将 push 的下标
           fixups_.push_back(fx);
         }
-        const auto bit = blocks_.find(bid);
-        const bool blkMissing = (bit == blocks_.end() || bit->second == nullptr);
         preds.push_back(blkMissing ? nullptr : bit->second);
         vals.push_back(v);
-        if (blkMissing) {
-          OperandFixup bfx;
-          bfx.id = 0;                 // 该位置没有值要回填
-          bfx.lineNo = lineNo;
-          bfx.what = "phi-block";
-          bfx.operandIdx = slot;
-          bfx.blockId = static_cast<long>(bid);
-          bfx.phiIdx = static_cast<long>(pendingPhis_.size());
-          fixups_.push_back(bfx);
-        }
         k += 4;
       }
       // ★★ 指令**当场**建好并登记结果名 ★★
@@ -371,9 +368,14 @@ void Reader::parseInstLine(Module& m, Function& f, BasicBlock* bb, const std::st
       return;
     }
     case Opcode::Select: {
-      Value* c = val(k);
-      // `select i1 %c, <ty> %a, <ty> %b` ⇒ `%a` 是第一个值之后的**下一个** `%N`
-      Value* a = nthVal(k, 2);      // 第 1 个是条件 `%c`
+      // `select i1 %c, <ty> %a, <ty> %b`（打印器：`select i1 ` + 名字 +
+      //   `, ` + 两个 `printTypedValue`）。
+      //   ★ 三个操作数**都按"第 n 个 `%N`"取**：`k` 指向的是**类型** `i1`
+      //   （`++k` 之后 `tok[k]` 才是第一个记号），所以 `val(k)` 恒为 nullptr。
+      //   第一版写的就是 `val(k)` —— 于是**每一条 `select` 都读不回来**
+      //   （实测 22 个文件报"select 的操作数无法解析"，全是带浮点/矩阵的）。
+      Value* c = nthVal(k, 1);
+      Value* a = nthVal(k, 2);
       Value* b = nthVal(k, 3);
       if (c == nullptr || a == nullptr || b == nullptr) {
         err(lineNo, "select 的操作数无法解析");

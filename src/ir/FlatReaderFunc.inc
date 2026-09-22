@@ -27,6 +27,12 @@
   //   的 `%1` 顶掉后，`ifElseIf` 里的 `ret %2` 与另外两条 φ 全部报未定义）。
   //   ⇒ 预扫**全模块**、计数器只增不减，`mapId` 就是单射。
   void prescanIds(size_t start, size_t end) {
+    // ★★ `idMap_` 必须**按函数**清空 ★★
+    //   `%N` 是**每函数**的命名空间（`FlatDump::numberFunction` 每个函数从 0
+    //   重新发号），内部号却要全模块唯一。第一版让 `idMap_` 跨函数累积 ⇒
+    //   后一个函数里的 `%12` 被当成前一个函数那个 `%12` 的**同一个值**
+    //   ⇒ 回填时把另一条指令塞进 φ 的入值（实测 `52_scope.sy`）。
+    idMap_.clear();
     uint32_t next = nextReadId_;
     for (size_t i = start; i < end && i < lines_.size(); ++i) {
       const std::string ln = trim(lines_[i]);
@@ -58,6 +64,35 @@
   uint32_t mapId(uint32_t textId) const {
     const auto it = idMap_.find(textId);
     return it == idMap_.end() ? textId : it->second;
+  }
+
+  // 【后置】按**标签顺序**把本函数的块一次建好。
+  //   【为什么】`Module::createBlock` 按创建顺序追加、`reindexBlocks` 按追加
+  //   顺序发号 ⇒ **先建哪个，哪个就是 L0/L1/…**。而"读到 `L<n>:` 才建"会被
+  //   **前向引用**抢先（`br i1 %c, label L5, label L6` 先把 L5/L6 建出来）
+  //   ⇒ 随后真正的 `L3:` 只能拿到更靠后的索引 ⇒ **索引与文本标签错位**。
+  //   症状极难归因：往返能成功、只有号不同（189 个文件）—— 因为打印时按
+  //   索引发块号，而索引已经不是标签。
+  //   ⇒ 判据：块的索引**必须**等于它的文本标签号（`L<n>` 的 `n`）。
+  size_t endOfBody = 0;   // 本函数正文的终点行（`prescanBlocks` 的入参）
+
+  void prescanBlocks(Module& m, Function* f, size_t start, size_t end) {
+    for (size_t q = start + 1; q < end && q < lines_.size(); ++q) {
+      const std::string t = trim(lines_[q]);
+      if (t.size() < 3 || t[0] != 'L' || t.back() != ':') continue;
+      uint32_t bi = 0;
+      if (!detail::parseBlockRef(t.substr(0, t.size() - 1), bi)) continue;
+      if (blocks_.count(bi) != 0) continue;
+      // ⚠️ 不能写 `(bi == 0 && f->blockCount() == 0) ? f->entry() : …`：
+      //   `Function::entry()` 在**还没有块**时返回 `nullptr`（它不是"创建"），
+      //   随后 `nb->setIndex()` 直接段错误（实测：`--from-flat` 一跑就 core）。
+      //   `createBlock` 会按创建顺序追加 ⇒ 第一个建的就是 `blocks()[0]`
+      //   （= `entry()`），所以这里一律用它，按标签顺序建就自然对齐。
+      BasicBlock* nb = m.createBlock(f);
+      nb->setIndex(bi);
+      blocks_[bi] = nb;
+      if (bi >= nextBlockIdx_) nextBlockIdx_ = bi + 1;
+    }
   }
 
   size_t parseFunction(Module& m, size_t start) {
@@ -100,6 +135,7 @@
         if (trim(lines_[q]).compare(0, 7, "define ") == 0) { end = q; break; }
       }
       prescanIds(start, end);
+      endOfBody = end;   // 供 `prescanBlocks` 用（见 `parseFunction` 的调用点）
       // ★★ `values_` 按函数**整体清空**，再让下面的解析重新填 ★★
       //   为什么清是对的：`%N` 的文本号在每个函数里各自从 0 开始，而内部号
       //   （`idMap_`）是**全模块唯一**的 —— 于是每个函数都会**重新定义**

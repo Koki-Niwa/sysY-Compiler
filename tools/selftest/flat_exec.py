@@ -93,6 +93,13 @@ class FlatMod(object):
         self._parse(text)
         self.preds = {}          # (函数名, 块号) → 前驱块号集合
         self.loop_bodies = {}    # 函数名 → {头块号: 属于该循环的块集合}
+        # ★ 每个块里的 φ 结果编号（跳转时按它记快照，见 `step` 的 φ 分支）
+        self.phi_ids = {}
+        for fn, (blocks, _p, _c) in self.funcs.items():
+            self.phi_ids[fn] = {
+                b: [it.res for it in insts if it.kind == 'phi']
+                for b, insts in blocks.items()}
+            self.phi_ids[fn] = {b: ids for b, ids in self.phi_ids[fn].items() if ids}
         for fn, (blocks, _p, _c) in self.funcs.items():
             pr = {}
             for b, insts in blocks.items():
@@ -293,6 +300,9 @@ class FlatExec(C.Machine):
     """平面 IR 的执行器：**只负责"下一条指令怎么取"**（基本块 + 终结符）。"""
 
     def __init__(self, mod, seed=12345):
+        # φ 的"入值来源快照"（见 `step` 的 φ 分支）：值编号 → 跳转那刻的环境
+        self._phi_env = {}
+        self._phi_pred = {}
         C.Machine.__init__(self, seed)
         self.mod = mod
         self.env = {}
@@ -346,6 +356,8 @@ class FlatExec(C.Machine):
             env[idx] = args[idx] if idx < len(args) else 0
         saved = self.env
         self.env = env
+        self._phi_env = {}
+        self._phi_pred = {}
         heads = set(self.mod.loops.get(name, []))
         stack = []            # [(头块号, 已计迭代数)]
         try:
@@ -381,6 +393,11 @@ class FlatExec(C.Machine):
                         break
                 if nxt is None:
                     break
+                # ★ 跳转前把"前驱块 + 这一刻的值快照"记给下一条 φ 用
+                #   （见 φ 处理里的说明）。就地复制：`env` 会被后续指令改写。
+                for pid in self.mod.phi_ids.get(name, {}).get(nxt, ()):
+                    self._phi_env[pid] = dict(env)
+                    self._phi_pred[pid] = cur
                 cur = nxt
             # 函数正常结束（没有 ret）
             while stack:
@@ -479,17 +496,41 @@ class FlatExec(C.Machine):
             #   判据：φ 的入值块必须是 `cur` 的**真实前驱**；若有多条同时命中
             #   （既在前驱集合里、又在上一次执行的块上），优先**回边来源**
             #   （即块号 ≥ 当前块的那个），它与"这次是从哪条边来的"一致。
-            cur = self._cur_block
+            # ★★ 用"**实际跳转那一刻的环境快照**"选入值 ★★
+            #   【为什么不能用别的】第一版按"块号 ≥ 当前块 ⇒ 一定是回边"来挑
+            #   （`25_while_if` 那次修的），那只是**启发式**：循环头有两个前驱
+            #   （进入边 L0 / 回边 L7），而 `env` 是**跨迭代复用**的字典 ——
+            #   上一轮回边留下的绑定仍在里面 ⇒ 从**进入边**首次进头时，
+            #   `(值 L7)` 那个候选**恰好也在 env 里**，启发式就把回边的值选走了。
+            #   实测（`28_while_test3.sy` 的 `EightWhile`）：`%1 = phi [(%17 L0),
+            #   (%5 L7)]` 首次进头选成了 `%5` —— 一个**指向全局的指针**
+            #   ⇒ 循环条件 `a < 20` 变成"指针 < 20" ⇒ 执行器类型错。
+            #   【正确判据】φ 的入值来自**我们真正走过的那条边**：跳转时把
+            #   `prev` 块与那一刻的 `env` 快照一起记下，φ 只认
+            #   `blocks[k] == prev` 且值在该快照里的那一条（不可能有歧义：
+            #   同一个前驱只对应一条边；临界边已由展平器拆开）。
+            pv = self._phi_env.get(inst.res)
+            pb = self._phi_pred.get(inst.res)
+            if pv is not None:
+                if pb in inst.blocks:
+                    idx = inst.blocks.index(pb)
+                    if inst.operands[idx] in pv:
+                        env[inst.res] = pv[inst.operands[idx]]
+                        return None
+                # 快照里没有 ⇒ 退回"值在不在当前 env 里"（保守，不崩）
+                for v2, b2 in zip(inst.operands, inst.blocks):
+                    if b2 == pb and v2 in env:
+                        env[inst.res] = env[v2]
+                        return None
             fname = self._cur_func
+            cur = self._cur_block
             real = self.mod.preds.get(fname, {}).get(cur, set())
             cands = [(v, b) for v, b in zip(inst.operands, inst.blocks)
                      if b in real and v in env]
             if not cands:
-                cands = [(v, b) for v, b in zip(inst.operands, inst.blocks) if v in env]
-            if not cands:
-                raise C.Unsupported('phi with no available incoming value')
-            back = [c for c in cands if c[1] >= cur]
-            v, _b = (back[0] if back else cands[0])
+                raise C.Unsupported('phi in L%d has no available incoming value '
+                                    '(pred=%s)' % (cur, self._prev_block))
+            v, _b = cands[0]
             env[inst.res] = env[v]
             return None
         # 内存与算术：与结构化侧**同一份语义**
@@ -548,6 +589,11 @@ class FlatExec(C.Machine):
                 'oge': 'Ge'}
         if k == 'icmp':
             pred = inst.pred
+            if not isinstance(a, (int,)) or (isinstance(a, C.Ptr) or isinstance(b, C.Ptr)):
+                raise C.Unsupported(
+                    'chk: icmp %s line %s: a=%r(%s) b=%r(%s) inst=%r'
+                    % (pred, getattr(inst, 'line', '?'), a, type(a).__name__, b,
+                       type(b).__name__, inst))
             return (1 if self._cmp(icmp[pred], a, b) else 0)
         if k == 'fcmp':
             pred = inst.pred

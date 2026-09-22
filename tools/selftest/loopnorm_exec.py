@@ -80,6 +80,7 @@ class Exec(C.Machine):
         self.mod = mod
         self.names = names
         self.funcs = {}            # 函数名 → Op
+        self.globalRefNames = {}   # `GetGlobal` 结果名 → 全局名
 
     def run(self, entry='main'):
         mod_region = L.module_region(self.mod)
@@ -104,23 +105,24 @@ class Exec(C.Machine):
                             except ValueError:
                                 pass
             p = Ptr(mem, 0)
-            # GetGlobal 的结果名 → 同一个指针
+            # ★ 摘要用的键是**全局的声明名**（`g`/`a`…），**不是** `GetGlobal`
+            #   的结果名（`%.0`）。两条赛道必须用同一套键，否则"同一份内存"在
+            #   摘要里算出两个不同的值（实测：`28_while_test3.sy` 的 mem 摘要
+            #   一个是 `b8839853…`、一个是 `cd6f4c09…`，而内存其实逐字节相同）。
+            #   查找仍然按名字走（`GetGlobal` 的 `op.name` 就是全局名）。
+            self.globals[op.name] = p
             for g in mod_region:
                 if g.kind == 'GetGlobal' and g.name == op.name and g.results:
-                    self.globals[g.results[0]] = p
-            self.globals[op.name] = p
+                    self.globalRefNames[g.results[0]] = op.name
         if entry not in self.funcs:
             raise Unsupported('no entry function `%s`' % entry)
         ret = self.call(entry, [])
-        # 汇总全局摘要（只含被写过的字 ⇒ 稀疏也稳定）
-        import hashlib
-        h = hashlib.sha256()
-        for name in sorted(self.globals):
-            g = self.globals[name]
-            h.update(name.encode())
-            h.update(g.mem.digest().encode())
-        return {'loops': list(self.loop_trace), 'out': list(self.out),
-                'mem': h.hexdigest()[:16], 'ret': ret}
+        # ★ 摘要走**共用核**那一份（`C.Machine::finish_trace`）。
+        #   ⚠️ 第一版在这里又写了一遍摘要，而且把同一个全局登记了**两次**
+        #   （`%.N` 与名字各一份）⇒ 同一个内存被哈希两遍、键还随 GetGlobal 的
+        #   编号漂移 —— "判据依赖了与该局部无关的额外状态"，正是要消灭的
+        #   那一类（不变量 ㉑）。这里把那份删掉，改成调用共用实现。
+        return self.finish_trace(ret)
 
     def _global_type(self, op):
         for i, t in enumerate(op.attrs):
@@ -152,7 +154,14 @@ class Exec(C.Machine):
         # ★ 帧里**预置全局引用**：全局名（`%.N`）可以在任何函数体里当操作数用，
         #   而它们不属于任何函数的局部环境（第一版只查局部 env ⇒ 一遇到
         #   `Load %.1` 就 KeyError）。
+        # ★ 帧里的全局引用要**两种键都有**：函数体里的操作数写的是
+        #   `GetGlobal` 的**结果名**（`%.0`），而摘要用的是全局的**声明名**
+        #   （`g`）。前者随编号漂移、不适合当跨赛道稳定的键；后者稳定。
+        #   ⇒ `self.globals` 只按名字记（摘要口径），这里额外把结果名也铺进帧。
         env = dict(self.globals)
+        for ref, gname in self.globalRefNames.items():
+            if gname in self.globals:
+                env[ref] = self.globals[gname]
         body = fn.regions[0]
         try:
             self.exec_region(body, env, args)

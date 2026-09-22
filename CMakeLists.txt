@@ -39,6 +39,7 @@ add_compile_options(-Werror)
 
 add_executable(compiler
   src/main/main.cpp
+  src/main/EmitText.cpp
   src/support/Diagnostic.cpp
   src/support/SourceFile.cpp
   src/frontend/Lexer.cpp
@@ -55,6 +56,13 @@ add_executable(compiler
   src/frontend/SemaDump.cpp
   src/frontend/InitLowering.cpp
   src/frontend/InitLoweringDump.cpp
+  # ── S06：平面 IR 的容器（类型 / 值 / 指令 / 块 / 函数 / 模块 + dump + 读回）
+  src/ir/Type.cpp
+  src/ir/Instruction.cpp
+  src/ir/IR.cpp
+  src/ir/FlatDump.cpp
+  src/ir/FlatReader.cpp
+  src/ir/FlatVerifier.cpp
   # ── S05：两层 IR 的第一层（结构化 IR）────────────────────────────────────
   src/structured/StructuredIR.cpp
   src/structured/StructuredDump.cpp
@@ -68,6 +76,10 @@ add_executable(compiler
   src/structured/LoopRewrite.cpp
   src/structured/AllocaHoist.cpp
   src/structured/IRGenStmt.cpp
+  # ── S06：层边界（结构化 → 平面）──────────────────────────────────────────
+  src/structured/FlattenCFG.cpp
+  src/structured/FlattenLower.cpp
+  src/structured/FlattenLoops.cpp
 )
 
 target_include_directories(compiler PRIVATE src)

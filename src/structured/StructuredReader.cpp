@@ -72,7 +72,8 @@ struct Arity {
 Arity arityOf(OpKind k) {
   switch (k) {
     case OpKind::Store: case OpKind::Return: case OpKind::Goto:
-    case OpKind::Yield: case OpKind::Break: case OpKind::Unreachable:
+    case OpKind::Yield: case OpKind::Break: case OpKind::Continue:
+    case OpKind::Unreachable:
     case OpKind::Func: case OpKind::Module:
     case OpKind::GlobalVar:   // 模块级命名实体（由 GetGlobalOp 引用）⇒ 无结果
     case OpKind::If:          // 纯语句：条件在操作数里、两个 Region 是分支

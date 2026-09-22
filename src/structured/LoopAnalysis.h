@@ -20,11 +20,21 @@
 //           （`if (C) { i=i+1; continue; } …; break;`）⇒ **保留 WhileOp**；
 //         - 否则它可能是"尾部 continue"（`i=i+1; continue;`），由步进判定区分
 //           （体内每条路径恰好 +1 ⇒ 合法）。
-//     * `BreakOp` 是**体里某个 `IfOp` 分支的终结符**：`if` 之后**还有可达语句**
-//       ⇒ 它是 `continue`（`break` 会让后面的语句不可达，IRGen 的 `terminates()`
-//       不会生成它们）。若 `if` 之后**没有**可达语句 ⇒ 它可能是真 `break`
-//       （`while (c) { if (x) break; }`：IRGen 不会给 then 补 `Yield`，因为
-//       `IfStmt` 的 else 也存在）⇒ 保守判为 `break`。
+//     * `BreakOp` 是**体里某个 `IfOp` 分支的终结符**：判据是**"这个 `If` 是不是
+//       它所在 Region 的最后一条语句"**（★★ S06 修正 ★★）。
+//         - **不是**最后一条 ⇒ 它之后还有可达语句被这条 `Break` 跳过 ⇒ 它是
+//           `continue`（`if (A[i][k]==1) { i=i+1; continue; } j=0; …`）；
+//         - **是**最后一条 ⇒ 它是**真 `break`** ⇒ **保留 WhileOp**。
+//       ⚠️ 原判据写的是"分支末尾的 `Break` ⇒ 一定是 `continue`"，理由是
+//       "`break` 会让 `if` 之后的语句不可达，所以 `if` 之后若还有语句，它们
+//       只可能属于另一条路径"。**这个论证是错的**：真 `break` 之后的那些语句
+//       IRGen 的 `terminates()` **根本不生成** ⇒ "`if` 之后没有语句"恰恰是
+//       真 `break` 的形状。旧判据把
+//         `while (i<8) { if (i==4) { i=i+1; break; } s=s+i; i=i+1; }`
+//       静默升成了 `ForOp`（语义从 `break` 变成 `continue` —— 编译产物与源码
+//       语义不符）。S06 修掉了它，最小对照在 `compiler/tests/flat/min/`
+//       （见 S06 报告 §坑）。**保守方向不变**：判成真 `break` 只是拒绝规范化，
+//       语义永远正确；判错成 `continue` 才会改语义。
 //   ⇒ 判据落在**"体的直接路径"**上：
 //       体 Region 里**除 `IfOp` 之外**的顶层语句 + 每个 `IfOp` 的**回边分支**
 //       = "正常走完一轮"的路径；它必须**恰好一个** IV 自增；

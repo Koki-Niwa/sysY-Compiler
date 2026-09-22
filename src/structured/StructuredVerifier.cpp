@@ -171,6 +171,7 @@ class Checker {
     switch (op->kind) {
       case OpKind::Module: case OpKind::Store: case OpKind::Return:
       case OpKind::Goto: case OpKind::Yield: case OpKind::Break:
+      case OpKind::Continue:
       case OpKind::Unreachable: case OpKind::GlobalVar:
         // GlobalVar 是"模块级命名实体"（由 GetGlobalOp 按名字引用）⇒ **无结果**
         want0(opKindName(op->kind));
@@ -335,10 +336,15 @@ class Checker {
         add("I1", x->loc, "ForOp 的 IV `" + iv + "` 在循环体内被赋值");
       }
     }
-    // ── I3：体内没有 `BreakOp`（SCoP 条件；LoopNormalize 的成功条件之一）──
+    // ── I3：体内没有 `BreakOp` / `ContinueOp`（SCoP 条件；LoopNormalize 的
+    //   成功条件之一）。`Continue` 由规范化**消解**掉（包成 `if (!c) { B }`），
+    //   所以升成 `ForOp` 之后体内不该再有它。──
     for (const Op* x : all) {
       if (x->kind == OpKind::Break) {
         add("I3", x->loc, "ForOp 体内出现 BreakOp（SCoP 条件要求体内无 break）");
+      }
+      if (x->kind == OpKind::Continue) {
+        add("I3", x->loc, "ForOp 体内出现 ContinueOp（规范化应当已消解）");
       }
     }
     // ── I2：lower/upper/step 在体内**不被修改** ──────────────────────────

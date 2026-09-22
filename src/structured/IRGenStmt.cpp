@@ -135,10 +135,16 @@ void Gen::genStmt(const Node* n, int depth) {
     return;
   }
   if (k == "ContinueStmt") {
-    // ★ prompt §四.1：S05 里 `BreakOp` **也承担 `continue`** —— 结构化层还没有
-    //   循环体的归一化（S05b 做"continue 消解"）。`BreakOp` 的语义是"当前循环体
-    //   Region 到此为止"，具体是 continue 还是 break 由 S05b 按形状判定。
-    terminator(OpKind::Break, {}, n->loc);
+    // ★ S06 修正：`continue` 有自己的终结 Op（`ContinueOp`），**不再与 `break`
+    //   共用 `BreakOp`**。
+    //   为什么必须分开（实测）：共用时下面的两个程序产出的结构化 IR
+    //   **逐字节相同**，而它们语义不同
+    //     while (i<8) { if (i==4) { i=i+1; break; }    i=i+1; }   → i == 5
+    //     while (i<8) { if (i==4) { i=i+1; continue; } i=i+1; }   → i == 8
+    //   事后按形状猜在信息论上不可能（结构化层**没有支配/可达信息**），
+    //   所以 S05b 的启发式在真 `break` 上给出了 `continue` 的答案 ——
+    //   `return i` 从 5 变成 8。修法是在**降级点**保留信息。
+    terminator(OpKind::Continue, {}, n->loc);
     return;
   }
   if (k == "ReturnStmt") {
@@ -246,13 +252,13 @@ void Gen::genVarDef(const VarDef& v) {
     //     （`InitPlan::locals` 的 `type` 是它给那个对象算出来的完整类型）。
     //     同名遮蔽时"第 k 条同名记录"与"第 k 次同名声明"必然同型；
     //     一旦错配（例如数组被当成标量），两者的大小几乎必然不同。
-    const int64_t wantBytes = typeByteSize(toIrType(v.semType));
-    const int64_t gotBytes = typeByteSize(toIrType(&li.type));
+    const int64_t wantBytes = flat::typeByteSize(toIrType(v.semType));
+    const int64_t gotBytes = flat::typeByteSize(toIrType(&li.type));
     if (wantBytes > 0 && gotBytes > 0 && wantBytes != gotBytes) {
       diag_.report(DiagLevel::Error, v.loc, kIrDiag,
-                   "初始化计划与声明错配：`" + v.name + "` 声明为 " + typeText(toIrType(v.semType)) +
+                   "初始化计划与声明错配：`" + v.name + "` 声明为 " + flat::typeText(toIrType(v.semType)) +
                        "（" + std::to_string(wantBytes) + " 字节），但计划记录为 " +
-                       typeText(toIrType(&li.type)) + "（" + std::to_string(gotBytes) +
+                       flat::typeText(toIrType(&li.type)) + "（" + std::to_string(gotBytes) +
                        " 字节）");
     }
     for (const InitAction& a : li.actions) genAction(a, slot, elemTy, v.loc);
@@ -269,7 +275,7 @@ void Gen::genAction(const InitAction& a, Value slot, const Type* elemTy, SourceL
       return;
     case InitActionKind::StoreConst: {
       // offset 是**字节偏移**（InitPlan 的契约）；GEP 的步长是元素 ⇒ 除以宽度
-      const int64_t esz = typeByteSize(elemTy);
+      const int64_t esz = flat::typeByteSize(elemTy);
       const int64_t idx = esz > 0 ? static_cast<int64_t>(a.offset) / esz : 0;
       Value p = gep(elemTy, slot, sextI64(cInt(static_cast<int32_t>(idx), loc), loc), loc);
       Value v = a.value.isFloat ? cFlt(a.value.bits(), loc) : cInt(a.value.i, loc);
@@ -277,7 +283,7 @@ void Gen::genAction(const InitAction& a, Value slot, const Type* elemTy, SourceL
       return;
     }
     case InitActionKind::StoreExpr: {
-      const int64_t esz = typeByteSize(elemTy);
+      const int64_t esz = flat::typeByteSize(elemTy);
       const int64_t idx = esz > 0 ? static_cast<int64_t>(a.offset) / esz : 0;
       Value p = gep(elemTy, slot, sextI64(cInt(static_cast<int32_t>(idx), loc), loc), loc);
       // ⚠️ StoreExpr 的表达式**只在局部**出现（全局必须是常量表达式），
@@ -357,7 +363,7 @@ void Gen::emitMemcpyConst(Value dst, const std::vector<ConstValue>& vals, Source
   globalOps_.push_back(getPool);   // 与它的 GlobalVar 相邻（顺序：声明后紧跟引用）
   Value src = bitcast(ptrTo(i32()), getPool->addResult(ptrTo(poolTy)), loc);
   Value dst32 = bitcast(ptrTo(i32()), dst, loc);
-  const int64_t bytes = typeByteSize(poolTy);
+  const int64_t bytes = flat::typeByteSize(poolTy);
   Value n64 = sextI64(cInt(static_cast<int32_t>(bytes), loc), loc);
   std::vector<Value> args{dst32, src, n64, cInt(1, loc)};
   (void)callTo("llvm.memcpy", args, voidTy(), loc);

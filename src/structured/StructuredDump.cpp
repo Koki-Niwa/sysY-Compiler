@@ -224,23 +224,23 @@ std::string dumpModule(const Op* module) {
       out += ' ';
       appendQuoted(out, op->strAttr(0));
       out += " :ret ";
-      appendTypeText(out, op->typeAttr(1));
+      flat::appendTypeText(out, op->typeAttr(1));
       out += " :param [";
       for (size_t i = 2; i < op->attrs().size(); ++i) {
         if (i > 2) out += ", ";
-        appendTypeText(out, op->attrs()[i].ty);
+        flat::appendTypeText(out, op->attrs()[i].ty);
       }
       out += ']';
       skip = op->attrs().size();
     } else if (op->kind == OpKind::GetGlobal) {
       out += " :type ";
-      appendTypeText(out, op->typeAttr(1));
+      flat::appendTypeText(out, op->typeAttr(1));
       skip = 2;
     } else if (op->kind == OpKind::GlobalVar) {
       out += ' ';
       appendQuoted(out, op->strAttr(0));
       out += " :type ";
-      appendTypeText(out, op->typeAttr(1));
+      flat::appendTypeText(out, op->typeAttr(1));
       out += " :init ";
       appendQuoted(out, op->strAttr(2));
       skip = 3;
@@ -251,7 +251,7 @@ std::string dumpModule(const Op* module) {
       const Attr& a = op->attrs()[i];
       switch (a.kind) {
         case Attr::Kind::Str:   out += ' '; appendQuoted(out, a.s); break;
-        case Attr::Kind::Type:  out += ' '; appendTypeText(out, a.ty); break;
+        case Attr::Kind::Type:  out += ' '; flat::appendTypeText(out, a.ty); break;
         case Attr::Kind::Int:   out += ' '; out += std::to_string(a.i); break;
         case Attr::Kind::Float: out += ' '; appendHexFloat(out, a.fbits); break;
         case Attr::Kind::Data: {

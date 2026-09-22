@@ -49,10 +49,30 @@
 #include <utility>
 #include <vector>
 
+#include "ir/Type.h"          // ★ S06：类型下沉到 ir/（见下面的兼容别名）
 #include "support/SourceLoc.h"
 
 namespace sysy {
 namespace sir {
+
+// ============================================================================
+// ★ S06 的类型搬迁：`sir::Type` 等名字**一个都没变**，只是定义搬到了
+//   `ir/Type.h`（平面层与结构化层共用同一套类型记号；两份会静默漂移）。
+//   下面这组 `using` 就是"接口冻结、实现搬家"的全部代价。
+//   ⚠️ 类型别名是**真的别名**（`sir::Type` 与 `flat::Type` 是同一个类型），
+//      所以 `typeText(t)` 这类调用会因为 **ADL**（实参类型在 `sysy::flat` 里）
+//      同时找到 `flat::typeText` —— 若这里再定义 `sir::typeText` 转发函数，
+//      两个候选**完全等价** ⇒ 调用点报"ambiguous"（实测）。
+//   ⇒ 本层**不再**提供函数转发，调用点写 `flat::typeText(...)`
+//      （只影响 `structured/` 内部的十来处，且改完全是显式的）。
+//      `sir::typePool()` 这个**类名**别名仍然保留：`sir::TypePool` 是类型名，
+//      不参与 ADL 重载。
+// ============================================================================
+using TypeKind = flat::TypeKind;
+using Type = flat::Type;
+using TypePool = flat::TypePool;
+// 【后置】返回进程唯一的类型池（与 `flat::typePool()` 是同一个）。
+inline TypePool& typePool() { return flat::typePool(); }
 
 class Op;
 class Region;
@@ -79,7 +99,18 @@ enum class OpKind : uint8_t {
   If,           // 操作数 = [cond]，regions = [then] 或 [then, else]
   Goto,         // 无条件转移（结构化层未用；平面化的预留形态）
   Yield,        // Region 终结：继续（while 条件 / 循环体 / then / else 都用它）
-  Break,        // Region 终结：跳出循环（S05 里也承担 `continue`，S05b 消解）
+  Break,        // Region 终结：**跳出循环**（真 `break`）
+  // ★ S06 修正：`continue` 必须有自己的 opcode。
+  //   原来 `break` 与 `continue` **都**降级成 `BreakOp`，靠 S05b 事后按形状
+  //   猜 —— 而这两个程序
+  //       while (i<8) { if (i==4) { i=i+1; break; }    i=i+1; }
+  //       while (i<8) { if (i==4) { i=i+1; continue; } i=i+1; }
+  //   的**结构化 IR 逐字节相同**（我实测过），事后猜**在信息论上不可能**：
+  //   规范化器只能靠启发式，而启发式在这两个程序上给出同一个答案。
+  //   症状：真 `break` 的那个被升成 `ForOp`，`return i` 从 5 变成 8。
+  //   ⇒ 让 IRGen 把 `continue` 降级成 `Continue`，与 `Break` 分开。
+  //     这是 S05 冻结约定允许的**新增** Op（"只增 Op"）。
+  Continue,     // Region 终结：跳到循环的下一次迭代（S05b 消解）
 
   // ── 内存 ────────────────────────────────────────────────────────────
   Alloca,       // attrs = [type(被分配对象)]，1 个结果 ptr[type]
@@ -128,52 +159,13 @@ bool isControlFlowContainer(OpKind k);
 
 // ============================================================================
 // 1. 类型（结构化 IR 自己的类型）
+//
+//   ★ S06 起：类型定义**搬到了 `ir/Type.h`**（两层共用一套记号），
+//     本节只保留文件头的说明性索引。原来这里定义的 `TypeKind` / `Type` /
+//     `TypePool` / `typePool()` / `appendTypeText` / `typeText` /
+//     `parseTypeText` / `typeByteSize` / `typeElem` 全部改由上面的
+//     `using` 与 inline 转发提供 —— **S05 的调用点一个字都不用改**。
 // ============================================================================
-enum class TypeKind : uint8_t { Void, I32, I64, F32, Ptr, Array };
-
-struct Type {
-  TypeKind kind = TypeKind::I32;
-  const Type* elem = nullptr;   // Ptr 的元素类型 / Array 的元素类型
-  int64_t len = 0;              // 仅 Array：元素个数（>= 0）
-
-  bool isPtr() const { return kind == TypeKind::Ptr; }
-  bool isArray() const { return kind == TypeKind::Array; }
-};
-
-// 进程内唯一的类型池（interned：同构类型只有一个实例 ⇒ 指针相等 ⇔ 结构相等）。
-// 生命期 = 进程（比任何 Module 长）。理由与 `sysy::typeContext()` 相同。
-class TypePool {
- public:
-  const Type* voidTy();
-  const Type* i32();
-  const Type* i64();
-  const Type* f32();
-  // 【前置】elem != nullptr。len >= 0。
-  const Type* ptrTo(const Type* elem);
-  const Type* arrayOf(const Type* elem, int64_t len);
-
- private:
-  std::vector<Type*> pool_;
-};
-
-// 【后置】返回进程唯一的类型池。
-TypePool& typePool();
-
-// 【后置】把类型写成文本（`i32` / `ptr[i32]` / `[3 x [2 x i32]]`）。
-void appendTypeText(std::string& out, const Type* t);
-std::string typeText(const Type* t);
-
-// 【前置】s 从 pos 起应当是一段类型文本（dump 里打印出来的那种）。
-// 【后置】成功 → 返回类型并把 pos 推到类型末尾之后；失败 → 返回 nullptr，
-//         pos 不动。**不抛异常**（读回畸形输入要能报错而不是崩，C5）。
-const Type* parseTypeText(const std::string& s, size_t& pos);
-
-// 【后置】该类型的**字节大小**（i32/f32 = 4；数组 = len × elem；void/未知 = 0）。
-//         结构化层不做布局计算，只用于"同一性/零长度"的判定。
-int64_t typeByteSize(const Type* t);
-
-// 【后置】该类型的元素类型（数组 → 元素；非数组 → 自身）。
-const Type* typeElem(const Type* t);
 
 // ============================================================================
 // 2. 值 / 结果 / 属性

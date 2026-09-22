@@ -1,6 +1,7 @@
 // ============================================================================
 // LoopRewrite.cpp —— 判定与改写的实现（规格见 LoopRewrite.h）
 // ============================================================================
+
 #include "structured/LoopRewrite.h"
 
 #include <cstddef>
@@ -27,69 +28,54 @@ class Analyzer {
 
   // ── ① `continue` 消解 ───────────────────────────────────────────────────
   //   ★ 规范形式（prompt §3.2 的字面）：`continue` 归一化为 `if (!cond) { B }`
-  //     的**嵌套**（B = continue 之后要跳过的一切）。
-  //
-  //   为什么必须"把 B 包起来"而不是"把分支末尾的 `BreakOp` 换成 `(Yield)`"：
-  //   `YieldOp` 在**分支**里的语义是"本分支结束 ⇒ 回到拥有者的下一条语句"，
-  //   不是"跳到循环头"（否则 IRGen 给普通 `if (c) { A }` 追加的 `(Yield)`
-  //   会变成"跳过 `if` 之后的语句"，那是错的）。
-  //   ⇒ 要表达"跳过 B"，B 必须**被搬进一个受 `!cond` 保护的分支里**。
-  //   ★ 这是一个**语义 bug**：第一版只把分支末尾的 `BreakOp` 换成 `(Yield)`，
-  //     于是 `if (i < j) { j = j + 1; continue; } swap...` 会**照样执行 swap**
-  //     （`transpose0.sy` 的变体 2）。轨 D 抓不到它（两份实现都按同一个误解写的），
-  //     只有**轨 E 的执行器**能抓（见报告 §5 坑 2）。
-  //
-  //   形状（全部来自 IRGen 的降级）：
-  //     body = [ P1…, (If C) { A…, (Break) } { (Yield) }, REST… ]
-  //   语义：C 为真 ⇒ 执行 A 然后**跳过 REST**（回到循环头）。
-  //   规范形式：
-  //     body = [ P1…, (If C) { A…, (Yield) } { (Yield) },
-  //              (If (Eq C 0)) { (Yield) } { REST… } ]
-  //   ⇒ C 为真时先走第一个 `If`（`Yield` 结束该分支），随后第二个 `If` 的条件
-  //     为假 ⇒ 跳过 `REST` ⇒ 回到循环头 ✓
-  //   ⇒ C 为假时第一个 `If` 走 else（空），第二个 `If` 走 else ⇒ 执行 REST ✓
-  //
-  //   允许的形状（**保守**，其余一律 `HasBreak` 安全降级）：
-  //     (A) 分支末尾的 `Break`，且该 `If` 是**体的顶层语句**、体里它之后还有语句
-  //         ⇒ 需要包装（上面那个规范形式）；
-  //     (B) 分支末尾的 `Break`，且该 `If` 是**它所在 Region 的最后一条语句**，
-  //         并且从它往上一路到体都满足"是所在 Region 的最后一条语句"
-  //         ⇒ 没有 REST 可跳过，只需 `Break` → `(Yield)`；
-  //     (C) 体的**最后一个**语句是 `Break` ⇒ 尾部 continue（`i=i+1; continue;`），
-  //         由步进判定把关后换成 `(Yield)`。
-  //   ⚠️ 嵌套更深且"上面还有语句"的情形本 pass **不做**（保守降级）。
-  //
-  // 【后置】只读：不合法（不可消解）→ false。
+//   …（原有 39 行说明，已并入 S06 报告）
+  //   （`Break` → `Yield`）⇒ `return i` 从 5 变成 8。实测就是这个。
+  static bool hasRealStmtAfter(const Region* r, size_t i) {
+    if (r == nullptr) return false;
+    for (size_t k = i + 1; k < r->size(); ++k) {
+      const Op* op = r->at(k);
+      if (op == nullptr) continue;
+      if (op->kind == OpKind::Yield || op->kind == OpKind::Break) continue;
+      return true;
+    }
+    return false;
+  }
+
   bool checkContinues(const Region* body) const {
     if (body == nullptr) return true;
     for (size_t i = 0; i < body->size(); ++i) {
       const Op* op = body->at(i);
       if (op == nullptr) continue;
-      // ★ **体顶层的 `BreakOp` 一律拒绝**（无论它是不是最后一行）。
-      //   为什么：`break` 与"尾部 `continue`"在 IRGen 里**都是** `BreakOp`
-      //   （`while (i<n) { …; i=i+1; continue; }` 与 `while (i<n) { …; break; }`
-      //   的 dump 形状完全一样）⇒ **不可判定** ⇒ 按 prompt §3.3 的口径
-      //   "含 break 的 while 一律不规范化"保守处理。
-      //   （只有**分支末尾**的 `BreakOp` 才是可判定的 `continue`：真 `break`
-      //    会让 `if` 之后的语句不可达，而 IRGen 的 `terminates()` 不会生成
-      //    那些语句 —— 且那一路径必须恰好有一个 IV 自增，见 `analyzeStep`。）
+      // ★★ S06 修正之后，`continue` 与 `break` 是**两个不同的 Op**
+      //   （`ContinueOp` / `BreakOp`，见 StructuredIR.h 的说明）⇒ 这里不再需要
+//   …（原有 6 行说明，已并入 S06 报告）
+      //   ⚠️ 旧实现在这里猜，而两个程序的结构化 IR **逐字节相同** ⇒ 猜不出来。
       if (op->kind == OpKind::Break) return false;
-      if (op->kind == OpKind::While || op->kind == OpKind::For) continue;  // 内层循环自己管
+      if (op->kind == OpKind::Continue) continue;   // 尾部 continue：允许
+      if (op->kind == OpKind::While || op->kind == OpKind::For) {
+        // 内层循环自己管；但内层若还留着 Break/Continue（= 它没能规范化），
+        //   本层也一律不规范化（否则 `ForOp` 体内会有 Break/Continue，违反 I3）。
+        if (regionHasBreak(op->region(1)) || regionHasContinue(op->region(1))) return false;
+        continue;
+      }
       if (op->kind != OpKind::If) continue;
-      const bool last = (i + 1 == body->size());
       const Region* a = op->region(0);
       const Region* b = op->region(1);
-      const bool ab = a != nullptr && !a->empty() && a->back() != nullptr &&
-                      a->back()->kind == OpKind::Break;
-      const bool bb = b != nullptr && !b->empty() && b->back() != nullptr &&
-                      b->back()->kind == OpKind::Break;
-      if (ab && bb) return false;                 // 两条路径都 continue：不处理
-      if (ab || bb) {
-        if (last) continue;                       // (B)：没有 REST
-        continue;                                 // (A)：包装（在 apply 里做）
-      }
-      // 分支里没有"末尾 Break" ⇒ 若有别的 Break（非末尾）⇒ 保守拒绝
+      const bool ac = a != nullptr && !a->empty() && a->back() != nullptr &&
+                      a->back()->kind == OpKind::Continue;
+      const bool bc = b != nullptr && !b->empty() && b->back() != nullptr &&
+                      b->back()->kind == OpKind::Continue;
+      const bool abrk = a != nullptr && !a->empty() && a->back() != nullptr &&
+                        a->back()->kind == OpKind::Break;
+      const bool bbrk = b != nullptr && !b->empty() && b->back() != nullptr &&
+                        b->back()->kind == OpKind::Break;
+      // 分支末尾的**真 `break`** ⇒ 拒绝（两条路径都会跳出循环之外）
+      if (abrk || bbrk) return false;
+      if (ac && bc) return false;               // 两条路径都 continue：不处理（无收益）
+      if (ac || bc) continue;                   // 形态 A/B：允许，改写时包装
+      // 分支里没有"末尾 continue" ⇒ 若有别的 Break/Continue（非末尾）⇒ 保守拒绝
       if (regionHasBreak(a) || regionHasBreak(b)) return false;
+      if (regionHasContinue(a) || regionHasContinue(b)) return false;
     }
     return true;
   }
@@ -98,7 +84,7 @@ class Analyzer {
   void resolveContinues() {
     // 先处理"体尾的尾部 continue"：换成 `(Yield)`
     std::vector<Op*> v = body_->ops();
-    if (!v.empty() && v.back() != nullptr && v.back()->kind == OpKind::Break) {
+    if (!v.empty() && v.back() != nullptr && v.back()->kind == OpKind::Continue) {
       Op* y = mk(OpKind::Yield, v.back()->loc);
       v.back() = y;
       body_->replaceAll(v);
@@ -116,9 +102,9 @@ class Analyzer {
         Region* r0 = op->region(0);
         Region* r1 = op->region(1);
         const bool ab = r0 != nullptr && !r0->empty() && r0->back() != nullptr &&
-                        r0->back()->kind == OpKind::Break;
+                        r0->back()->kind == OpKind::Continue;
         const bool bb = r1 != nullptr && !r1->empty() && r1->back() != nullptr &&
-                        r1->back()->kind == OpKind::Break;
+                        r1->back()->kind == OpKind::Continue;
         if (!ab && !bb) continue;
         target = op;
         k = i;
@@ -138,10 +124,7 @@ class Analyzer {
       if (rest.empty()) break;                     // 后面没有语句：无需包装
       // ★ **规范形式 = `if (!C) { REST }`** ⇒ `REST` 进 **then**、`else` 只留 `(Yield)`。
       //   ⚠️ 这里踩过一个**只有轨 E 抓得到**的坑：先把 `REST` 放进 `else`、`then` 留
-      //      `(Yield)`，但条件用的是 `Eq C 0`（= `!C`）—— 那等价于
-      //      `if (C) {REST} else {}`，**语义正好反了**
-      //      （`30_continue.sy`：变换前 51 轮 / `sum=1225`，变换后 100 轮 / `sum=50`）。
-      //   两种写法都对，但**条件与分支必须配套**：`if (!C) {REST}` ⇔
+//   …（原有 4 行说明，已并入 S06 报告）
       //   `If(Eq C 0) { REST } { (Yield) }`。
       Region* thenR = mkRegion();
       for (Op* o : rest) thenR->push(o);
@@ -188,7 +171,7 @@ class Analyzer {
       for (size_t k = 0; k < op->numRegions(); ++k) {
         Region* sub = op->region(k);
         if (sub == nullptr || sub->empty()) continue;
-        if (sub->back() != nullptr && sub->back()->kind == OpKind::Break) {
+        if (sub->back() != nullptr && sub->back()->kind == OpKind::Continue) {
           std::vector<Op*> w = sub->ops();
           w.back() = mk(OpKind::Yield, w.back()->loc);
           sub->replaceAll(w);
@@ -196,7 +179,10 @@ class Analyzer {
         }
       }
     }
-    if (!v.empty() && v.back() != nullptr && v.back()->kind == OpKind::Break) {
+    // 尾部 `continue`（`ContinueOp` 在 Region 末尾）⇒ 换成 `(Yield)`。
+    //   ⚠️ 这里**只认 `ContinueOp`**：真 `break` 是 `BreakOp`，`checkContinues`
+    //      已经把含它的循环整条拒绝了，走到这里的不可能是 break。
+    if (!v.empty() && v.back() != nullptr && v.back()->kind == OpKind::Continue) {
       v.back() = mk(OpKind::Yield, v.back()->loc);
       r->replaceAll(v);
       ++tailContinues_;
@@ -281,9 +267,8 @@ class Analyzer {
 
   // 真 `break` 的判定（详见 LoopAnalysis.h 的"双重身份"）：
   //   * 顶层 `BreakOp` 后面还有语句 ⇒ 真 `break`（`break` 会让它们不可达）；
-  //   * `IfOp`（**不是**体的最后一个语句）的分支末尾有 `BreakOp` ⇒ `if` 之后
-  //     还有可达语句 ⇒ 真 `break`；
-  //   * 其余情形（体尾 / 体最后一个 `IfOp` 的分支末尾）由步进判定区分。
+//   …（原有 23 行说明，已并入 S06 报告）
+  //      `Break`），语义永远正确；判错成 continue 才会改语义。
   bool hasRealBreak(const Region* r) const {
     if (r == nullptr) return false;
     for (size_t i = 0; i < r->size(); ++i) {
@@ -298,31 +283,47 @@ class Analyzer {
       }
       // ★ **内层循环**（`While`/`For`）里的 `BreakOp` 是**内层**的 `break` 或
       //   `continue` ⇒ 本层循环一律不规范化。
-      //   理由：内层若规范化成功，它的 `Break` 已经被换成 `(Yield)`；还剩
-      //   `Break` 就说明内层规范化**失败**（真 `break`）⇒ 那它升不成 `ForOp`，
-      //   于是**本层**的 `ForOp` 体内也会留着这个 `BreakOp` ⇒ 违反 I3。
-      //   （实测：`04_break_continue.sy` 的 `while(1) { while(1) break; break; }`
-      //    就是这么把外层循环也污染成"体内含 break"的 —— 被 `--normalize`
-      //    的全量扫描抓出来。）
+//   …（原有 6 行说明，已并入 S06 报告）
       //   ⚠️ 本分支必须**先于** `if (op->kind != OpKind::If) continue;`。
       if (op->kind == OpKind::While || op->kind == OpKind::For) {
         if (regionHasBreak(op->region(1))) return true;
         continue;
       }
       if (op->kind != OpKind::If) continue;
+      // ★ **这个 `If` 之后还有实质语句吗？**（与 `checkContinues` **同一判据**，
+      //   必须一致：两处若不一致，一个放行、一个拦下，行为就取决于调用顺序了）
+      //   没有 ⇒ 分支末尾的 `Break` 是真 `break`（见上面的长注释）。
+      const bool hasAfter = hasRealStmtAfter(r, i);
       for (size_t k = 0; k < op->numRegions(); ++k) {
         const Region* sub = op->region(k);
         if (sub == nullptr || sub->empty()) continue;
         const bool brk = sub->back() != nullptr && sub->back()->kind == OpKind::Break;
-        // ★ 分支末尾的 `BreakOp` ⇒ **一定是 `continue`**（论证见 LoopAnalysis.h：
-        //   IRGen 的 `terminates()` 不会生成"`break` 之后"的可达语句，所以
-        //   `if` 之后若还有语句，它们只可能属于**另一个分支**的路径 ⇒ 这条
-        //   `Break` 的作用是"跳过 `if` 之后的部分"= `continue`）。
-        if (brk) continue;
+        if (brk && hasAfter) continue;      // 跳过了 after 语句 ⇒ `continue`
+        if (brk && !hasAfter) {
+          if (getenv("LN_DBG2")) {
+            fprintf(stderr, "[LN2] realBreak If@%u (no after stmt)\n",
+                    (unsigned)op->loc.line);
+          }
+          return true;
+        }
         if (hasRealBreak(sub)) {
           if (getenv("LN_DBG2")) fprintf(stderr, "[LN2] realBreak in If@%u sub\n", (unsigned)op->loc.line);
           return true;
         }
+      }
+    }
+    return false;
+  }
+
+  // 【后置】子树里有没有 `ContinueOp`（**任意深度**）。与 `regionHasBreak` 同形。
+  static bool regionHasContinue(const Region* r) {
+    if (r == nullptr) return false;
+    for (size_t i = 0; i < r->size(); ++i) {
+      const Op* op = r->at(i);
+      if (op == nullptr) continue;
+      if (op->kind == OpKind::Continue) return true;
+      for (size_t k = 0; k < op->numRegions(); ++k) {
+        if (regionHasContinue(op->region(k))) return true;
       }
     }
     return false;
@@ -350,7 +351,8 @@ class Analyzer {
   static bool endsWithNestedLoop(const Region* r) {
     if (r == nullptr || r->empty()) return false;
     const Op* last = r->back();
-    if (last == nullptr || last->kind == OpKind::Yield || last->kind == OpKind::Break) {
+    if (last == nullptr || last->kind == OpKind::Yield || last->kind == OpKind::Break ||
+        last->kind == OpKind::Continue) {
       // 终结符在最后 ⇒ 看倒数第二个（IRGen 的形状）
       if (r->size() < 2) return false;
       last = r->at(r->size() - 2);
@@ -367,14 +369,14 @@ class Analyzer {
     int n = 0;
     for (size_t i = 0; i < r->size(); ++i) {
       const Op* op = r->at(i);
-      if (op == nullptr || op->kind == OpKind::Break) continue;
+      if (op == nullptr || op->kind == OpKind::Break || op->kind == OpKind::Continue) continue;
       if (isIvIncrement(op, ivSlot_, nullptr)) { ++n; continue; }
       if (op->kind != OpKind::If) continue;
       const Region* a = op->region(0);
       const Region* b = op->region(1);
       if (a == nullptr || b == nullptr || a->empty() || b->empty()) return -1;
-      const bool ab = a->back() != nullptr && a->back()->kind == OpKind::Break;
-      const bool bb = b->back() != nullptr && b->back()->kind == OpKind::Break;
+      const bool ab = a->back() != nullptr && a->back()->kind == OpKind::Continue;
+      const bool bb = b->back() != nullptr && b->back()->kind == OpKind::Continue;
       if (ab && bb) return -1;
       if (ab || bb) continue;
       // ⚠️ 分支整体是一个**内层循环**（`While`/`For`）⇒ 不递归：那个循环体的
@@ -399,7 +401,7 @@ class Analyzer {
       for (size_t k = 0; k < op->numRegions(); ++k) {
         const Region* sub = op->region(k);
         if (sub == nullptr || sub->empty()) continue;
-        if (sub->back() != nullptr && sub->back()->kind == OpKind::Break) {
+        if (sub->back() != nullptr && sub->back()->kind == OpKind::Continue) {
           int c = 0;
           for (size_t q = 0; q < sub->size(); ++q) {
             if (isIvIncrement(sub->at(q), ivSlot_, nullptr)) ++c;

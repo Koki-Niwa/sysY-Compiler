@@ -424,7 +424,13 @@ if [ -d "$TOOLS/selftest" ]; then
   #    （且已被 gitignore 覆盖），它不影响可复现性。真正的信号是
   #    "工具目录下躺着一个源码之外的 .pyc，且代码用 marshal 去读它"。
   PYC=$(find "$TOOLS/selftest" -name '*.pyc' -not -path '*/__pycache__/*' 2>/dev/null | head -5)
-  MARSHAL=$(grep -ln 'marshal' "$TOOLS"/selftest/*.py 2>/dev/null | head -3)
+  #  ⚠️ 判据必须查**真实用法**，不能查词：有脚本在**文档字符串**里写着"不生成
+  #     .pyc/marshal"（那是声明，不是使用）。这已是同一类误报的第三次
+  #     （前两次：`.ll` 注释里的 target-features、源码注释里的 tests/ 路径）。
+  #     危险用法只有两种：`import marshal` 与 `marshal.load/loads(...)`。
+  #     **判据假红会把矛头指向正确的代码**（TESTING-GUIDE §11.5）。
+  MARSHAL=$(grep -lE '^[[:space:]]*import[[:space:]]+marshal|marshal[[:space:]]*\.[[:space:]]*(loads|load)[[:space:]]*\(' \
+              "$TOOLS"/selftest/*.py 2>/dev/null | head -3)
   if [ -z "$PYC" ] && [ -z "$MARSHAL" ]; then
     c_ok "验证工具可从源码运行（无 .pyc、无 marshal 补代码）"
   else
@@ -600,6 +606,75 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
+hdr "C8. 平面 IR 自校验（若 --emit=flat-ir 已实现 —— S06 起）"
+# ─────────────────────────────────────────────────────────────────────────────
+# 这一关的判据有一条特殊之处：**两条赛道可能共享同一个误解**（S06 实证：五处真 bug
+# 全部穿过独立实现与行为等价，只有外部锚 gcc 抓得住）。所以关卡除了跑那两条轨，
+# 还要求"锚点用例"里 gcc 的期望值写在 README 里、判据是"等于 gcc"而不是"两边相等"。
+CAN_FLAT=0
+if [ -x "$COMPILER" ] && [ -f "$TOOLS/selftest/check_flat.py" ]; then
+  if "$COMPILER" --emit=flat-ir "$TESTS/final_arm/functional/00_main.sy" \
+        -o "$WORK/flat_probe.txt" >/dev/null 2>&1 && grep -qE '^\s*(define|@|%)' "$WORK/flat_probe.txt" 2>/dev/null; then
+    CAN_FLAT=1
+  fi
+fi
+if [ "$CAN_FLAT" = "0" ]; then
+  c_skip "平面 IR 跳过：--emit=flat-ir 尚未实现（S06 的交付物）"
+else
+  # 轨 A/B/C：往返 + 不变式 + 覆盖性（含 8 份坏 IR 反证）
+  FLOG="$WORK/flat.log"
+  if python3 "$TOOLS/selftest/check_flat.py" --compiler "$COMPILER" \
+        --root "$ROOT" --jobs "$(nproc)" --bad >"$FLOG" 2>&1; then
+    c_ok "平面 IR：往返 + 不变式 + 覆盖性 + 坏 IR 反证"
+    grep -E 'ok |往返|基本块|指令数|φ 数|反证' "$FLOG" | head -5 | sed 's/^/      /'
+  else
+    c_bad "平面 IR 检查失败（往返 / 不变式 / 覆盖性）"
+    grep -E '✘|mismatch|invariant|失败' "$FLOG" | head -8 | sed 's/^/      /'
+  fi
+  if [ "$QUICK" = 1 ]; then
+    c_skip "轨 D（独立展平器）--quick 档跳过 —— **交付前请跑全量**"
+  elif [ -f "$TOOLS/selftest/independent_flatten_check.py" ]; then
+    ILOG="$WORK/iflat.log"
+    if python3 "$TOOLS/selftest/independent_flatten_check.py" --compiler "$COMPILER" \
+          --dir "$ROOT/tests" --jobs "$(nproc)" >"$ILOG" 2>&1; then
+      c_ok "独立展平器：与 C++ 输出逐字节一致"
+    else
+      c_bad "独立展平器不一致（C++ 侧或独立侧有真 bug）"
+      grep -E '有差异|不一致|✘' "$ILOG" | head -8 | sed 's/^/      /'
+    fi
+  else
+    c_skip "independent_flatten_check.py 未实现（S06 的交付物）"
+  fi
+  if [ "$QUICK" = 1 ]; then
+    c_skip "轨 E（两种形状行为等价）--quick 档跳过 —— **交付前请跑全量**"
+  elif [ -f "$TOOLS/selftest/flat_exec.py" ]; then
+    ELOG="$WORK/flat_exec.log"
+    if python3 "$TOOLS/selftest/flat_exec.py" --compiler "$COMPILER" \
+          --dir "$ROOT/tests" --jobs "$(nproc)" --min-files 400 >"$ELOG" 2>&1; then
+      c_ok "行为等价：结构化与平面两种形状轨迹相同"
+      grep -E '轨迹相同|轨迹不同|跳过' "$ELOG" | tail -3 | sed 's/^/      /'
+    else
+      c_bad "行为等价检查失败（变换改了行为——先证明判据自己对，再查产品）"
+      grep -E '不同|差异|✘' "$ELOG" | head -8 | sed 's/^/      /'
+    fi
+  else
+    c_skip "flat_exec.py 未实现（S06 的交付物）"
+  fi
+  if [ -f "$TOOLS/selftest/run_flat_cases.py" ]; then
+    LLOG="$WORK/flatcases.log"
+    if python3 "$TOOLS/selftest/run_flat_cases.py" --compiler "$COMPILER" >"$LLOG" 2>&1; then
+      SUM=$(grep -E '通过|总计' "$LLOG" | tail -1)
+      c_ok "平面 IR 用例集：${SUM:-全过}"
+    else
+      c_bad "平面 IR 用例集有失败"
+      grep -E '✘|失败|FAIL' "$LLOG" | head -8 | sed 's/^/      /'
+    fi
+  else
+    c_skip "run_flat_cases.py 未实现（S06 的交付物）"
+  fi
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
 hdr "D. 全量回归（若 run_tests.sh 已实现）"
 # ─────────────────────────────────────────────────────────────────────────────
 CAN_E2E="$CAN_IR"
@@ -656,13 +731,15 @@ case "$STAGE" in
   S03) NEED="sema" ;;
   S04) NEED="sema initplan" ;;
   S05) NEED="sema initplan structured-ir" ;;
-  S05b|S0[6-9]|S1[0-9]|S2[0-8]) NEED="sema initplan structured-ir normalize" ;;
+  S05b) NEED="sema initplan structured-ir normalize" ;;
+  S0[6-9]|S1[0-9]|S2[0-8]) NEED="sema initplan structured-ir normalize flat-ir" ;;
 esac
 if [ -n "$NEED" ]; then
   case "$NEED" in *sema*)     [ "$CAN_SEMA" = "1" ]     || c_bad "本阶段要求 --emit=sema，但它没实现/没通过";; esac
   case "$NEED" in *initplan*) [ "$CAN_INITPLAN" = "1" ] || c_bad "本阶段要求 --emit=initplan，但它没实现/没通过";; esac
   case "$NEED" in *structured-ir*) [ "$CAN_SIR" = "1" ] || c_bad "本阶段要求 --emit=structured-ir，但它没实现/没通过";; esac
   case "$NEED" in *normalize*) [ "$CAN_NORM" = "1" ] || c_bad "本阶段要求 --normalize，但它没实现/没通过";; esac
+  case "$NEED" in *flat-ir*) [ "$CAN_FLAT" = "1" ] || c_bad "本阶段要求 --emit=flat-ir，但它没实现/没通过";; esac
 fi
 
 case "$STAGE" in

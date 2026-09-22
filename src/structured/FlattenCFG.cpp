@@ -35,6 +35,21 @@ const Type* toFlatType(const sir::Type* t) {
   return nullptr;
 }
 
+// 【后置】把数组**元素里多余的指针层**逐层剥掉：`[6 x ptr[[50 x i32]]]`
+//   → `[6 x [50 x i32]]`。递归是必须的（结构化层对每一维数组都包了指针）。
+static const Type* stripPtrElem(const Type* t) {
+  if (t == nullptr) return nullptr;
+  if (t->isArray()) {
+    const Type* e = stripPtrElem(t->elem);
+    // 元素是"指向数组的指针" ⇒ 那个指针是包装，不是元素本身
+    while (e != nullptr && e->isPtr() && e->elem != nullptr && e->elem->isArray()) {
+      e = e->elem;
+    }
+    return e == nullptr ? t : typePool().arrayOf(e, t->len);
+  }
+  return t;
+}
+
 // ============================================================================
 // 入口：遍历 ModuleOp
 // ============================================================================
@@ -53,14 +68,12 @@ Module* flattenModule(const sir::Op* smod, Module& out, DiagnosticEngine& diags)
   out.setSourceName(smod->strAttr(0));
 
   // ★★ 全局的"对象类型"从哪来 ★★
-  //   结构化层的 `GlobalVar :type` 与 `GetGlobal :type` **写的是同一个东西**
-  //   （`IRGenStmt::genGlobals` 对两者都塞 `toIrType(&g.type)`），而
-  //   `toIrType` 对**数组**已经把"对象"包成了"指向对象的指针"
-  //   （`int[5]` → `ptr[[5 x i32]]`）。直接把它当对象类型用，就会得到
-  //   "指向数组的指针的指针"：实测 `const int a[5]; return a[4];` 的
-  //   `a[i]` 基址错一层 ⇒ GEP 元素类型落到 `ptr[i32]` ⇒ `load` 出
-  //   `ptr[[5 x i32]]` ⇒ `ret` 类型与签名不符（34 个文件）。
-  //   ⇒ 判据：**全局的"对象类型" = `GetGlobal :type`（地址类型）的元素类型**。
+  //   `GlobalVar :type` 与 `GetGlobal :type` 写的是同一个东西
+  //   （`IRGenStmt::genGlobals` 都塞 `toIrType(&g.type)`），而 `toIrType` 对
+  //   **数组**已经把对象包成了"指向对象的指针"（`int[5]` → `ptr[[5 x i32]]`）。
+  //   直接当对象类型用会得到"指向数组的指针的指针"：实测 `const int a[5];
+  //   return a[4];` 的基址错一层 ⇒ `load` 出整个数组 ⇒ `ret` 与签名不符
+  //   （34 个文件）。⇒ 判据：对象类型 = `GetGlobal :type` 的元素类型。
   std::unordered_map<std::string, const Type*> globalAddrTy;
   for (const Op* op : modRegion->ops()) {
     if (op == nullptr || op->kind != sir::OpKind::GetGlobal) continue;
@@ -70,6 +83,12 @@ Module* flattenModule(const sir::Op* smod, Module& out, DiagnosticEngine& diags)
   // ① 全局变量（顺序 = 结构化层的声明顺序）
   for (const Op* op : modRegion->ops()) {
     if (op == nullptr || op->kind != sir::OpKind::GlobalVar) continue;
+    // ★★ 对象类型要从地址类型里逐层剥出"数组对象"，不能只剥一层 ★★
+    //   结构化层给全局的 `:type` 是 `toIrType(&g.type)`，它对**每一维**数组
+    //   都包了指针（`int[6][50]` → `ptr[[6 x ptr[[50 x i32]]]]`）。只剥一层
+    //   会得到 `[6 x ptr[[50 x i32]]]`（**指针的数组**）—— 跑得动，但内存
+    //   布局错（每元素 8 字节而非 4）。实测 `80_chaos_token.sy`：返回/输出
+    //   相同、只有全局内存摘要不同 ⇒ 只有对照内存才看得见。
     const Type* objTy = nullptr;
     const auto atIt = globalAddrTy.find(op->strAttr(0));
     if (atIt != globalAddrTy.end()) {
@@ -77,6 +96,12 @@ Module* flattenModule(const sir::Op* smod, Module& out, DiagnosticEngine& diags)
     } else {
       objTy = toFlatType(op->typeAttr(1));    // 退路：直接用 `:type`
     }
+    // ① 先剥掉外层多余的指针层；② 再把数组元素里的指针层递归还原。
+    while (objTy != nullptr && objTy->isPtr() && objTy->elem != nullptr &&
+           objTy->elem->isPtr()) {
+      objTy = objTy->elem;
+    }
+    objTy = stripPtrElem(objTy);
     if (objTy == nullptr) {
       diags.report(DiagLevel::Error, op->loc, "E-FLATGEN",
                    "全局对象 `" + op->strAttr(0) + "` 的类型无法映射");

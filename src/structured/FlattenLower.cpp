@@ -104,7 +104,10 @@ bool FlatBuilder::lowerTerminator(Op* op, Frame& fr) {
       emit(createUnreachable(op->loc));
       return true;
     }
-    continues_.emplace_back(cur_, env_);
+    // 记下"这一刻的环境"与**目标循环头**：循环头块的回边 φ 需要它。
+    //   ★ 目标头块必须记：`continue` 跳到最内层循环的头，而 `continues_` 是
+    //     函数级扁平表；不标目标就无法把记录分派给正确的那一层循环。
+    continues_.emplace_back(cur_, env_, fr.loopHead);
     emit(createBr(fr.loopHead, op->loc));
     return true;
   }

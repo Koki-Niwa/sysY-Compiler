@@ -170,6 +170,7 @@ Action FlatBuilder::lowerWhile(Op* op, Frame& /*fr*/) {
   const int backedgeSlot = allocFinishSlot();
   std::vector<Instruction*> carryPhis;
   std::vector<Value*> carrySlots;
+  std::vector<Value*> carryHeadVals;   // 每个 carry φ 的**入口边入值**（见 continue 处）
   for (Value* slot : carry) {
     Value* init = pre.at(slot);
     // 入值 = [进入边的值, 回边（先占位，体展开完后由收尾帧填真值）]
@@ -179,6 +180,7 @@ Action FlatBuilder::lowerWhile(Op* op, Frame& /*fr*/) {
     headEnv[slot] = phi;
     carryPhis.push_back(phi);
     carrySlots.push_back(slot);
+    carryHeadVals.push_back(init);
   }
   env_ = headEnv;   // ★ 条件区要用**含 φ 的**环境（见下）
   // ★★ 把 `env_` 切到 `headEnv`（含刚建的 φ）**之后**才展开条件区 ★★
@@ -215,10 +217,11 @@ Action FlatBuilder::lowerWhile(Op* op, Frame& /*fr*/) {
   fbody.backedgeSlot = backedgeSlot;
 
   const size_t breaksMark = breaks_.size();
+  const size_t contMark = continues_.size();
   Frame fin;
   fin.kind = FrameKind::Finish;
   fin.finish = [this, head, condSlot, bodySlot, backedgeSlot, exit, carryPhis, carrySlots,
-                breaksMark, op]() {
+                carryHeadVals, breaksMark, contMark, op]() {
     const Env& bodyEnv = exitEnvOf(bodySlot);
     BasicBlock* back = exitBlockOf(backedgeSlot);
     if (back == nullptr) back = head;
@@ -251,6 +254,41 @@ Action FlatBuilder::lowerWhile(Op* op, Frame& /*fr*/) {
       carryPhis[k]->setOperand(1, v);
       carryPhis[k]->setSucc(1, back);
     }
+    // ①b ★★ `continue` 也是循环头的一条**真实前驱边**，必须进 φ 的入值表 ★★
+    //   【症状】`continue` 直跳循环头，而循环头的 φ 只按 `{入口边, 正常回边}`
+    //     两条边构造 ⇒ 入值块集合 ≠ 真实前驱集合，V3 在**生成阶段**就拒绝产出
+    //     （实测 `18_prim.sy`：L15 真实前驱 3 条，φ 只有 2 条）。
+    //   【原则】**φ 的入值必须由真实前驱枚举出来，不能按"预期有几条边"构造。**
+    //     本文件里同一族的缺陷已经出现两次（另一次是汇合点取到陈旧值），
+    //     都出在这条原则上。
+    //   【取值】用该 `continue` **那一刻的环境**里对应槽的值 —— 与正常回边
+    //     用体出口环境是同一个道理：φ 的入值 = "走这条边时该槽的值"。
+    //   【为什么只在目标 == 本循环头时消费】`continue` 跳到**最内层**循环的
+    //     头，而 `continues_` 是函数级扁平表。本层的收尾帧运行时，表里可能
+    //     还躺着**外层**循环的 `continue`（它比本层先登记）—— 只看下标区间
+    //     会把外层的边错算进本层。按目标头块精确匹配则天然正确。
+    for (size_t k = contMark; k < continues_.size(); ++k) {
+      const BasicBlock* target = std::get<2>(continues_[k]);
+      if (target != head) continue;          // 属于外层循环的 continue，留给外层收尾
+      BasicBlock* src = std::get<0>(continues_[k]);
+      const Env& contEnv = std::get<1>(continues_[k]);
+      for (size_t i = 0; i < carryPhis.size(); ++i) {
+        // 该边未写过这个槽 ⇒ 沿用**入口边**的值（这条边上该槽没变，
+        //   而入口边的值在循环头支配一切）。不能用 φ 自己当入值 ——
+        //   那会让 V3 的"入值不支配前驱"落空（φ 定义在 head，不支配前驱块）。
+        Value* v = nullptr;
+        const auto it = contEnv.find(carrySlots[i]);
+        if (it != contEnv.end()) v = it->second;
+        if (v == nullptr) v = carryHeadVals[i];
+        if (v == nullptr) v = zeroOfSlot(carrySlots[i], op->loc);
+        carryPhis[i]->addOperand(v);
+        carryPhis[i]->addSucc(src);
+      }
+    }
+    // 只摘掉本层消费掉的那些记录，**不能用 `resize(contMark)`**：
+    //   与匹配口径保持一致才是安全的摘除方式 —— 截断假定"本层记录恰好排在
+    //   表尾"，而本层收尾时表里可能还躺着**外层**循环的记录。按目标过滤
+    //   不依赖登记顺序，截断依赖。
     // ② 出口块的 φ：入边 = 循环头（条件为假）+ 每个 break 的那一刻
     std::vector<Env> envs;
     std::vector<BasicBlock*> edges;
@@ -262,6 +300,13 @@ Action FlatBuilder::lowerWhile(Op* op, Frame& /*fr*/) {
     }
     enterJoin(exit, envs, op->loc, edges);
     breaks_.resize(breaksMark);
+    std::vector<std::tuple<BasicBlock*, Env, BasicBlock*>> keep;
+    keep.reserve(continues_.size());
+    for (size_t k = 0; k < continues_.size(); ++k) {
+      if (std::get<2>(continues_[k]) == head) continue;
+      keep.push_back(continues_[k]);
+    }
+    continues_.swap(keep);
   };
   // 帧序：① 条件区（发 `br i1 …, body, exit`）
   //       ② **切到体块**（`headEnv` 是体的入口环境：循环携带变量已经换成 φ）

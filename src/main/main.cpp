@@ -429,6 +429,13 @@ std::string renderFlatIr(const SourceFile& src, DiagnosticEngine& diags, bool fr
   if (pipelineClean) {
     const std::vector<sysy::flat::Violation> fvs = sysy::flat::verifyFlatModule(fmod);
     if (!fvs.empty()) {
+      // ★ S06 排障设施：`SYSY_DUMP_BAD_FLAT=1` 把**违约的那个平面模块**打到
+      //   stderr。为什么必须留：违约报告只有"块号 + 行号"，而块号在文本 dump
+      //   里才能对上（`L6` 到底有没有终结符、谁跳谁）—— 没有它就只能靠猜。
+      //   ⚠️ 只在**违约束**里生效，正常路径不受影响（不改产物、不改 rc）。
+      if (const char* want = std::getenv("SYSY_DUMP_BAD_FLAT"); want != nullptr && *want != '0') {
+        std::cerr << "===== 违约模块的平面 IR =====\n" << sysy::flat::dumpModule(fmod) << "\n";
+      }
       diags.report(DiagLevel::Error, sysy::SourceLoc(0, 0), "E-FLAT-VERIFY",
                    "平面 IR 违反不变量（" + std::to_string(fvs.size()) + " 条）：\n" +
                        sysy::flat::formatViolations(fvs));

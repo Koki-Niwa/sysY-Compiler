@@ -262,6 +262,9 @@ class FlatBuilder {
   std::unordered_map<sir::Value, Instruction*> params_;
   // 当前循环里出现的 `break`：出口块 + 那一刻的环境（供出口块的 φ 合并）
   std::vector<std::pair<BasicBlock*, Env>> breaks_;
+  // 当前循环里出现的 `continue`：回边源块 + 那一刻的环境。
+  // 嵌套循环用各自的起始下标收集，收尾时只消费本层的边。
+  std::vector<std::pair<BasicBlock*, Env>> continues_;
   // ★ Region 走完时的环境快照，按**帧序**编号（`frameEnvSeq_` 是分配器）。
   //   为什么用序号而不是指针：`std::vector<Frame>` 在压栈时会搬动元素
   //   ⇒ "指向帧的指针"不可靠；序号没有这个问题，而 finish 闭包按值捕获序号。

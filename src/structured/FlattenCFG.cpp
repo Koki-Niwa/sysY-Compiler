@@ -10,6 +10,8 @@
 //   然后才处理块里的其余内容。顺序反了 φ 就会跑到指令后面。
 // ============================================================================
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 
 #include "structured/FlattenInternal.h"
 
@@ -364,7 +366,6 @@ void FlatBuilder::enterJoin(BasicBlock* b, std::vector<Env> inEnvs, SourceLoc lo
   }
   cur_ = b;
   env_ = Env();
-  // 收集"至少一条入边上出现过"的槽（按首次出现顺序 ⇒ 确定性）
   std::vector<Value*> slots;
   std::unordered_set<Value*> seen;
   for (const Env& e : inEnvs) {
@@ -386,7 +387,7 @@ void FlatBuilder::enterJoin(BasicBlock* b, std::vector<Env> inEnvs, SourceLoc lo
       else if (v != first) { allSame = false; }
     }
     if (allSame && first != nullptr) {
-      env_[slot] = first;      // 判据 2 的"不多放"：全都一样就不放 φ
+      env_[slot] = first;
       continue;
     }
     std::vector<Value*> vals;
@@ -394,7 +395,7 @@ void FlatBuilder::enterJoin(BasicBlock* b, std::vector<Env> inEnvs, SourceLoc lo
     for (Value* v : vv) vals.push_back(v != nullptr ? v : zeroOfSlot(slot, loc));
     Instruction* phi = createPhi(slotType(slot), vals, edgeBlocks, loc);
     ownInst(phi);
-    cur_->addInst(phi);        // ★ 必须在块内其它指令之前（这里是块首）
+    cur_->addInst(phi);
     env_[slot] = phi;
   }
 }
@@ -454,6 +455,7 @@ Function* FlatBuilder::run(const Op* fn) {
     sirOfSlot_.clear();
     params_.clear();
     breaks_.clear();
+    continues_.clear();
   }
   started_ = true;
   blocks_.clear();

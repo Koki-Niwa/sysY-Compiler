@@ -70,8 +70,8 @@ bool FlatBuilder::amLocalSlot(Value* v) const {
 //     * while 的条件 Region：`Yield <bool>` ⇒ 在这里发 `br <bool>, body, exit`；
 //     * 体 / 分支 Region：`Yield` ⇒ 跳到帧的续点（体→循环头或自增块；
 //       分支→汇合块）；
-//     * 循环体里的 `Break` ⇒ 跳到循环出口（**结构化层的 `Break` 就是
-//       "跳出当前循环"**；`continue` 已由 S05b 的规范化消解掉）。
+//     * 循环体里的 `Break` ⇒ 跳到循环出口；`Continue` ⇒ 下一次迭代。
+//       规范化可能因内层的 break 而保留 While 中的 Continue。
 bool FlatBuilder::lowerTerminator(Op* op, Frame& fr) {
   if (op->kind == OpKind::Yield) {
     if (fr.isWhileCond) {
@@ -96,6 +96,16 @@ bool FlatBuilder::lowerTerminator(Op* op, Frame& fr) {
     // 记下"这一刻的环境"：循环出口块的 φ 需要它（判据 2）
     breaks_.emplace_back(cur_, env_);
     emit(createBr(fr.loopExit, op->loc));
+    return true;
+  }
+  if (op->kind == OpKind::Continue) {
+    if (!fr.inLoop || fr.loopHead == nullptr) {
+      giveUp("循环外出现 ContinueOp（上游已报错？）", op->loc);
+      emit(createUnreachable(op->loc));
+      return true;
+    }
+    continues_.emplace_back(cur_, env_);
+    emit(createBr(fr.loopHead, op->loc));
     return true;
   }
   if (op->kind == OpKind::Return) {
@@ -245,20 +255,8 @@ Action FlatBuilder::lower(Op* op) {
         giveUp("Load 的操作数/类型缺失", op->loc);
         return Action::kOk;
       }
-      // ★ 判据 2 的"读"：命中环境 ⇒ 用环境里的值（**不再发 load**）。
-      //   这不是值传播：环境里的值是"同一个槽在这次控制流上的当前版本"，
-      //   与 mem2reg 的 rename 同构；被提升的只有"汇合处必须选择"的那些值。
-      //   ⚠️ 只对**本地槽**（`alloca` 出来的）查环境：全局对象的地址
-      //   （`GlobalAddr`）永远走真正的 `load` —— 后端的全局变量语义就是内存。
-      if (Value* root = rootSlot(p)) {
-        if (!ptrSlots_.count(root)) {
-          const auto it = env_.find(root);
-          if (it != env_.end()) {
-            bind(op->result(0), it->second);
-            return Action::kOk;
-          }
-        }
-      }
+      // 每次读都从原地址发出 load；局部槽的值以实际内存为准。
+      // 环境仍由 Store/控制流维护，供当前的汇合点与循环 φ 构造使用。
       Instruction* i = createLoad(ty, p, op->loc);
       emit(i);
       bind(op->result(0), i);

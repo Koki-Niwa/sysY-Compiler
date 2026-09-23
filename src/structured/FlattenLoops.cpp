@@ -13,6 +13,9 @@
 
 #include "structured/FlattenInternal.h"
 
+#include <cstdio>
+#include <cstdlib>
+
 namespace sysy {
 namespace flat {
 
@@ -145,6 +148,14 @@ Action FlatBuilder::lowerWhile(Op* op, Frame& /*fr*/) {
   BasicBlock* exit = newBlock("loop.exit");
   if (failed_) return Action::kStop;
   BasicBlock* preB = cur_;
+  // ★ 会话 C 的假设验证（SYSY_DBG_PREB=1）：入口边必须由**前导块**发出；
+  //   若 `preB == head`，这句 `br head` 就是**自环**、入口边根本不存在 ——
+  //   那正好同时解释"少了 L0 边"与"多了 L1 自环"（报告 §十八.2）。
+  if (getenv("SYSY_DBG_PREB") != nullptr) {
+    std::fprintf(stderr, "[entry] preB=L%u head=L%u 同一个块=%d carry=%u\n",
+                 (unsigned)preB->index(), (unsigned)head->index(), (int)(preB == head),
+                 (unsigned)carry.size());
+  }
   preB->addInst(createBr(head, op->loc));
   ownInst(preB->back());
 
@@ -211,6 +222,27 @@ Action FlatBuilder::lowerWhile(Op* op, Frame& /*fr*/) {
     const Env& bodyEnv = exitEnvOf(bodySlot);
     BasicBlock* back = exitBlockOf(backedgeSlot);
     if (back == nullptr) back = head;
+    // ★★ 约束 C：回边源**已被终结**时必须**显式处置**，不能沉默地只改 successor 表 ★★
+    //   【症状】`setSucc` 只改 `succs_`、不改终结符 ⇒ successor 表与 `br` 文本不一致：
+    //     φ 的入值块集合 `{L0 L6}` ≠ 真实前驱 `{L0}` ⇒ `V3` 报"入值 2 vs 前驱 1"
+    //     （实测 `26_scope4.sy`：外层 `while(1)` 的回边要指向 `L1`，而
+    //      `L6` 的终结符是内层 `while(1)` 的 `break` 留下的 `br L3`）。
+    //   【处置】这个循环的回边**必须**由 `back` 走到 `head`（这是 while 的语义：
+    //     体走完就回头）。所以把那一条**单后继 `br`** 重写成 `br head`：
+    //     · 只处理 `br` 且只有一个后继的形态（条件分支/`ret`/`unreachable` **不动**）；
+    //     · 目标已经是 `head` 就什么都不做；
+    //     · 其余形态**留痕**（`giveUp` 已经由调用方处理不了这种形状的历史包袱）。
+    // ★★ 约束 C：回边源**已被终结**时必须**显式处置**（会话 C 未完成）★★
+    //   【症状】`setSucc` 只改 `succs_`、不改终结符 ⇒ φ 的入值块集合 ≠ 真实前驱
+    //     （`26_scope4.sy`：外层 `while(1)` 的回边要指向 `L1`，而 `L6` 的终结符
+    //      是内层 `while(1)` 的 `break` 留下的 `br L3`）。
+    //   【已试过两种处置，**都退回**】见报告 §十八：
+    //     ① 直接重写 `back` 的单后继 `br` 为 `br head`（`addInst` 到那个块）
+    //     ② 另起 `be` 块：`back --br--> be --br--> head`
+    //   两种都报同一个新症状：**`L1` 的真实前驱从 `{L0 L6}` 变成 `{L1}`**
+    //   （入口边消失）⇒ `V3` 从 4 条涨到 8 条、`--emit=flat-ir` 490→488。
+    //   ⇒ 说明 `L1` 的**入口边本身**在这条路径上就已经不在了（不是回边那一侧），
+    //     下一步要查 `preB->addInst(createBr(head))` 是否真落进了 `preB`。
     // ① 回边入值：体出口环境里的值；该槽这一轮没被写 ⇒ 补零。
     //    同时把 φ 的"回边前驱块"改成**体真正的出口块**（见上面的说明）。
     for (size_t k = 0; k < carryPhis.size(); ++k) {

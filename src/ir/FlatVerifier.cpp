@@ -7,6 +7,8 @@
 #include "ir/FlatVerifier.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -150,6 +152,32 @@ std::vector<Violation> verifyFlatModule(const Module& m) {
     Function* f = m.function(fi);
     if (f == nullptr || f->isDeclaration()) continue;
     const std::string& fname = f->name();
+    // ★ S06 排障设施：`SYSY_DBG_CFG=1` 打印**校验器看到的边**。
+    //   为什么需要：φ 的入值块集合与前驱集合不符时，光看文本 dump 分不清是
+    //   "边没建出来"还是"φ 的键错了" —— 这两个方向的修法完全相反。
+    if (const char* dbg = std::getenv("SYSY_DBG_CFG"); dbg != nullptr && *dbg != '0') {
+      for (BasicBlock* b : f->blocks()) {
+        Instruction* t = b->terminator();
+        std::fprintf(stderr, "[CFG] %s L%u 终=%s 后继=%u", fname.c_str(),
+                     static_cast<unsigned>(b->index()),
+                     t != nullptr ? opcodeName(t->op()) : "(无)",
+                     t != nullptr ? static_cast<unsigned>(t->numSuccs()) : 0u);
+        if (t != nullptr) {
+          for (size_t k = 0; k < t->numSuccs(); ++k) {
+            std::fprintf(stderr, " L%d", t->succ(k) != nullptr
+                                            ? static_cast<int>(t->succ(k)->index())
+                                            : -1);
+          }
+        }
+        std::fprintf(stderr, " | 前驱=%u", static_cast<unsigned>(b->numPreds()));
+        for (size_t k = 0; k < b->numPreds(); ++k) {
+          std::fprintf(stderr, " L%d", b->pred(k) != nullptr
+                                           ? static_cast<int>(b->pred(k)->index())
+                                           : -1);
+        }
+        std::fprintf(stderr, "\n");
+      }
+    }
 
     // ── V6：指令集封闭 + 结果类型一致性 ────────────────────────────────
     for (size_t bi = 0; bi < f->blockCount(); ++bi) {

@@ -248,9 +248,18 @@ class Gen(object):
             if act.kind == 'Zero':
                 self.gen_zero(ptr, act.val, line)
             elif act.kind in ('StoreConst', 'StoreExpr'):
-                # ★ 只影响读取（形状）：GEP 用对象类型、Store 用包装类型。
-                T = obj_of(elem_of(vty))
-                gp = self.val('GetElementPtr @ %s i64 0 %s %s' % (T, ptr, self.sext(self.ci(act.off // sizeof_ir(T), line)[0], line)), line, 'ptr[%s]' % T, None)[0]
+                # 字节偏移拆成各维下标；每级 GEP 的元素类型已经决定步长。
+                # 再把下标乘以内层维数会重复缩放，并会跨过子数组边界。
+                gp, curty, leaf = ptr, vty, act.off // 4
+                for _ in range(max(1, len(vty[1]))):
+                    inner = elem_of(curty)
+                    stride = n_leaf(inner)
+                    index, leaf = divmod(leaf, stride)
+                    idx = self.sext(self.ci(index, line)[0], line)
+                    T = obj_of(inner)
+                    gp = self.val('GetElementPtr @ %s i64 0 %s %s'
+                                  % (T, gp, idx), line, 'ptr[%s]' % T, None)[0]
+                    curty = inner
                 if act.kind == 'StoreConst':
                     v = (self.cf(parse_fval(act.val), line) if act.ty == ':float' else self.ci(int_lit(act.val), line))
                 else:
@@ -335,7 +344,7 @@ class Gen(object):
             if h == 'Return':
                 self.op('Return %s' % self.gen_expr(k[0])[0] if k else 'Return', s.line)
             else:
-                self.op('Break', s.line)                  # continue 也降级成 Break
+                self.op(h, s.line)
             if not self._dry:
                 self.mark_term()
     def gen_vardef(self, vd):
@@ -382,12 +391,7 @@ class Gen(object):
         self.in_init = True               # 这一段指令属于"入口前缀"（见 op/alloc）
         self.gen_actions(e, ty, al, vd.line)
         self.in_init = False
-    # ══════════════════════════════════════════════════════════════════════
-    # 表达式生成（★ 本轮**从原版字节码逐条重建回源码**，等价性由全量预言机实测）
-    #   这一组 11 个方法曾经只以字节码形式存在（见报告 §7.2.1）。
-    #   重建的判据不是"看起来对"，而是**可执行的等价性**：
-    #   补齐前后各跑一次全量 551 个文件，独立实现渲染出的模块文本逐字节相同。
-    # ══════════════════════════════════════════════════════════════════════
+    # 表达式生成
     def mark_term(self):
         """把**刚发出的那条指令**标成终结符。
         ⚠️ 必须看得见 `pending` 缓冲：变量初始化期间指令先进缓冲，此时
@@ -470,18 +474,14 @@ class Gen(object):
         return self.val('Load @ i32 %s' % t1, line, 'i32', ('int', ()))
     def gen_lval_addr(self, lv):
         """逐层 GEP：下标在 i32 里算（回绕）→ sext i32→i64 再 getelementptr，
-        绝不用 zext；乘数是"内层维数之积"，为 1 时不发 MulI。
+        绝不用 zext；GEP 的元素类型本身决定当前维度的步长。
         """
         pv = self.lookup(lv[1]); ty, cur = pv[0], pv[1]
         # ★ 只影响读取（形状）：数组形参在 GEP 前先 load 出槽里的指针
         if len(ty[1]) > 0 and ty[1][0] is None:
             cur = self.val('Load @ %s %s' % (ir_of(ty), cur), lv.line, ir_of(ty), None)[0]
-            ty = elem_of(ty)
         for sub in subs(lv):
-            E = elem_of(ty); m = n_leaf(E); x = self.gen_expr(sub)
-            if m != 1:
-                x = self.val('MulI @ %s %s' % (x[0], self.ci(m, sub.line)[0]),
-                             sub.line, 'i32', ('int', ()))
+            E = elem_of(ty); x = self.gen_expr(sub)
             cur = self.val('GetElementPtr @ %s i64 0 %s %s'
                            % (obj_of(E), cur, self.sext(x[0], sub.line)),
                            sub.line, 'ptr[%s]' % ir_of(E), None)[0]
@@ -711,7 +711,7 @@ def main(argv=None):
         print('  说明：§五.1 只要求 alloca 在**函数入口 Region**，未规定它在其中的位置；')
         print('        Alloca 之间无数据依赖 ⇒ 判据在这一项上比语义更严，故单独放宽。')
         print('        放宽的只有这一项：Alloca 多重集必须相同，其余行仍要求逐字节相同。')
-        print_bad(bad, a.list_diffs)
+    print_bad(bad, a.list_diffs)
     for p, m in err[:5]:
         print('-' * 72)
         print('工具错误: %s\n  %s' % (p, m))

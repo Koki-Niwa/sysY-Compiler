@@ -5,18 +5,16 @@ import subprocess
 import tempfile
 
 import arena
+import flat_case_layout
 from flat_exec import FlatExec
 from flat_mod import FlatMod
 
-
-SEED = 12345
-INPUT_COUNT = 64
+SEED, INPUT_COUNT = 12345, 64
 
 
 def _diagnostic(result):
     lines = result.stderr.decode('utf-8', 'replace').strip().splitlines()
     return lines[0] if lines else ''
-
 
 def check(compiler, source):
     """Return (failures, flat dump size) for one source file."""
@@ -54,7 +52,9 @@ def check(compiler, source):
             if gcc_rc < 0:
                 failures.append('gcc 被信号 %d 终止' % -gcc_rc)
             else:
-                trace = FlatExec(FlatMod(data.decode('utf-8')), SEED).run()
+                flat_module = FlatMod(data.decode('utf-8'))
+                failures.extend(flat_case_layout.global_type_failures(flat_module))
+                trace = FlatExec(flat_module, SEED).run()
                 flat_rc = int(trace['ret']) & 0xff
                 flat_out = arena.stdout_of(trace)
                 if flat_rc != gcc_rc:

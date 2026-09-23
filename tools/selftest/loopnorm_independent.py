@@ -57,14 +57,6 @@ class N(object):
                     n.src_line = int(op.attrs[i + 1])
                 except ValueError:
                     n.src_line = 0
-        else:
-            # `@line` 与操作数一起被放进 attrs；解析器把它们都列在 attrs 里
-            for i, t in enumerate(op.attrs):
-                if t == '@line' and i + 1 < len(op.attrs):
-                    try:
-                        n.src_line = int(op.attrs[i + 1])
-                    except ValueError:
-                        pass
         n.src = op
         for reg in op.regions:
             n.regions.append([N.from_op(x) for x in reg])
@@ -361,50 +353,50 @@ def bound_reads_local(tok, by_name):
 
 
 # ── ① continue 消解 ──────────────────────────────────────────────────────
+#   `Continue` 可消解；`Break` 必须保留退出循环的行为。
 #   ★ 规范形式（prompt §3.2 的字面）：`continue` 归一化为 `if (!cond) { B }`
 #     的**嵌套**（B = continue 之后要跳过的一切）。落地：
-#       body = [ P1…, (If C) { A…, (Break) } { (Yield) }, REST… ]
+#       body = [ P1…, (If C) { A…, (Continue) } { (Yield) }, REST… ]
 #         ↓
 #       body = [ P1…, (If C) { A…, (Yield) } { (Yield) },
-#                (Int 0), (Eq C 0), (If (Eq C 0)) { (Yield) } { REST… }, (Yield) ]
+#                (Int 0), (Eq C 0), (If (Eq C 0)) { REST… } { (Yield) }, (Yield) ]
 #     反转条件用 **`Eq C 0`**（不交换比较谓词 —— 那属于算术改写）。
-#   ★ 为什么必须"把 REST 包起来"而不是只把 `Break` 换成 `(Yield)`：
+#   ★ 为什么必须"把 REST 包起来"而不是只把 `Continue` 换成 `(Yield)`：
 #     `YieldOp` 在**分支**里的语义是"本分支结束 ⇒ 回到拥有者的下一条语句"，
 #     而不是"跳到循环头"（否则 IRGen 给普通 `if (c) { A }` 追加的 `(Yield)`
 #     会变成"跳过 `if` 之后的语句"）。⇒ 要表达"跳过 REST"，REST 必须被搬进
 #     一个受 `!C` 保护的分支里。
-#     这是一个**语义 bug**：第一版只把 `Break` 换成 `(Yield)`，于是
-#     `if (i < j) { j = j + 1; continue; } swap…` 会照样执行 `swap`
-#     （`transpose0.sy`）。轨 D 抓不到（两份实现同一个误解），**轨 E 才抓得到**。
+#     这是一个**语义 bug**：若只把 `Continue` 换成 `(Yield)`，那么
+#     `if (i < j) { j = j + 1; continue; } swap…` 会照样执行 `swap`。
 
 def check_continues(region):
     """【后置】只读：这个体的 `continue` 是否**可以**按规范形式消解。"""
     for i, op in enumerate(region):
         if op.kind == 'Break':
-            # ★ **体顶层的 `BreakOp` 一律拒绝**：`break` 与"尾部 continue"在
-            #   IRGen 里都是 `BreakOp`（形状完全一样）⇒ 不可判定 ⇒ 保守
-            #   （prompt §3.3："含 break 的 while 一律不规范化"）。
+            # 真 break 会跳出循环，不能由 For 的固定步进代替。
             return False
+        if op.kind == 'Continue':
+            continue
         if op.kind in ('While', 'For'):
-            # ★ 内层循环体里还有 `BreakOp` ⇒ 说明内层**没被规范化**（真 `break`）
-            #   ⇒ 内层升不成 `ForOp`，而外层 `ForOp` 的体内会留着那个 `BreakOp`
-            #   ⇒ 违反 I3（"`ForOp` 体内无 break"）⇒ 外层也不许规范化。
-            #   （漏掉这条会让**内层失败的循环把外层也带坏** —— 实测
-            #     `19_search.sy`：两份实现只有这一条不一致。）
-            if len(op.regions) > 1 and has_break_anywhere(op.regions[1]):
+            # 内层遗留的跳转也会落在外层 For 的体内；保守拒绝外层。
+            if len(op.regions) > 1 and (has_break_anywhere(op.regions[1]) or
+                                       has_continue_anywhere(op.regions[1])):
                 return False
             continue
         if op.kind != 'If':
             continue
         a, b = op.regions[0], op.regions[1]
-        ab = bool(a) and a[-1].kind == 'Break'
-        bb = bool(b) and b[-1].kind == 'Break'
-        if ab and bb:
+        if (a and a[-1].kind == 'Break') or (b and b[-1].kind == 'Break'):
+            return False
+        ac = bool(a) and a[-1].kind == 'Continue'
+        bc = bool(b) and b[-1].kind == 'Continue'
+        if ac and bc:
             return False               # 两条路径都 continue：不处理
-        if ab or bb:
-            continue                   # 末尾 Break：交给 resolve
-        if has_break_anywhere(a) or has_break_anywhere(b):
-            return False               # 非末尾 Break：保守拒绝
+        if ac or bc:
+            continue                   # 分支末尾 Continue：交给 resolve
+        if (has_break_anywhere(a) or has_break_anywhere(b) or
+                has_continue_anywhere(a) or has_continue_anywhere(b)):
+            return False               # 非末尾跳转：保守拒绝
     return True
 
 
@@ -415,7 +407,7 @@ def resolve_continues(body, loop_src_line=0):
     """
     stats = {'wrapped': 0, 'tail': 0}
     # 体尾的尾部 continue
-    if body and body[-1].kind == 'Break':
+    if body and body[-1].kind == 'Continue':
         y = N('Yield', body[-1].line)
         y.has_line = True
         y.src_line = body[-1].src_line
@@ -429,8 +421,8 @@ def resolve_continues(body, loop_src_line=0):
             if op.kind != 'If':
                 continue
             a, b = op.regions[0], op.regions[1]
-            ab = bool(a) and a[-1].kind == 'Break'
-            bb = bool(b) and b[-1].kind == 'Break'
+            ab = bool(a) and a[-1].kind == 'Continue'
+            bb = bool(b) and b[-1].kind == 'Continue'
             if not ab and not bb:
                 continue
             k, which = i, (0 if ab else 1)
@@ -484,18 +476,18 @@ def resolve_continues(body, loop_src_line=0):
 
 
 def resolve_region_tail(region):
-    """被搬进包装分支的 REST：只做"分支末尾 `Break` → `(Yield)`"这一层。"""
+    """被搬进包装分支的 REST：只改写末尾的 `Continue`。"""
     for op in region:
         if op.kind != 'If':
             continue
         for k in range(len(op.regions)):
             sub = op.regions[k]
-            if sub and sub[-1].kind == 'Break':
+            if sub and sub[-1].kind == 'Continue':
                 y = N('Yield', sub[-1].line)
                 y.has_line = True
                 y.src_line = sub[-1].src_line
                 sub[-1] = y
-    if region and region[-1].kind == 'Break':
+    if region and region[-1].kind == 'Continue':
         y = N('Yield', region[-1].line)
         y.has_line = True
         y.src_line = region[-1].src_line
@@ -506,7 +498,7 @@ def resolve_region_tail(region):
 def direct_increments(region, ivslot, by_name):
     n = 0
     for op in region:
-        if op.kind == 'Break':
+        if op.kind == 'Continue':
             continue
         if is_iv_increment(op, ivslot, by_name):
             n += 1
@@ -516,8 +508,8 @@ def direct_increments(region, ivslot, by_name):
         a, b = op.regions[0], op.regions[1]
         if not a or not b:
             return -1
-        ab = a[-1].kind == 'Break'
-        bb = b[-1].kind == 'Break'
+        ab = a[-1].kind == 'Continue'
+        bb = b[-1].kind == 'Continue'
         if ab and bb:
             return -1
         if ab or bb:
@@ -528,7 +520,7 @@ def direct_increments(region, ivslot, by_name):
             return -1
         # 分支整体是内层循环 ⇒ 它的自增不算本层
         def ends_loop(reg):
-            last = reg[-2] if len(reg) >= 2 and reg[-1].kind in ('Yield', 'Break') else reg[-1]
+            last = reg[-2] if len(reg) >= 2 and reg[-1].kind in ('Yield', 'Break', 'Continue') else reg[-1]
             return last.kind in ('While', 'For')
         if ends_loop(a) or ends_loop(b):
             continue
@@ -538,7 +530,7 @@ def direct_increments(region, ivslot, by_name):
 
 def continue_branches_ok(region, ivslot, by_name):
     for op in region:
-        if op.kind == 'Break':
+        if op.kind == 'Continue':
             c = sum(1 for x in region if is_iv_increment(x, ivslot, by_name))
             if c != 1:
                 return False
@@ -548,12 +540,12 @@ def continue_branches_ok(region, ivslot, by_name):
         for sub in op.regions:
             if not sub:
                 continue
-            if sub[-1].kind == 'Break':
+            if sub[-1].kind == 'Continue':
                 c = sum(1 for x in sub if is_iv_increment(x, ivslot, by_name))
                 if c != 1:
                     return False
                 continue
-            last = sub[-2] if len(sub) >= 2 and sub[-1].kind in ('Yield', 'Break') else sub[-1]
+            last = sub[-2] if len(sub) >= 2 and sub[-1].kind in ('Yield', 'Break', 'Continue') else sub[-1]
             if last.kind in ('While', 'For'):
                 continue
             if not continue_branches_ok(sub, ivslot, by_name):
@@ -567,6 +559,16 @@ def has_break_anywhere(region):
             return True
         for reg in op.regions:
             if has_break_anywhere(reg):
+                return True
+    return False
+
+
+def has_continue_anywhere(region):
+    for op in region:
+        if op.kind == 'Continue':
+            return True
+        for reg in op.regions:
+            if has_continue_anywhere(reg):
                 return True
     return False
 
@@ -792,5 +794,3 @@ def normalize_dump(text):
         normalize_func(fn, stats, gidx)
     hoist_allocas(mod)
     return render(mod), stats
-
-

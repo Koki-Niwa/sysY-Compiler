@@ -36,16 +36,16 @@ const Type* toFlatType(const sir::Type* t) {
   return nullptr;
 }
 
-// 【后置】把数组**元素里多余的指针层**逐层剥掉：`[6 x ptr[[50 x i32]]]`
-//   → `[6 x [50 x i32]]`。递归是必须的（结构化层对每一维数组都包了指针）。
+// 递归去掉数组元素上的结构化指针包装。
 static const Type* stripPtrElem(const Type* t) {
   if (t == nullptr) return nullptr;
   if (t->isArray()) {
-    const Type* e = stripPtrElem(t->elem);
-    // 元素是"指向数组的指针" ⇒ 那个指针是包装，不是元素本身
+    const Type* e = t->elem;
     while (e != nullptr && e->isPtr() && e->elem != nullptr && e->elem->isArray()) {
       e = e->elem;
     }
+    // 去掉包装后可能又露出一层数组；必须继续递归到最内层。
+    e = stripPtrElem(e);
     return e == nullptr ? t : typePool().arrayOf(e, t->len);
   }
   return t;

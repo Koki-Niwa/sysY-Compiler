@@ -36,6 +36,7 @@ flat_exec.py —— 轨 E：**平面 IR 与结构化 IR 行为等价**（S06 最
 
 import argparse
 import os
+import tempfile
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -43,6 +44,8 @@ from concurrent.futures import ThreadPoolExecutor
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
+import flat_exec_manifest as manifest  # noqa: E402
+from flat_exec_report import report_diffs  # noqa: E402
 import exec_core as C          # noqa: E402  ★ 与结构化执行器**共用语义**
 import loopnorm_ir as L        # noqa: E402  （只借它的"读结构化 dump"与本文件无关的常量）
 
@@ -402,13 +405,16 @@ def one_file(compiler, sy, tmpdir, seed):
     r2 = subprocess.run([compiler, sy, '--emit=flat-ir', '-o', flt], capture_output=True)
     if r1.returncode != 0 or r2.returncode != 0:
         if r1.returncode != 0 and r2.returncode != 0:
-            return ('skip', 'rc=%d/%d' % (r1.returncode, r2.returncode), None, None)
+            st = 'skip' if manifest.expected_reject(sy) else 'error'
+            return (st, 'rc=%d/%d' % (r1.returncode, r2.returncode), None, None)
         return ('error', 'rc=%d/%d' % (r1.returncode, r2.returncode), None, None)
+    if manifest.expected_reject(sy):
+        return ('error', 'manifest 预期前端拒绝，但两侧编译成功', None, None)
     try:
         t1 = open(sir, encoding='utf-8').read()
         t2 = open(flt, encoding='utf-8').read()
         if not t1.strip() or not t2.strip():
-            return ('skip', 'dump 为空', None, None)
+            return ('error', 'dump 为空', None, None)
         import loopnorm_exec as LE
         m1, n1, _ = L.parse_dump(t1)
         tr1 = LE.Exec(m1, n1, seed).run()
@@ -422,6 +428,8 @@ def one_file(compiler, sy, tmpdir, seed):
         return ('parse', str(e), None, None)
     except RecursionError:
         return ('recursion', 'Python 递归上限', None, None)
+    except (OSError, ValueError) as e:
+        return ('error', '%s: %s' % (type(e).__name__, e), None, None)
     if tr1 == tr2:
         return ('same', '', tr1, tr2)
     return ('diff', '', tr1, tr2)
@@ -434,27 +442,6 @@ def describe_diff(a, b):
         if a[tag] != b[tag]:
             msgs.append('%s：结构化 %r vs 平面 %r' % (name, a[tag], b[tag]))
     return '；'.join(msgs) if msgs else '（未知差异）'
-
-
-def report_diffs(diffs):
-    """列出**全部**差异并按轨迹字段分类（`--list-diffs`）。
-
-    判据看字段（`out`/`mem`/`ret` 全同 ⇒ 只是循环计数口径），**不看消息
-    字符串**；而且必须列全 —— 原来只印 `diffs[:10]`，清单极易被当成全集
-    （实测把 10 当成 76，见 TESTING-GUIDE"数字只认摘要行"）。
-    """
-    result_class, count_class = [], []
-    for f, m, ta, tb in diffs:
-        rest_same = (ta is not None and tb is not None and
-                     ta['out'] == tb['out'] and ta['mem'] == tb['mem'] and
-                     ta['ret'] == tb['ret'])
-        (count_class if rest_same else result_class).append((os.path.relpath(f, ROOT), m))
-    print('--- 结果类差异（`out`/`mem`/`ret` 至少一项不同）: %d ---' % len(result_class))
-    for rel, m in result_class:
-        print('  ✘ %s\n    %s' % (rel, m))
-    print('--- 仅循环计数口径: %d ---' % len(count_class))
-    for rel, _m in count_class:
-        print('  · %s' % rel)
 
 
 def main():
@@ -476,8 +463,8 @@ def main():
     if not os.path.exists(compiler):
         print('找不到编译器：%s' % compiler, file=sys.stderr)
         return 2
-    tmp = os.path.join(ROOT, '.work', 'flat_exec')
-    os.makedirs(tmp, exist_ok=True)
+    temp_run = tempfile.TemporaryDirectory(prefix='flat_exec_')
+    tmp = temp_run.name
 
     if args.show_trace or args.dump_traces:
         sy = os.path.abspath(args.show_trace or args.dump_traces)
@@ -501,6 +488,9 @@ def main():
         files = files[:args.limit]
     if not files:
         print('没有 .sy 文件', file=sys.stderr)
+        return 2
+    if not manifest.corpus_matches(files, args.dir, args.limit):
+        print('语料成员与 manifest.tsv 不一致', file=sys.stderr)
         return 2
 
     with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as ex:
@@ -526,16 +516,20 @@ def main():
     print('两种形状轨迹相同: %d' % len(same))
     print('轨迹不同:         %d' % len(diffs))
     if args.list_diffs:
-        report_diffs(diffs)
+        report_diffs(diffs, ROOT)
     else:
-        for f, m in diffs[:10]:
+        for f, m, _a, _b in diffs[:10]:
             print('  ✘ %s\n    %s' % (os.path.relpath(f, ROOT), m))
     total_skipped = sum(len(v) for v in skips.values())
     print('跳过: %d（**逐类列出原因，不静默**）' % total_skipped)
     for k in sorted(skips, key=lambda x: -len(skips[x])):
         print('  %-52s %4d   例：%s' % (k[:52], len(skips[k]),
                                         os.path.relpath(skips[k][0], ROOT)))
-    ok = not diffs and len(same) >= args.min_files
+    errors = sum(len(v) for k, v in skips.items() if
+                 k.startswith(('工具/单方失败', '[parse]', '[recursion]')))
+    ok = not diffs and not errors and len(same) >= args.min_files
+    if errors:
+        print('  ✘ 工具、编译或解析错误 %d 个' % errors)
     if diffs:
         print('  ✘ 有程序在两种形状下行为不同（**先假定是平面侧错了**，逐条查清）')
     if len(same) < args.min_files:

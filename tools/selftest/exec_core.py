@@ -18,7 +18,6 @@ S05b 的 `loopnorm_exec.py` 自带一份执行语义。S06 的轨 E 要执行**�
     * 控制流信号：`Ret`/`BreakLoop`/`ContinueLoop`/`Budget`/`Unsupported`
     * 运行时库：`getint`/`putint`/`llvm.memcpy`/`llvm.memset` …（**唯一实现**）
     * 确定性输入：固定种子 PRNG（整数**故意取小值**，见 `next_int`）
-    * 预算：**只按步数**（墙钟会让跳过集合随负载漂移，S05b 的教训）
 
 两个执行器各自只负责"**取下一条指令**"：
     * `loopnorm_exec.Exec`  —— 结构化 IR（Region 树）
@@ -57,12 +56,13 @@ def s64(v):
 
 
 def f32(v):
-    return struct.unpack('<f', struct.pack('<f', float(v)))[0]
-
+    try:
+        return struct.unpack('<f', struct.pack('<f', float(v)))[0]
+    except OverflowError:
+        return float('-inf') if v < 0 else float('inf')
 
 def bits_of_f32(v):
-    return struct.unpack('<I', struct.pack('<f', float(v)))[0]
-
+    return struct.unpack('<I', struct.pack('<f', f32(v)))[0]
 
 def f32_of_bits(b):
     return struct.unpack('<f', struct.pack('<I', b & MASK32))[0]

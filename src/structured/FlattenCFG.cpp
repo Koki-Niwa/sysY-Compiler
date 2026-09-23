@@ -375,23 +375,21 @@ void FlatBuilder::enterJoin(BasicBlock* b, std::vector<Env> inEnvs, SourceLoc lo
   for (Value* slot : slots) {
     std::vector<Value*> vv;
     vv.reserve(inEnvs.size());
-    bool allSame = true;
-    bool firstSet = false;
-    Value* first = nullptr;
     for (const Env& e : inEnvs) {
       const auto it = e.find(slot);
       Value* v = (it == e.end()) ? nullptr : it->second;
       vv.push_back(v);
-      if (!firstSet) { first = v; firstSet = true; }
-      else if (v != first) { allSame = false; }
-    }
-    if (allSame && first != nullptr) {
-      env_[slot] = first;
-      continue;
     }
     std::vector<Value*> vals;
     vals.reserve(vv.size());
     for (Value* v : vv) vals.push_back(v != nullptr ? v : zeroOfSlot(slot, loc));
+    // 缺值补零后再判定：全缺值的入边同为零，不应产生冗余 φ。
+    if (!vals.empty() &&
+        std::all_of(vals.begin() + 1, vals.end(),
+                    [first = vals.front()](Value* v) { return v == first; })) {
+      env_[slot] = vals.front();
+      continue;
+    }
     Instruction* phi = createPhi(slotType(slot), vals, edgeBlocks, loc);
     ownInst(phi);
     cur_->addInst(phi);

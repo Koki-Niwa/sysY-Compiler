@@ -660,6 +660,28 @@ else
   else
     c_skip "flat_exec.py 未实现（S06 的交付物）"
   fi
+  # ★ 跨层结构对应（不变量 ㊳）：结构化层的每个循环，平面层必须有回边。
+  #   这一条补的盲区是"**结构缺失**"——回边丢了，V1–V6、往返、行为等价会**一起全绿**
+  #   （26_scope4 实证）。判据用棘轮：已知的未修缺陷登记在 backedge_known.txt，
+  #   **新增一个就红**，修好一个就删一行。
+  if [ -f "$TOOLS/selftest/loop_backedge_census.py" ]; then
+    BLOG="$WORK/backedge.log"
+    python3 "$TOOLS/selftest/loop_backedge_census.py" --compiler "$COMPILER" \
+        --dir "$ROOT/tests" --jobs "$(nproc)" >"$BLOG" 2>&1
+    KNOWN="$TOOLS/selftest/backedge_known.txt"
+    FOUND=$(grep -oE '^  · [^ ]+' "$BLOG" | sed 's/^  · //' | sort -u)
+    if [ -z "$FOUND" ]; then
+      c_ok "跨层结构对应：每个循环都有回边（零缺失）"
+    else
+      NEW=$(comm -23 <(echo "$FOUND") <(grep -v '^#' "$KNOWN" 2>/dev/null | grep -v '^$' | sort -u) 2>/dev/null)
+      if [ -z "$NEW" ]; then
+        c_ok "跨层结构对应：缺失 $(echo "$FOUND" | wc -l) 个文件，全部是已知未修缺陷（棘轮内）"
+      else
+        c_bad "出现【新的】回边缺失（结构化有循环、平面无回边 ⇒ 循环退化成跑一趟）"
+        echo "$NEW" | head -5 | sed 's/^/      NEW: /'
+      fi
+    fi
+  fi
   if [ -f "$TOOLS/selftest/run_flat_cases.py" ]; then
     LLOG="$WORK/flatcases.log"
     if python3 "$TOOLS/selftest/run_flat_cases.py" --compiler "$COMPILER" >"$LLOG" 2>&1; then

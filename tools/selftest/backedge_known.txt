@@ -1,0 +1,16 @@
+# 已知的【回边缺失】文件（**未修的产品缺陷**，不是允许它存在）
+#
+# 症状：结构化层有循环，平面层那个循环头没有回边 ⇒ 循环退化成"跑一趟"。
+# 现状：外层 `while(1)` 套内层循环 + `break` 时，外层回边从未发射。
+#       基线之所以 V1–V6 / 往返 / 行为等价全绿，是因为**回边与 φ 一起丢了**——
+#       "零违规"不等于"结构完整"（不变量 ㊳/㊲）。
+#
+# 修复方向已定位（报告 §22.2）：落点是【登记回边源的那一刻】
+#       （`lowerWhile` 的 `frameExitBlocks_[backedgeSlot] = …`），不是收尾帧；
+#       若那时出口块已有终结符，就地改接到新桥块 `back --br--> Lb --br--> head`。
+#       两个半成品（R1 键统一 + 汇合点补 load；插块拆出口）都在报告里，可继续。
+#
+# ⚠️ 这张表是**棘轮**：修好一个就删一行，**新增一个就红**。
+tests/final_arm/h_functional/04_break_continue.sy
+tests/final_riscv/h_functional/04_break_continue.sy
+tests/final_riscv/h_functional/26_scope4.sy

@@ -6,24 +6,14 @@ run_flat_cases.py —— 跑 `compiler/tests/flat/**` 的用例集（金样例 +
 用法（**命令行为固定契约**，关卡照这个签名调用）：
     python3 run_flat_cases.py --compiler <路径> [--verbose] [--update]
 
-⚠️ 本关（flat 语料）**暂时按 `--emit=structured-ir --normalize` 判**：
-   `--emit=flat-ir` 还没实现（当前编译器回 `unknown --emit kind 'flat-ir'`，
-   退出码 2）。语料先把"扁平层要吃的那份结构化形状"钉死（φ 位点、临界边、
-   alloca 位置、循环规范化结果…）；S06 落地后把下面的 `EMIT_ARGS` /
-   `ROUNDTRIP_ARGS` 换成 flat 档、再用 `--update` 重刷 expect 即可。
-
-判据（逐字节，三条）
---------------------
-1. **编译**：退出码 0，且 stderr **零诊断**（有诊断即失败，不看内容）。
-2. **对照**：产物与 `expect`（golden）或 `good.expect`/`bad.expect`（min）
-   **逐字节相同**。expect 是**真实运行产出**，不许手写。
-3. **往返**：产物 `--from-structured --normalize --emit=structured-ir`
-   读回再 dump，必须与产物**逐字节相同**（幂等）。
+判据：结构化产物与历史 expect 逐字节相同且往返幂等；平面产物真正由
+`--emit=flat-ir` 生成，经 `--from-flat` 往返幂等，并与 gcc 比较输出和
+main 返回值。两种编译均要求 rc=0、stderr 零诊断。
 
 `min/<编号>-<短名>/` 另加一条：`good.sy` / `bad.sy` 必须**只差一处** ——
 用 difflib 的统一 diff 数 hunk，**恰好 1 个**（`diff -u` 同一口径）。
 
-`--update` 用真实运行产出刷新全部 expect（**只给维护者用**；判据 1/3 照跑）。
+`--update` 只刷新结构化 expect；平面行为仍须通过 gcc 判据。
 
 退出码：0 = 全过；1 = 有用例失败；2 = 工具自身错误（找不到编译器/用例树）。
 """
@@ -34,11 +24,13 @@ import os
 import subprocess
 import sys
 
+import flat_case_checks
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, '..', '..', '..'))
 CASES = os.path.join(ROOT, 'compiler', 'tests', 'flat')
 
-# 产物档位（S06 落地后改成 ['--emit=flat-ir', '--normalize']）
+# 历史 expect 是结构化 IR；平面 IR 的检查在 flat_case_checks.py。
 EMIT_ARGS = ['--emit=structured-ir', '--normalize']
 ROUNDTRIP_ARGS = ['--from-structured', '--normalize', '--emit=structured-ir']
 
@@ -85,12 +77,9 @@ def check_source(compiler, sy, expect, stem, update):
         data = read_bytes(got)
         info = '%d 字节' % len(data)
 
-        if update:
-            with open(expect, 'wb') as f:
-                f.write(data)
-        elif not os.path.exists(expect):
+        if not update and not os.path.exists(expect):
             problems.append('缺 %s' % os.path.basename(expect))
-        else:
+        elif not update:
             want = read_bytes(expect)
             if want != data:
                 problems.append('与 %s 不同（want %d / got %d 字节）'
@@ -107,6 +96,12 @@ def check_source(compiler, sy, expect, stem, update):
         elif read_bytes(rt) != data:
             problems.append('往返与产物不同（%d / %d 字节）'
                             % (os.path.getsize(rt), len(data)))
+        flat_problems, flat_size = flat_case_checks.check(compiler, sy)
+        problems.extend(flat_problems)
+        info += '；flat %d 字节' % flat_size
+        if update and not problems:
+            with open(expect, 'wb') as f:
+                f.write(data)
     finally:
         for p in (got, rt):
             if os.path.exists(p):
@@ -164,8 +159,8 @@ def main():
             nfail += 1
             print('  ✘ %s' % msg)
 
-    mode = '（--update：刷新 expect）' if args.update else '（逐字节 + 往返）'
-    print('== flat 用例集：%s %s ==' % (' '.join(EMIT_ARGS), mode))
+    mode = '（--update：刷新结构化 expect）' if args.update else '（结构化 expect + flat 往返 + gcc）'
+    print('== flat 用例集：structured-ir + flat-ir %s ==' % mode)
     print('   编译器：%s' % compiler)
 
     # ── 1. golden/ ─────────────────────────────────────────────────────────
@@ -187,7 +182,7 @@ def main():
         extra = '（--update：已写 expect，%s）' % info if args.update else '（%s）' % info
         report(True, 'golden/%s%s' % (name, extra))
         if args.verbose:
-            print('      编译 rc=0、stderr 空、与 expect 逐字节相同、往返逐字节相同')
+            print('      结构化 expect/往返、flat 往返、flat 与 gcc 行为均通过')
 
     # ── 2. min/ ────────────────────────────────────────────────────────────
     print('== min/（最小对照：good.sy / bad.sy 只差一处 + expect）==')
@@ -220,7 +215,7 @@ def main():
             if args.update else '，'.join(infos)
         report(True, 'min/%s（1 hunk / %d 改动行；%s）' % (name, changed, extra))
         if args.verbose:
-            print('      good 与 bad 各：编译 rc=0、stderr 空、与 expect 逐字节相同、往返逐字节相同')
+            print('      good 与 bad 各：结构化 expect/往返、flat 往返、flat 与 gcc 行为均通过')
 
     # ── 3. 汇总 ────────────────────────────────────────────────────────────
     print('== 结果：%s ==' % ('全过' if nfail == 0 else '有失败'))

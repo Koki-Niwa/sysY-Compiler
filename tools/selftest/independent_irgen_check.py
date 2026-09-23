@@ -8,7 +8,7 @@
 
 用法（**唯一入口就是本文件**）：
   python3 independent_irgen_check.py --compiler <编译器路径>
-          [--jobs N] [--dir 语料目录] [--limit N] [--verbose]
+          [--jobs N] [--dir 语料目录] [--limit N] [--list-diffs]
 退出码：0 = 全部等价 | 1 = 有差异 | 2 = 工具自身错误
 
 ★ 两处**已知的输入/判据偏离**（都在报告 §7 里记账）：
@@ -39,6 +39,8 @@ from iic_sexp import *                                       # noqa: F401,F403
 from iic_sexp import (Node, sexpr, subs, one, stext, initval_exprs, parse_ty,   # noqa: F401
                       ir_of, elem_of, is_scalar, n_leaf, sizeof_ir, wrap32,
                       f32, f32_bits, int_lit, parse_fval, fmt_float)
+# ★ `iic_shapes` 里的都是**只影响读取（形状）**的辅助（对象类型 / 差异归因）
+from iic_shapes import obj_of, print_bad                     # noqa: E402
 from iic_front import *                                      # noqa: F401,F403
 from iic_front import (Tok, tokenize, Annotator, parse_initplan, Act, Entry,   # noqa: F401
                        mk_local, BINOPS)
@@ -246,12 +248,14 @@ class Gen(object):
             if act.kind == 'Zero':
                 self.gen_zero(ptr, act.val, line)
             elif act.kind in ('StoreConst', 'StoreExpr'):
-                T = ir_of(elem_of(vty)); gp = self.val('GetElementPtr @ %s i64 0 %s %s' % ( T, ptr, self.sext(self.ci(act.off // sizeof_ir(T), line)[0], line)), line, 'ptr[%s]' % T, None)[0]
+                # ★ 只影响读取（形状）：GEP 用对象类型、Store 用包装类型。
+                T = obj_of(elem_of(vty))
+                gp = self.val('GetElementPtr @ %s i64 0 %s %s' % (T, ptr, self.sext(self.ci(act.off // sizeof_ir(T), line)[0], line)), line, 'ptr[%s]' % T, None)[0]
                 if act.kind == 'StoreConst':
                     v = (self.cf(parse_fval(act.val), line) if act.ty == ':float' else self.ci(int_lit(act.val), line))
                 else:
                     v = self.gen_expr(self.match_iv(act.expr))
-                self.op('Store %s %s %s' % (T, v[0], gp), line)
+                self.op('Store %s %s %s' % (ir_of(elem_of(vty)), v[0], gp), line)
             else:                                         # MemcpyConst：常量池 + memcpy
                 if self._dry:
                     # ★ 常量池是**模块级**副作用（`<const.N>`+`%.N`），空跑里不能建：
@@ -336,7 +340,7 @@ class Gen(object):
                 self.mark_term()
     def gen_vardef(self, vd):
         if id(vd) not in self.pre:
-            self.pre[id(vd)] = [self.alloc(ir_of(parse_ty(vd[3])), vd.line)]
+            self.pre[id(vd)] = [self.alloc(obj_of(parse_ty(vd[3])), vd.line)]
         # ★ 条目按 **(名字, 第几次出现)** 取（同名遮蔽会有多条同名记录，与 C++ 侧
         #   `LocalIndex` 同解）：真实那一趟维护 `ecur`，预扫描用 `drycur`（空跑开始时
         #   从 `ecur` 拷贝，嵌套空跑共享）。
@@ -469,13 +473,17 @@ class Gen(object):
         绝不用 zext；乘数是"内层维数之积"，为 1 时不发 MulI。
         """
         pv = self.lookup(lv[1]); ty, cur = pv[0], pv[1]
+        # ★ 只影响读取（形状）：数组形参在 GEP 前先 load 出槽里的指针
+        if len(ty[1]) > 0 and ty[1][0] is None:
+            cur = self.val('Load @ %s %s' % (ir_of(ty), cur), lv.line, ir_of(ty), None)[0]
+            ty = elem_of(ty)
         for sub in subs(lv):
             E = elem_of(ty); m = n_leaf(E); x = self.gen_expr(sub)
             if m != 1:
                 x = self.val('MulI @ %s %s' % (x[0], self.ci(m, sub.line)[0]),
                              sub.line, 'i32', ('int', ()))
-            cur = self.val('GetElementPtr @ ptr[%s] i64 0 %s %s'
-                           % (ir_of(E), cur, self.sext(x[0], sub.line)),
+            cur = self.val('GetElementPtr @ %s i64 0 %s %s'
+                           % (obj_of(E), cur, self.sext(x[0], sub.line)),
                            sub.line, 'ptr[%s]' % ir_of(E), None)[0]
             ty = E
         return cur, ty
@@ -628,7 +636,6 @@ def build_module(exe, path, tmpdir):
         actual.pop()
     return out, actual
 
-
 def main(argv=None):
     ap = argparse.ArgumentParser(description='独立第二份 IRGen 交叉验证（S05 轨 D）')
     ap.add_argument('--compiler', default='compiler/build/compiler')
@@ -636,6 +643,8 @@ def main(argv=None):
     ap.add_argument('--dir', default='tests')
     ap.add_argument('--limit', type=int, default=0)
     ap.add_argument('--verbose', action='store_true')
+    ap.add_argument('--list-diffs', action='store_true')
+    ap.add_argument('--verdicts', default='')
     a = ap.parse_args(argv)
     if not os.path.isfile(a.compiler):
         sys.stderr.write('找不到编译器: %s\n' % a.compiler)
@@ -667,26 +676,33 @@ def main(argv=None):
             return path, exc
 
     with ThreadPoolExecutor(max_workers=a.jobs) as pool:
+        vf = open(a.verdicts, 'w', encoding='utf-8') if a.verdicts else None
         for path, res in pool.map(work, files):
             if isinstance(res, Exception):
                 err.append((path, '%s: %s' % (type(res).__name__, res)))
                 sys.stdout.write('ERR  %s\n' % path)
                 sys.stdout.flush()
+                if vf is not None: vf.write('ERR\t%s\n' % path)
             elif res[0] == res[1]:
                 ok += 1
+                if vf is not None: vf.write('OK\t%s\n' % path)
                 if a.verbose:
                     sys.stdout.write('OK   %s\n' % path)
             elif same_up_to_alloca_position(res[0], res[1]):
                 okorder += 1
+                if vf is not None: vf.write('ALLOCA\t%s\n' % path)
                 if a.verbose:
                     sys.stdout.write('OK*  %s（等价：只差 Alloca 的位置）\n' % path)
             else:
                 d = unified(res[0], res[1])
                 bad.append((path, d))
+                if vf is not None: vf.write('DIFF\t%s\n' % path)
                 sys.stdout.write('DIFF %s\n' % path)
                 sys.stdout.flush()
                 if a.verbose:
                     sys.stdout.write(d + '\n')
+    if vf is not None:
+        vf.close()
     shutil.rmtree(tmpdir, ignore_errors=True)
     print('=' * 72)
     print('语料文件 %d 个：逐字节一致 %d，**等价（只差 Alloca 位置）** %d，'
@@ -695,15 +711,11 @@ def main(argv=None):
         print('  说明：§五.1 只要求 alloca 在**函数入口 Region**，未规定它在其中的位置；')
         print('        Alloca 之间无数据依赖 ⇒ 判据在这一项上比语义更严，故单独放宽。')
         print('        放宽的只有这一项：Alloca 多重集必须相同，其余行仍要求逐字节相同。')
-    for p, d in bad[:3]:
-        print('-' * 72)
-        print('差异文件: %s' % p)
-        print(d)
+        print_bad(bad, a.list_diffs)
     for p, m in err[:5]:
         print('-' * 72)
         print('工具错误: %s\n  %s' % (p, m))
     return 2 if err else (1 if bad else 0)
-
 
 if __name__ == '__main__':
     sys.exit(main())

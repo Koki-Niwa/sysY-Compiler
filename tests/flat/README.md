@@ -1,20 +1,16 @@
 # `compiler/tests/flat/` —— flat（平面层）用例集
 
-给 **S06「平面 IR + FlattenCFG」** 准备的语料：把"扁平层要吃的那份输入形状"
-逐字节钉死。跑法：
+**S06「平面 IR + FlattenCFG」** 语料：保留结构化输入形状的逐字节契约，
+并检查实际平面 IR 的往返和运行结果。跑法：
 
 ```bash
 python3 compiler/tools/selftest/run_flat_cases.py --compiler compiler/build/compiler
 ```
 
-> ⚠️ **当前档位是 `--emit=structured-ir --normalize`，不是 `--emit=flat-ir`。**
-> 建这份语料时 `--emit=flat-ir` 还没实现（编译器回
-> `error: unknown --emit kind 'flat-ir'`，退出码 2），所以先按**结构化层**判，
-> 覆盖的正是扁平层必须正确处理的那些形态：φ 位点、嵌套合流、循环规范化结果、
-> 临界边、`alloca` 位置、不可达代码、以及"还没有 mem2reg"的证据。
-> S06 的 `--emit=flat-ir` 落地后，把
-> `run_flat_cases.py` 顶部的 `EMIT_ARGS` / `ROUNDTRIP_ARGS` 换成 flat 档，
-> 再跑一次 `--update` 重刷全部 `expect` 即可 —— 判据与目录结构都不用改。
+`expect` 文件是在 S06 前生成的**结构化 IR**，因此继续检查输入形状。
+runner 另行执行 `--emit=flat-ir` / `--from-flat` 并用独立 GCC 运行结果
+检查平面 IR 的 stdout 和 `main` 返回值。`min/11-stale-slot-at-join/good.sy`
+的 GCC 输出为 `7\n`：单靠冻结 IR 文本或往返无法发现错误的 `0\n`。
 
 ## 目录布局
 
@@ -37,7 +33,7 @@ tests/flat/
 |---|---|---|
 | 形态 | `case.sy` + `expect` | `good.sy` / `bad.sy` + 两份 `expect` |
 | 回答的问题 | "这个形态**长什么样**"（形状契约） | "**这一处**改动让 dump 变了什么"（因果最小对照） |
-| 判据 | 与 `expect` 逐字节相同 + 往返逐字节相同 + stderr 零诊断 | 同左（两份各判一次）+ 两个源文件**恰好 1 个 hunk** |
+| 判据 | 结构化 `expect` 与往返；flat 往返；flat 与 GCC 的 stdout/返回值；零诊断 | 同左（两份各判一次）+ 两个源文件**恰好 1 个 hunk** |
 | 用途 | 冻结形状，改格式必须重新生成 | 证明某个形态判据**真的可观察**（不是"看起来对"） |
 
 `golden/` 的 14 个用例（编号 = 目录名前缀）：
@@ -64,7 +60,7 @@ tests/flat/
 全局零初始化/数据初始化、浮点乘/整数乘、`while`/`if`。
 每组差在哪一处、dump 里能看出什么，见该目录的 `README`。
 
-## 生成 / 刷新 `expect`（**唯一合法来源**）
+## 生成 / 刷新结构化 `expect`（**唯一合法来源**）
 
 单个用例（`golden`）：
 
@@ -88,18 +84,20 @@ compiler/build/compiler compiler/tests/flat/min/04-continue-vs-break/bad.sy \
 python3 compiler/tools/selftest/run_flat_cases.py --compiler compiler/build/compiler --update
 ```
 
-⚠️ **绝对不要手写 `expect`。** 转储的排版（列顺序、属性顺序、缩进）是**真实输出
-定义的契约** —— S03/S04/S05 都栽在"手写示例与实际输出不一致"上。改了 dump 格式，
-就重新生成 `expect`，不要改文字。
+⚠️ **绝对不要手写 `expect`。** `--update` 只刷新结构化 IR 的冻结文本；
+平面 IR 不冻结为文本 golden，因为错误的平面产物也会稳定往返。刷新时仍会
+执行 GCC 对照，防止把错误行为当成新基线。
 
 ## 判据（`run_flat_cases.py`）
 
-`golden/*/case.sy` 与 `min/*/good.sy|bad.sy` 每一个都要过三条：
+`golden/*/case.sy` 与 `min/*/good.sy|bad.sy` 每一个都要过四条：
 
 1. **编译**：退出码 0，且 **stderr 零诊断**（有诊断即失败）；
 2. **对照**：产物与对应 `expect` **逐字节相同**；
-3. **往返**：产物再走 `--from-structured --normalize --emit=structured-ir`
-   读回 dump，必须与产物**逐字节相同**。
+3. **往返**：结构化产物由 `--from-structured` 读回、平面产物由
+   `--from-flat` 读回；两者再 dump 都必须与原产物**逐字节相同**；
+4. **行为**：平面 IR 解释器的 stdout 和 `main` 返回值与 GCC 对同一源码、
+   同一固定输入的运行结果相同。
 
 `min/` 另加：`good.sy` 与 `bad.sy` 的统一 diff **恰好 1 个 hunk**（`difflib` 口径，
 与 `diff -u` 相同）。
@@ -108,7 +106,7 @@ python3 compiler/tools/selftest/run_flat_cases.py --compiler compiler/build/comp
 
 ## 已知边界（写下来，免得后来人踩）
 
-* `--emit=flat-ir` 尚不存在，见文首的说明。
+* 原有 `expect` 是结构化形状契约，不可当作平面 IR 的正确性证据。
 * 结构化层**还没有 mem2reg**（`golden/13` 就是这件事的证据）：变量一律
   `alloca`/`load`/`store`，合流处只有"槽的再读"，没有 φ。
 * `IRGen` 把 `break` 与 `continue` **都**降级成 `BreakOp`，靠形状推断区分。

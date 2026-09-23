@@ -27,22 +27,15 @@ flat_exec.py —— 轨 E：**平面 IR 与结构化 IR 行为等价**（S06 最
   ① 是最关键的一项：边界 off-by-one、`<`/`<=` 之差、`continue` 少走一次，
   都会让某个循环的迭代次数不同。
 
-★ 平面 IR 的循环怎么数（与结构化侧口径**对齐**）
-  * 回边 = 一条边 `(src, dst)` 且 `dst` 在 `src` 的**支配**位置上 —— 这里用
-    更简单也更稳的等价判据：**`dst` 的块号小于等于 `src` 的块号且 `dst` 是
-    该回边的目标**（展平器把循环头排在前、体排在后，回边总是向后跳）。
-  * 进入循环头 ⇒ 压栈；从回边回到已在栈上的头 ⇒ 计数 +1；
-    跳到一个**不在**栈上的块（或函数结束）⇒ 把"不再包含它的那些循环"出栈，
-    **出栈时把迭代次数追加进轨迹**。
-  ⇒ 嵌套循环的出栈顺序 = 内层先出 = 与结构化侧的记录顺序一致。
-  * 结构化侧的 `While`/`For` 在**循环结束时**记一次；两边因此可比。
+★ 平面 IR 的循环怎么数：进头压栈、每次进头计数、出循环时出栈并追加轨迹
+  （展平器把循环头排在前、体排在后 ⇒ 回边总是向后跳）。嵌套循环内层先出，
+  与结构化侧 `While`/`For`"循环结束时记一次"的顺序一致。
 
 退出码：0 = 全过且覆盖达标；1 = 有差异或覆盖不足；2 = 工具自身错误。
 """
 
 import argparse
 import os
-import re
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -55,7 +48,7 @@ import loopnorm_ir as L        # noqa: E402  （只借它的"读结构化 dump"�
 
 ROOT = os.path.abspath(os.path.join(HERE, '..', '..', '..'))
 
-from flat_mod import FlatMod, Inst, _take_type  # noqa: F401
+from flat_mod import FlatMod  # noqa: F401  （`Inst`/`_take_type` 现在只在 flat_mod 内用）
 
 class FlatExec(C.Machine):
     """平面 IR 的执行器：**只负责"下一条指令怎么取"**（基本块 + 终结符）。"""
@@ -93,29 +86,19 @@ class FlatExec(C.Machine):
     def _track_loop(self, name, cur, stack, bodies):
         """【后置】把"进/出循环"折进 `stack`（轨迹计数；不改执行语义）。
 
-        ★★ 口径与结构化侧同一句话 ★★
-          `loopnorm_exec` 的 `While`：`n += 1` 在"条件为真"之后、"执行体"
-          之前 ⇒ **n = 体真正被执行的轮数**。
-        基本块层：**每一轮都经过循环头**（条件在那里判），而一批进头里
-        有且仅有**最后一次**是"条件为假、体不跑"（正常退出）。所以：
-          ① 每次进头 +1；
-          ② 真正**出循环**的时候（当前块已不属于该循环的体），把该循环
-             计数 −1 —— 前提是 `prev` 就是它的头（= 头直接走了出口边）。
-             `break` 出循环时 `prev` 是**体内某块**，不减（那一轮跑了体）。
-        ⚠️ 判据必须看**实际走了哪条边**（`prev`），不能看"头的后继里有没有
-           体内块" —— 头的后继里永远有一个体入口，静态看恒真（试过：退化
-           成"每次进头 +1"，`lc.sy` 得 4、应为 3）。
+        口径与结构化侧同一句：**n = 体真正被执行的轮数**（`loopnorm_exec`
+        的 `While` 在"条件为真"之后才 `n += 1`）。基本块层每一轮都过头，
+        而一批进头里只有最后一次是"条件为假、体不跑" ⇒ 出循环时 −1。
+        ⚠️ 判据必须看**实际走了哪条边**（`prev`）：头的后继里永远有体入口，
+           静态判"后继里有没有体内块"恒真（试过：`lc.sy` 得 4、应为 3）。
         """
         while stack and cur not in bodies.get(stack[-1][0], {stack[-1][0]}):
             h, n = stack.pop()
-            # ② 最后一次进头只判了条件 ⇒ 扣掉。判据必须看**实际走了哪条边**：
-            #    离开的那个块是头、而入口块（`cur`，正是头跳到的那个）在体外。
-            #    ⚠️ 比"`cur` 就是头"（第一版）严格更对：头可能跳到**体内**的
-            #    另一个块（`while(i<5){…}` 的 L49 先跳 L51、L51 再跳出去），
-            #    那种形状下 `cur` 是 L51 而不是 L49 ⇒ 第一版扣不到（实测
-            #    `51_short_circuit3.sy`：结构化 `0`、平面 `1`）。
-            #    ⚠️ 也不能扣"`prev` 是头"以外的情形：`break` 出循环时 `prev`
-            #    是体内某块，那一轮**确实跑了体**，不该扣。
+            # ② 最后一次进头只判了条件 ⇒ 扣掉。看**离开的块是头、而入口块
+            #    （`cur`）在体外**：头可能先跳到体内另一个块再出去
+            #    （`while(i<5){…}` 的 L49→L51→体外），那时 `cur` 是 L51，
+            #    "`cur` 就是头"的判据扣不到（实测 `51_short_circuit3.sy`）。
+            #    但 `break` 出循环时 `prev` 是体内某块（那一轮跑了体）⇒ 不扣。
             if h in self._head_exit:
                 self._head_exit.discard(h)
                 if n > 0:
@@ -154,15 +137,10 @@ class FlatExec(C.Machine):
         for idx, (_pid, pty) in enumerate(params):
             env[idx] = args[idx] if idx < len(args) else 0
         saved = self.env
-        # ★★ `_cur_func`/`_cur_block`/`_prev_block` 也要**跟着一起存取** ★★
-        #   它们原来只被"每次进块时"改写，**函数返回后不恢复** ⇒ 外层函数在
-        #   `call` 之后仍以为自己在**被调用者**里：
-        #     · φ 按"真实前驱块"选入值时会拿被调用者的块号去比 ⇒ 选错入值；
-        #     · 循环轨迹的 `_track_loop` 用的是被调用者的 `bodies` ⇒ 计数错。
-        #   实测（`26_scope4.sy`）：`call @getA` 之后的 `store i32 %56, %38`
-        #   报 `cur_func=getA cur_block=L0`，而它其实是 `main` 的 L16 ——
-        #   于是 `i` 的两条自增一条都没生效、`while(i<3)` 只跑 2 轮、
-        #   输出 3216（gcc 与结构化侧都是 4474）。
+        # ★ `_cur_func`/`_cur_block`/`_prev_block` 也要一起存取：它们原来
+        #   函数返回后不恢复 ⇒ 外层以为自己在被调用者里（φ 选错入值、
+        #   `_track_loop` 用错 `bodies`）。实测 `26_scope4.sy`：`call @getA`
+        #   之后的 store 报 `cur_func=getA`，`while(i<3)` 只跑 2 轮。
         saved_ctx = (self._cur_func, self._cur_block, self._prev_block)
         self.env = env
         self._phi_env = {}
@@ -173,9 +151,8 @@ class FlatExec(C.Machine):
         try:
             cur = self.mod.entries[name]
             while True:
-                # 循环轨迹的计数全在 `_track_loop` 里（出栈 + 计数 + 扣掉
-                # "只判条件没跑体"的那一次）—— 这里**不能**再留一份出栈循环，
-                # 否则它先把栈弹空、扣减就永远轮不到（实测：`lc.sy` 得 4）。
+                # 计数全在 `_track_loop` 里 —— 这里**不能**再留一份出栈循环，
+                # 否则它先把栈弹空、扣减永远轮不到（实测 `lc.sy` 得 4）。
                 bodies = self.mod.loop_bodies.get(name, {})
                 self._track_loop(name, cur, stack, bodies)
                 if cur not in blocks:
@@ -294,30 +271,12 @@ class FlatExec(C.Machine):
             raise C.Ret(None)
         if k == 'unreachable':
             raise C.Unsupported('reached unreachable')
-        # φ：按**前驱块**选入值（与结构化侧"汇合点选择"同一语义）
+        # φ：按**真实前驱**选入值（`env` 跨迭代复用 ⇒ 上一轮的绑定还在里面，
+        #   按"块号 ≥ 当前块"之类的启发式会把回边的值选走）。
+        #   判据：跳转时把 `prev` 与那一刻的 `env` 快照一起记下，φ 只认
+        #   `blocks[k] == prev` 且值在该快照里的那一条（同一前驱只有一条边，
+        #   临界边已由展平器拆开 ⇒ 无歧义）。
         if k == 'phi':
-            # ★★ 按**真实前驱**选入值（不能用"上一个执行过的块"）★★
-            #   `env` 是**跨迭代复用**的 ⇒ 上一轮留下的绑定仍在里面。
-            #   实测（`break/continue` 锚点用例）：回边 L3→L1 回到 φ 时，
-            #   入值 `(%8 L0)` 的 `%8`（上一轮的 load）**还在 env 里**，
-            #   而 `%8` 恰好排在 `(%12 L3)` 前面 ⇒ 选错 ⇒ 循环变量永远是 0
-            #   ⇒ 死循环（撞步数预算）。
-            #   判据：φ 的入值块必须是 `cur` 的**真实前驱**；若有多条同时命中
-            #   （既在前驱集合里、又在上一次执行的块上），优先**回边来源**
-            #   （即块号 ≥ 当前块的那个），它与"这次是从哪条边来的"一致。
-            # ★★ 用"**实际跳转那一刻的环境快照**"选入值 ★★
-            #   【为什么不能用别的】第一版按"块号 ≥ 当前块 ⇒ 一定是回边"来挑
-            #   （`25_while_if` 那次修的），那只是**启发式**：循环头有两个前驱
-            #   （进入边 L0 / 回边 L7），而 `env` 是**跨迭代复用**的字典 ——
-            #   上一轮回边留下的绑定仍在里面 ⇒ 从**进入边**首次进头时，
-            #   `(值 L7)` 那个候选**恰好也在 env 里**，启发式就把回边的值选走了。
-            #   实测（`28_while_test3.sy` 的 `EightWhile`）：`%1 = phi [(%17 L0),
-            #   (%5 L7)]` 首次进头选成了 `%5` —— 一个**指向全局的指针**
-            #   ⇒ 循环条件 `a < 20` 变成"指针 < 20" ⇒ 执行器类型错。
-            #   【正确判据】φ 的入值来自**我们真正走过的那条边**：跳转时把
-            #   `prev` 块与那一刻的 `env` 快照一起记下，φ 只认
-            #   `blocks[k] == prev` 且值在该快照里的那一条（不可能有歧义：
-            #   同一个前驱只对应一条边；临界边已由展平器拆开）。
             pv = self._phi_env.get(inst.res)
             pb = self._phi_pred.get(inst.res)
             if pv is not None:
@@ -477,6 +436,27 @@ def describe_diff(a, b):
     return '；'.join(msgs) if msgs else '（未知差异）'
 
 
+def report_diffs(diffs):
+    """列出**全部**差异并按轨迹字段分类（`--list-diffs`）。
+
+    判据看字段（`out`/`mem`/`ret` 全同 ⇒ 只是循环计数口径），**不看消息
+    字符串**；而且必须列全 —— 原来只印 `diffs[:10]`，清单极易被当成全集
+    （实测把 10 当成 76，见 TESTING-GUIDE"数字只认摘要行"）。
+    """
+    result_class, count_class = [], []
+    for f, m, ta, tb in diffs:
+        rest_same = (ta is not None and tb is not None and
+                     ta['out'] == tb['out'] and ta['mem'] == tb['mem'] and
+                     ta['ret'] == tb['ret'])
+        (count_class if rest_same else result_class).append((os.path.relpath(f, ROOT), m))
+    print('--- 结果类差异（`out`/`mem`/`ret` 至少一项不同）: %d ---' % len(result_class))
+    for rel, m in result_class:
+        print('  ✘ %s\n    %s' % (rel, m))
+    print('--- 仅循环计数口径: %d ---' % len(count_class))
+    for rel, _m in count_class:
+        print('  · %s' % rel)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--compiler', required=True)
@@ -488,6 +468,8 @@ def main():
     ap.add_argument('--show-trace', default='')
     ap.add_argument('--dump-traces', default='')
     ap.add_argument('--verbose', action='store_true')
+    # `--list-diffs`：列全部差异并分类（结果类 = `out`/`mem`/`ret` 有不同）。
+    ap.add_argument('--list-diffs', action='store_true')
     args = ap.parse_args()
 
     compiler = os.path.abspath(args.compiler)
@@ -529,7 +511,7 @@ def main():
         if st == 'same':
             same.append(f)
         elif st == 'diff':
-            diffs.append((f, describe_diff(a, b)))
+            diffs.append((f, describe_diff(a, b), a, b))
         else:
             if st == 'error':
                 key = '工具/单方失败（%s）' % msg
@@ -543,8 +525,11 @@ def main():
     print('参与执行的文件数: %d' % len(files))
     print('两种形状轨迹相同: %d' % len(same))
     print('轨迹不同:         %d' % len(diffs))
-    for f, m in diffs[:10]:
-        print('  ✘ %s\n    %s' % (os.path.relpath(f, ROOT), m))
+    if args.list_diffs:
+        report_diffs(diffs)
+    else:
+        for f, m in diffs[:10]:
+            print('  ✘ %s\n    %s' % (os.path.relpath(f, ROOT), m))
     total_skipped = sum(len(v) for v in skips.values())
     print('跳过: %d（**逐类列出原因，不静默**）' % total_skipped)
     for k in sorted(skips, key=lambda x: -len(skips[x])):

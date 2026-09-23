@@ -127,6 +127,7 @@ def main():
     ap.add_argument('--dir', default=os.path.join(ROOT, 'tests'))
     ap.add_argument('--dump-diff', default='', help='只处理这一个 .sy，并打印结构等价判定')
     ap.add_argument('--verbose', action='store_true')
+    ap.add_argument('--verdicts', default='')
     args = ap.parse_args()
 
     compiler = os.path.abspath(args.compiler)
@@ -168,6 +169,11 @@ def main():
             else:
                 errs.append((f, msg))
 
+    if getattr(args, 'verdicts', ''):   # 全量判定（打印清单会被截断，不能做集合比对）
+        with open(args.verdicts, 'w', encoding='utf-8') as vf:
+            for st, lst in (('SAME', same), ('DIFF', diffs), ('SKIP', skips), ('ERR', errs)):
+                for it in lst:
+                    vf.write('%s\t%s\n' % (st, it[0] if isinstance(it, tuple) else it))
     print('== 轨 D：独立实现的第二份规范化器 ==')
     print('参与比较的文件数: %d' % len(files))
     print('逐字节一致: %d' % len(same))

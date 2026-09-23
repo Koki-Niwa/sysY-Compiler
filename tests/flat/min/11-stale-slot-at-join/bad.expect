@@ -1,0 +1,29 @@
+(Module "bad.sy") {
+  (Func "main" :ret i32 :param [] @line 4) {
+    (Alloca %main.0 i32 @line 5)
+    (Int %main.1 0 @line 5)
+    (Sext %main.2 %main.1 @line 5)
+    (GetElementPtr %main.3 i32 i64 0 %main.0 %main.2 @line 5)
+    (Int %main.4 0 @line 5)
+    (Store i32 %main.4 %main.3 @line 5)
+    (Int %main.5 0 @line 6)
+    (Load %main.6 i32 %main.0 @line 6)
+    (Lt %main.7 %main.6 %main.5 @line 6)
+    (If %main.7 @line 6) {
+      (Load %main.8 i32 %main.0 @line 6)
+      (Int %main.9 0 @line 6)
+      (SubI %main.10 %main.9 %main.8 @line 6)
+      (Store i32 %main.10 %main.0 @line 6)
+      (Yield @line 6)
+    }
+    {
+      (Yield @line 6)
+    }
+    (Load %main.11 i32 %main.0 @line 7)
+    (Call "putint" %main.11 @line 7)
+    (Int %main.12 10 @line 7)
+    (Call "putch" %main.12 @line 7)
+    (Int %main.13 0 @line 8)
+    (Return %main.13 @line 8)
+  }
+}

@@ -1,0 +1,8 @@
+// 汇合点上"某条分支没写过"的槽必须取**该分支路径上的内存内容**，
+// 不能取"上一次 store 的旧值"（gcc = 结构化 = 7，改前平面 = 0）。
+int main() {
+  int ans = 7;
+  if (ans < 0) ans = -ans;
+  putint(ans); putch(10);
+  return 0;
+}

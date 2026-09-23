@@ -32,6 +32,7 @@ from concurrent.futures import ThreadPoolExecutor
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import loopnorm_ir as L  # noqa: E402  （**纯解析器**，不含任何展平语义）
+from iic_shapes import obj_of_ir, print_bad   # noqa: E402  ★ 只影响读取（形状）
 ROOT = os.path.abspath(os.path.join(HERE, '..', '..', '..'))
 ICMP_PRED = {'Eq': 'eq', 'Ne': 'ne', 'Lt': 'slt', 'Le': 'sle', 'Gt': 'sgt', 'Ge': 'sge'}
 FCMP_PRED = {'Eq': 'oeq', 'Ne': 'une', 'Lt': 'olt', 'Le': 'ole', 'Gt': 'ogt', 'Ge': 'oge'}
@@ -58,7 +59,6 @@ def norm_ty(t):
     t = re.sub(r'\[\s+', '[', t)              # `[ 3 x i32]` → `[3 x i32]`
     t = re.sub(r'\s+\]', ']', t)              # `[3 x i32 ]` → `[3 x i32]`
     return re.sub(r'\bptr\s+\[', 'ptr[', t)   # `ptr [i32]` → `ptr[i32]`
-
 
 def ptr_to(t):
     return 'ptr[%s]' % t
@@ -530,7 +530,10 @@ def global_line(op):
     """`@g = global <类型> <初始化器> @line N`（§2/§4.4）。"""
     a, ty, init = op.attrs, 'i32', 'zeroinitializer'
     for i, t in enumerate(a):
-        if t == ':type' and i + 1 < len(a): ty = norm_ty(a[i + 1])
+        if t == ':type' and i + 1 < len(a):
+            # ★ 只影响读取（形状）：`global <类型>` 用**对象类型**，
+            #   dump 的属性给的是值的包装类型（`ptr[…]`）。
+            ty = obj_of_ir(norm_ty(a[i + 1]))
         elif t == ':init' and i + 1 < len(a) and a[i + 1].lstrip('"') == 'data':
             it = a[i + 2:]
             if '@line' in it: it = it[:it.index('@line')]
@@ -559,9 +562,12 @@ def render_function(fn):
     out = ['define %s @%s(%s) {' % (
         fn.ret, fn.name, ', '.join('%s %%%d' % (p.ty, p.num) for p in fn.params))]
     for v in cdefs:            # 常量定义行提到函数顶部，按拿号顺序（C++ 的真实排版）
+        # ★ 只影响读取（形状）：**全局地址**常量不带 `@line`，普通常量带。
+        suffix = ''
+        if v.k == 'c' and v.line:
+            suffix = ' @line %d' % v.line
         out.append('  %%%d = %s %s%s' % (
-            v.num, v.ty, v.text if v.k == 'c' else '@' + v.name,
-            ' @line %d' % v.line if v.line else ''))
+            v.num, v.ty, v.text if v.k == 'c' else '@' + v.name, suffix))
     for b in fn.blocks:
         out.append('L%d:' % b.idx)
         for item in items_of(b):
@@ -760,6 +766,7 @@ def main():
     ap.add_argument('--dump-diff', default='', help='只处理这一个 .sy，并打印结构等价判定')
     ap.add_argument('--selfcheck', action='store_true',
                     help='只对自己的产物做自洽检查（C++ 侧没实现 --emit=flat-ir 时用）')
+    ap.add_argument('--verdicts', default='')
     ap.add_argument('--verbose', action='store_true')
     args = ap.parse_args()
     compiler = os.path.abspath(args.compiler)
@@ -777,12 +784,22 @@ def main():
             st, msg = fu.result()
             {'same': same, 'diff': diffs, 'skip': skips,
              'error': errs}[st].append(f if st == 'same' else (f, msg))
+    if getattr(args, 'verdicts', ''):
+        with open(args.verdicts, 'w', encoding='utf-8') as vf:
+            for f in same:
+                vf.write('SAME\t%s\n' % f)
+            for f, _m in diffs:
+                vf.write('DIFF\t%s\n' % f)
+            for f, _m in skips:
+                vf.write('SKIP\t%s\n' % f)
+            for f, _m in errs:
+                vf.write('ERR\t%s\n' % f)
     print('== 轨 D：独立实现的第二份 FlattenCFG ==')
     for lab, val in (('参与比较的文件数', len(files)), ('逐字节一致', len(same)),
                      ('有差异', len(diffs)), ('范围外（双方一致拒绝）', len(skips)),
                      ('工具/解析错误', len(errs))):
         print('%s: %d' % (lab, val))
-    for f, m in diffs[:20]: print('  DIFF %s\n    %s' % (os.path.relpath(f, ROOT), m))
+    print_bad([(os.path.relpath(f, ROOT), m) for f, m in diffs], True, head=20)
     for f, m in errs[:20]: print('  ERR  %s  %s' % (os.path.relpath(f, ROOT), m))
     if errs and not same and not diffs and len(errs) + len(skips) == len(files):
         print('  提示：C++ 侧 `--emit=flat-ir` 可能还没实现（轨 D 无法比较）⇒ 改用 '

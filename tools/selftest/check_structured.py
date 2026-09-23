@@ -70,7 +70,10 @@ OPKINDS = {
 }
 # 明确**不许出现**的（SysY 无移位/位运算；实测 0 次）
 FORBIDDEN = {'AndI', 'OrI', 'XorI', 'LShift', 'RShift', 'Shl', 'LShr', 'AShr'}
-TERMINATORS = {'Yield', 'Break', 'Return', 'Goto', 'Unreachable'}
+# ⚠️ 加 Op 时要**同时**更新这里——`Continue` 与 `Break` 一样是终结 Op
+#    （两者都终止当前 Region 的控制流）。先前只更新了 OPKINDS、漏了这一处，
+#    于是"if 体的最后一条是 continue"被误报成"没有终结 Op"（5 个文件假红）。
+TERMINATORS = {'Yield', 'Break', 'Continue', 'Return', 'Goto', 'Unreachable'}
 CF_CONTAINERS = {'If', 'While', 'For'}
 VOID_CALLS = {'llvm.memcpy', 'llvm.memset',
               '_sysy_starttime', '_sysy_stoptime'}

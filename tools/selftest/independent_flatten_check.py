@@ -1,26 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-independent_flatten_check.py —— 轨 D：**独立实现的第二份 FlattenCFG**
-用法（关卡照这个签名调用）：
-    python3 independent_flatten_check.py --compiler <路径> [--jobs N] [--limit N]
-                                         [--dir <语料目录>] [--verbose]
-    python3 independent_flatten_check.py --compiler <路径> --dump-diff <文件.sy>
-    python3 independent_flatten_check.py --compiler <路径> --selfcheck [--jobs N]
-做什么：读 `--emit=structured-ir --normalize` 的 dump（结构化 IR：变量在内存里、控制流是
-树），按 `docs/handoff/03-设计/平面IR与dump格式.md` **§6** 自己展平成平面 CFG，再与 C++
-`--emit=flat-ir` 的产物**逐字节比较**（`--selfcheck` 不比对，只做自洽检查）。退出码：
-0 = 全部逐字节一致、1 = 至少一处差异或错误、2 = 工具自身错误。
-★ 纪律：写本文件**之前不读** `structured/FlattenCFG.{h,cpp}`、`ir/FlatDump.cpp`、
-`.reference/`（已遵守：§6.1–§6.4 全部按文档正文独立推导）；只把 §2–§5 当格式/命名约定；
-差异逐条归因，不照抄 C++。
-★ 判据（§6）：① 函数一个入口块 `L0`，容器入口/汇合点各成一块，`(Yield)` = 跳到本 Region
-续点，`(Return)`/`(Unreachable)` 结束当前块；② `While`/`For` 按 §6.2 降级；③ φ 只在**前驱
-数 ≥ 2** 的块、只对"在分支里被 store 过、又被 load 过"的**槽**放，值全同不放、缺值补零；
-④ 临界边（源块多后继 **且** 目标块多前驱）插一个只有 br 的空块拆开。格式取舍见
-`Flattener` 的注释与报告：φ 入值**空格**分隔（§5"拼法"列；§2 概览写逗号）、`br` 目标块
-不带 `%`（§4.2）、常量在**第一次引用处**打印定义行、全局地址当常量（没有 getglobal）。
-零第三方依赖（Python 3 标准库），可直接从源码运行（不生成 .pyc/marshal）。
+"""独立 FlattenCFG 验收器：结构化 dump → 平面 CFG，与 C++ 产物比较。
+
+按 `docs/handoff/03-设计/平面IR与dump格式.md` §6 实现控制流、φ 与临界边；
+`--selfcheck` 只验证独立产物，`--dump-diff` 定位单文件差异。
+退出码：0 全部一致；1 有差异；2 工具错误。
 """
 import argparse
 import os
@@ -28,10 +12,12 @@ import re
 import struct
 import subprocess
 import sys
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import loopnorm_ir as L  # noqa: E402  （**纯解析器**，不含任何展平语义）
+import flat_exec_manifest as manifest  # noqa: E402
 from iic_shapes import obj_of_ir, print_bad   # noqa: E402  ★ 只影响读取（形状）
 ROOT = os.path.abspath(os.path.join(HERE, '..', '..', '..'))
 ICMP_PRED = {'Eq': 'eq', 'Ne': 'ne', 'Lt': 'slt', 'Le': 'sle', 'Gt': 'sgt', 'Ge': 'sge'}
@@ -48,10 +34,8 @@ BR2 = re.compile(r'^  br i1 %(\d+), label (L\d+), label (L\d+)(?: @line \d+)?$')
 PHI = re.compile(r'^  %(\d+) = phi (\S+) \[(.*?)\](?: @line \d+)?$')
 DEF = re.compile(r'^  %(\d+) = (.*)$')
 TERM = re.compile(r'^  (br |ret |unreachable(\s|$))')
-
 class FlattenError(Exception):
     """本实现拒绝展平的输入（畸形 / 超出结构化层规格）。"""
-
 def norm_ty(t):
     """类型拼法规范化：共用的结构化解析器在**嵌套** `[` 后会留下空格
     （`ptr [[2 x i32]]`），而 C++ 两侧的类型打印都是 `ptr[[2 x i32]]`（§3：两层同一个
@@ -59,18 +43,14 @@ def norm_ty(t):
     t = re.sub(r'\[\s+', '[', t)              # `[ 3 x i32]` → `[3 x i32]`
     t = re.sub(r'\s+\]', ']', t)              # `[3 x i32 ]` → `[3 x i32]`
     return re.sub(r'\bptr\s+\[', 'ptr[', t)   # `ptr [i32]` → `ptr[i32]`
-
 def ptr_to(t):
     return 'ptr[%s]' % t
-
 def pointee(t):
     return t[4:-1] if (t.startswith('ptr[') and t.endswith(']')) else t
-
 def fbits(text):
     """f32 常量的**位模式**（去重用：`-0.0`/`+0.0` 位模式不同、`nan != nan`）。"""
     try: return struct.pack('>f', float.fromhex(text))
     except (ValueError, OverflowError): return text.encode('utf-8')
-
 def srcline(op):
     """源码行号：取 attrs 里的 `@line N`（**不是** `op.line` —— 那是 dump 自身的行号）。"""
     a = op.attrs
@@ -79,7 +59,6 @@ def srcline(op):
             try: return int(a[i + 1])
             except (ValueError, IndexError): return 0
     return 0
-
 def func_sig(op):
     """`(Func "f" :ret i32 :param [ptr[i32], i32] @line 4)` → ('i32', ['ptr[i32]', 'i32'])"""
     ret, params, a = 'void', [], op.attrs
@@ -92,7 +71,6 @@ def func_sig(op):
     return ret, params
 
 # ── 平面层的值模型（先建结构，**最后**统一编号：编号只依赖最终结构）───────────
-
 class V(object):
     """一个平面值。`k`：'p' 形参 / 'c' 常量 / 'g' 全局地址 / 'i' 指令 / 'f' φ / 'e' Cell。
     `ty` 类型、`num` 编号（编号遍填）、`resolved`（只有 Cell 用）、`parts/text/name/line/
@@ -155,17 +133,16 @@ def operands_of(item):
     for p in (item.parts or []):
         out.append(p.val if isinstance(p, Typed) else p if isinstance(p, V) else None)
     return [v for v in out if v is not None]
-
 class Flattener(object):
     """一份结构化 dump → 一份平面 IR。
     ★ φ 的放置判据（§6.3，先写成注释再写代码）：
       ① 只在**前驱数 ≥ 2** 的块放：If 的 join、While/For 的循环头、循环出口；
-      ② 只对"在分支里被 store 过、又在别处被 load 过"的**槽**（= 一个 alloca 结果，
-         允许经 `getelementptr` 常量 0 下标折回）放；只写不读的槽**一个 φ 都不放**；
+      ② 只对"在分支里被 store 过、又在别处被 load 过"的直接 alloca 槽放；
+         只写不读的槽**一个 φ 都不放**；
       ③ 每个 φ 至少有一个非自身入值（循环头 φ 的入值来自循环前与循环体）。
       实现走"变量版本"的 env（槽 → 当前值，不建支配树）：store 到一个"被读过"的槽 ⇒ 更新
-      env（指令照发：不做 mem2reg，铁律 1）；load 一个"被读过"的槽 ⇒ 直接取 env 的值
-      （**不发 load**）；汇合点各入边值全同就不放 φ，缺值的入边补该类型的零常量。
+      env（指令照发：不做 mem2reg，铁律 1）；load 始终从原地址读取，
+      不能用 env 的槽值替代真实内存；汇合点各入边值全同就不放 φ，缺值补零。
     """
     def __init__(self, names, fnret, fop):
         self.names, self.fnret, self.fop = names, fnret, fop
@@ -196,25 +173,14 @@ class Flattener(object):
         visit(self.fop.regions[0] if self.fop.regions else [], 0)
         # ★ 判据 2：只写不读的槽不跟踪（"只写不读 ⇒ 一个 φ 都不放"）；被读过的槽才进
         # env（§6.3"实现方式"）；For 的 IV 槽**强制**跟踪（§6.2 明文要 φ）。
-        self.tracked = set(op for op in self.slot_order
-                           if id(op) in self.forslot or id(op) in self.read)
+        self.tracked = set(op for op in self.slot_order if id(op) in self.forslot or
+                           (id(op) in self.read and id(op) in self.brwrite))
     def root_slot(self, pname):
-        """`%p` 的**根槽**：沿 `getelementptr`（常量 0 下标）回到 `alloca`；不是本地标量
-        槽 ⇒ None（数组/聚合槽不折：元素访问不是"槽的值"）。"""
+        """`%p` 的直接标量 alloca 槽；派生地址不参与 φ 环境。"""
         d = self.names.get(pname)
         if d is None: return None
         if d.kind == 'Alloca': return d if (d.attrs and d.attrs[0] in SCALAR_TY) else None
-        if d.kind == 'GetElementPtr' and len(d.operands) == 2:
-            b = self.names.get(d.operands[0])
-            if b is not None and b.kind == 'Alloca' and b.attrs and b.attrs[0] in SCALAR_TY \
-                    and self._is_zero(d.operands[1]):
-                return b
         return None
-    def _is_zero(self, name):
-        d = self.names.get(name)
-        if d is None: return False
-        if d.kind == 'Int': return bool(d.attrs) and d.attrs[0] == '0'
-        return self._is_zero(d.operands[0]) if (d.kind == 'Sext' and d.operands) else False
     def call_ret(self, callee):
         if callee in self.fnret: return self.fnret[callee]
         if callee in L.VOID_CALLS or callee in L.RUNTIME_VOID or callee.startswith('_sysy'):
@@ -225,7 +191,8 @@ class Flattener(object):
         if name in self.vmap: return self.vmap[name]
         d = self.names.get(name)
         if d is not None and d.kind == 'GetGlobal' and len(d.attrs) > 1:
-            key = (ptr_to(norm_ty(d.attrs[1])), d.name)
+            global_ty = norm_ty(d.attrs[1])
+            key = (ptr_to(obj_of_ir(global_ty)), d.name)
             if key not in self.grefs: self.grefs[key] = gref(key[0], d.name, srcline(d))
             self.vmap[name] = self.grefs[key]
             return self.grefs[key]
@@ -263,6 +230,12 @@ class Flattener(object):
                 self.loops[-1]['breaks'].append((self.cur, dict(env)))
                 self.term(['br ', self.loops[-1]['exit']], srcline(op), env)
                 return ('break', None, srcline(op))
+            if k == 'Continue':
+                if not self.loops: raise FlattenError('Continue 不在循环里')
+                loop = self.loops[-1]
+                loop['continues'].append((self.cur, dict(env)))
+                self.term(['br ', loop['head']], srcline(op), env)
+                return ('continue', None, srcline(op))
             if k == 'Return':
                 v = self.val(op.operands[0]) if op.operands else None
                 self.term(['ret void'] if v is None else ['ret %s ' % dsty(v), v],
@@ -271,8 +244,10 @@ class Flattener(object):
             if k == 'Unreachable':
                 self.term(['unreachable'], srcline(op), env)
                 return ('unreachable', None, srcline(op))
-            if k == 'If': self.do_if(op, env)
-            elif k == 'While': self.do_while(op, env)
+            if k == 'If':
+                if self.do_if(op, env): continue
+                return ('unreachable', None, srcline(op))
+            if k == 'While': self.do_while(op, env)
             elif k == 'For': self.do_for(op, env)
             else: self.do_simple(op, env)
         return ('fell', None, srcline(ops[-1]) if ops else 0)
@@ -290,7 +265,11 @@ class Flattener(object):
                                         a[0] if a else '0', line)
         elif k == 'Alloca':
             obj = a[0] if a else 'i32'
-            self.vmap[res] = self.emit(mk(ptr_to(obj), ['alloca %s' % obj], line))
+            av = mk(ptr_to(obj), ['alloca %s' % obj], line)
+            # §6.1: alloca 恒在 L0；后遇到的 alloca 插到入口前缀。
+            if self.cur is self.fn.blocks[0]: self.emit(av)
+            else: self.fn.blocks[0].insts.insert(0, av)
+            self.vmap[res] = av
             if op in self.tracked: self.tracked_flat[self.vmap[res]] = True
         elif k == 'GetGlobal':                           # 模块级地址：按需物化
             if res is not None: self.vmap[res] = self.val(res)
@@ -298,18 +277,17 @@ class Flattener(object):
             ty = a[0] if a else 'i32'
             slot = self.root_slot(op.operands[-1])
             sv = self.vmap.get(slot.results[0]) if slot is not None else None
-            if k == 'Load' and sv is not None and sv in env:
-                self.vmap[res] = env[sv]                 # ★ 判据 2 的 load 替换
-            elif k == 'Load':
+            if k == 'Load':
                 self.vmap[res] = self.emit(
                     mk(ty, ['load %s, ptr[%s] ' % (ty, ty), v0], line))
             else:
-                self.emit(mk(None, ['store %s ' % ty, v0, ', ptr[%s] ' % ty, v1], line))
+                self.emit(mk(None, ['store %s ' % dsty(v0), v0,
+                                    ', %s ' % dsty(v1), v1], line))
                 if sv is not None and sv in self.tracked_flat: env[sv] = v0
         elif k == 'GetElementPtr':
             ety = a[0] if a else 'i32'
             self.vmap[res] = self.emit(mk(ptr_to(ety), [
-                'getelementptr %s, ptr[%s] ' % (ety, ety), v0, ', i64 ', v1], line))
+                'getelementptr %s, %s ' % (ety, dsty(v0)), v0, ', i64 ', v1], line))
         elif k == 'Bitcast':
             dst = a[0] if a else ptr_to('i32')
             src = dsty(v0)
@@ -359,8 +337,10 @@ class Flattener(object):
                 self.term(['br ', lj], r[2] or srcline(op), e)
                 inc.append((pred, e))
         self.cur = lj
+        if not inc: self.term(['unreachable'], srcline(op), env); return False
         env.clear()
         env.update(self.merge(lj, inc, srcline(op)))
+        return True
     def merge(self, block, incoming, line):
         """汇合：前驱 ≥ 2 才可能有 φ；值全同不放；缺值补零（判据 1/2/3）。"""
         if not incoming: return {}
@@ -383,6 +363,7 @@ class Flattener(object):
             if all(v is vals[0] for v in vals): out[slot] = vals[0]
             else:
                 ph = V('f', pointee(dsty(slot)))
+                ph.line = line
                 ph.incoming = [(v, pb) for v, (pb, _e) in zip(vals, incoming)]
                 block.phis.append(ph)
                 out[slot] = ph
@@ -400,23 +381,33 @@ class Flattener(object):
             if all(v is vals[0] for v in vals): c.resolved = vals[0]
             else:
                 c.resolved = V('f', c.ty)
+                c.resolved.line = c.line
                 c.resolved.incoming = list(c.incoming)
                 c.block.phis.append(c.resolved)
-    def head_cells(self, lh, env_lp):
+    def head_cells(self, lh, env_lp, line):
         """循环头：所有被跟踪的槽先放 Cell 占位（回边的值展平体之后才知道）。"""
         henv, cells = dict(env_lp), {}
-        for slot in self.tracked_flat:
+        for slot in env_lp:
+            if slot not in self.tracked_flat: continue
             cells[slot] = henv[slot] = V('e', pointee(dsty(slot)))
-            cells[slot].block = lh
+            cells[slot].block, cells[slot].line = lh, line
         return henv, cells
     def do_while(self, op, env):
         """While：Lh（条件 Region）→ br i1 → Lb（体，尾回跳 Lh）/ Lx（出口）。"""
         lp, env_lp = self.cur, dict(env)
         lh = self.new_block()
         self.term(['br ', lh], srcline(op), env_lp)
-        henv, cells = self.head_cells(lh, env_lp)
+        henv, cells = self.head_cells(lh, env_lp, srcline(op))
         lb, lx = self.new_block(), self.new_block()
-        self.loops.append({'exit': lx, 'breaks': []})
+        self.cur = lh
+        cenv = dict(henv)
+        r2 = self.run_region(op.regions[0] if op.regions else [], cenv)
+        if r2[0] != 'yield' or r2[1] is None:
+            raise FlattenError('While 条件 Region 没有 Yield 值')
+        cprev = self.cur
+        self.term(['br i1 ', r2[1], ', label ', lb, ', label ', lx],
+                  r2[2] or srcline(op), cenv)
+        self.loops.append({'head': lh, 'exit': lx, 'breaks': [], 'continues': []})
         self.cur = lb
         benv = dict(henv)
         r = self.run_region(op.regions[1] if len(op.regions) > 1 else [], benv)
@@ -424,17 +415,11 @@ class Flattener(object):
         pred = self.cur                         # 回边的真正前驱块
         if back: self.term(['br ', lh], r[2] or srcline(op), benv)
         lp_ = self.loops.pop()
-        self.resolve(cells, [(lp, env_lp)] + ([(pred, benv)] if back else []))
-        self.cur = lh                           # 循环头 = 条件 Region
-        cenv = dict((s, deref(v)) for s, v in henv.items())
-        r2 = self.run_region(op.regions[0] if op.regions else [], cenv)
-        if r2[0] != 'yield' or r2[1] is None: raise FlattenError('While 条件 Region 没有 Yield 值')
-        pred = self.cur
-        self.term(['br i1 ', r2[1], ', label ', lb, ', label ', lx],
-                  r2[2] or srcline(op), cenv)
+        self.resolve(cells, [(lp, env_lp)] + ([(pred, benv)] if back else []) +
+                     lp_['continues'])
         self.cur = lx
         env.clear()
-        env.update(self.merge(lx, [(pred, cenv)] + lp_['breaks'], srcline(op)))
+        env.update(self.merge(lx, [(cprev, cenv)] + lp_['breaks'], srcline(op)))
     def do_for(self, op, env):
         """For（§6.2）：Lp 求边界 → Lh 放 IV 的 φ + icmp → Lb 体 → Linc 步进写回槽 → Lx。"""
         if len(op.operands) < 4: raise FlattenError('For 缺操作数（要 [槽, lower, upper, step]）')
@@ -447,10 +432,10 @@ class Flattener(object):
         env_lp[slot] = lo                       # 约定 6.2.3：%lo 是 Lp 边上的 IV 入值
         lh = self.new_block()
         self.term(['br ', lh], line, env_lp)
-        henv, cells = self.head_cells(lh, env_lp)
+        henv, cells = self.head_cells(lh, env_lp, line)
         lb, linc, lx = self.new_block(), self.new_block(), self.new_block()
         ivnext = mk(ty, None, line)           # 先占位：Linc 里补 parts 并入列
-        self.loops.append({'exit': lx, 'breaks': []})
+        self.loops.append({'head': linc, 'exit': lx, 'breaks': [], 'continues': []})
         self.cur = lb
         benv = dict(henv)
         r = self.run_region(op.regions[0] if op.regions else [], benv)
@@ -509,7 +494,6 @@ class Flattener(object):
                 pred[dst] = [mid if x is src else x for x in pred.get(dst, [])]
                 pred[mid], succ[mid] = [src], [dst]
                 succ[src] = [mid if x is dst else x for x in succ[src]]
-
 def flatten_dump(text):
     """【前置】`--emit=structured-ir --normalize` 的产物（可能畸形）。
     【后置】返回平面 IR 文本（末尾恰好一个换行）。畸形输入抛 ParseError/FlattenError。"""
@@ -547,21 +531,22 @@ def render_function(fn):
     """为什么必须**两遍**：循环头的 φ 的入值来自回边，而回边的定义在文本里排在后面
     （§6.2 的 `%iv = phi [... (%iv.next Linc)]`），打印 φ 时那些值还没有号。"""
     n, cdefs = [0], []
-
     def alloc(v):
         v.num = n[0]; n[0] += 1
     for p in fn.params: alloc(p)
     for i, b in enumerate(fn.blocks): b.idx = i
     for b in fn.blocks:
+        for ph in b.phis: alloc(ph)
+    for b in fn.blocks:
         for item in items_of(b):
-            if item.ty is not None: alloc(item)          # ① 先给本条指令的定义号
+            if item.ty is not None and item.k != 'f': alloc(item)
             for v in operands_of(item):                  # ② 再给未编号的常量发号
                 v = deref(v)
                 if v.k in ('c', 'g') and v.num is None:
                     alloc(v); cdefs.append(v)
     out = ['define %s @%s(%s) {' % (
         fn.ret, fn.name, ', '.join('%s %%%d' % (p.ty, p.num) for p in fn.params))]
-    for v in cdefs:            # 常量定义行提到函数顶部，按拿号顺序（C++ 的真实排版）
+    for v in [x for x in cdefs if x.k == 'c'] + [x for x in cdefs if x.k == 'g']:
         # ★ 只影响读取（形状）：**全局地址**常量不带 `@line`，普通常量带。
         suffix = ''
         if v.k == 'c' and v.line:
@@ -574,7 +559,7 @@ def render_function(fn):
             if item.k == 'f':
                 out.append('  %%%d = phi %s [%s]%s' % (item.num, item.ty, ', '.join(
                     '(%%%d L%d)' % (deref(v).num, pb.idx) for v, pb in
-                    sorted(item.incoming, key=lambda x: x[1].idx)),
+                    item.incoming),
                     ' @line %d' % item.line if item.line else ''))
                 continue
             s = '%%%d = ' % item.num if item.ty is not None else ''
@@ -684,10 +669,13 @@ def one_file(compiler, sy, tmpdir):
     r2 = run([compiler, sy, '--emit=flat-ir', '-o', b])
     mine, err, outscope = build_mine(compiler, sy, tmpdir)
     # 双方都非零 = **范围外用例**（tensor 那 50 个）：预期行为，记 skipped 不记 error
-    if outscope and r2.returncode != 0: return ('skip', 'rc=%s/%d' % (err, r2.returncode))
+    if outscope and r2.returncode != 0:
+        return ('skip' if manifest.expected_reject(sy) else 'error',
+                'rc=%s/%d' % (err, r2.returncode))
     if mine is None:
         return ('error', 'rc=%s/%d' % (err, r2.returncode) if outscope else err)
     if r2.returncode != 0: return ('error', 'rc=0/%d' % r2.returncode)
+    if manifest.expected_reject(sy): return ('error', '清单预期拒绝却编译成功')
     try: want = open(b, encoding='utf-8').read()
     except OSError as e: return ('error', str(e))
     if not want.strip(): return ('error', 'C++ 侧产物为空')
@@ -775,8 +763,8 @@ def main():
     files = collect_files(args)
     if not files:
         print('没有 .sy 文件', file=sys.stderr); return 2
-    tmp = os.path.join(ROOT, '.work', 'flatten_trackd')
-    os.makedirs(tmp, exist_ok=True)
+    run_tmp = tempfile.TemporaryDirectory(prefix='flatten_trackd_')
+    tmp = run_tmp.name
     if args.selfcheck: return do_selfcheck(args, compiler, files, tmp)
     same, diffs, errs, skips = [], [], [], []
     with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as ex:
@@ -799,7 +787,8 @@ def main():
                      ('有差异', len(diffs)), ('范围外（双方一致拒绝）', len(skips)),
                      ('工具/解析错误', len(errs))):
         print('%s: %d' % (lab, val))
-    print_bad([(os.path.relpath(f, ROOT), m) for f, m in diffs], True, head=20)
+    print_bad([(os.path.relpath(f, ROOT), m) for f, m in diffs], True,
+              head=len(diffs) if args.verbose else 20)
     for f, m in errs[:20]: print('  ERR  %s  %s' % (os.path.relpath(f, ROOT), m))
     if errs and not same and not diffs and len(errs) + len(skips) == len(files):
         print('  提示：C++ 侧 `--emit=flat-ir` 可能还没实现（轨 D 无法比较）⇒ 改用 '

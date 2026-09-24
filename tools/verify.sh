@@ -697,8 +697,8 @@ else
     ELOG="$WORK/flat_exec.log"
     if python3 "$TOOLS/selftest/flat_exec.py" --compiler "$COMPILER" \
           --dir "$ROOT/tests" --jobs "$(nproc)" --min-files 400 >"$ELOG" 2>&1; then
-      c_ok "行为等价：结构化与平面两种形状轨迹相同"
-      grep -E '轨迹相同|轨迹不同|跳过' "$ELOG" | tail -3 | sed 's/^/      /'
+      c_ok "行为等价：结构化与平面两种形状可观察轨迹相同"
+      grep -E '完整轨迹相同|循环计数口径不同|可观察轨迹不同|跳过:' "$ELOG" | tail -4 | sed 's/^/      /'
     else
       c_bad "行为等价检查失败（变换改了行为——先证明判据自己对，再查产品）"
       grep -E '不同|差异|✘' "$ELOG" | head -8 | sed 's/^/      /'

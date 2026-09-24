@@ -3,26 +3,9 @@
 """
 exec_core.py —— **两种 IR 共用的执行语义**（S06 抽出；轨 E 的地基）
 
-为什么必须有这个文件
---------------------
-S05b 的 `loopnorm_exec.py` 自带一份执行语义。S06 的轨 E 要执行**平面 IR**，
-如果照抄第二份，就又多了一处"两边共享同一个误解"的地方 —— 而 S05b 正好
-栽在这上面：它的 `Break` 用形状启发式猜 `continue`，与 `LoopNormalize`
-**共享同一个误解** ⇒ 变换前后轨迹相同、两个答案都错（`ret=8` vs 正确 `5`）。
+两种 IR 共用数值、内存和运行时语义；各自只决定下一条执行的指令。
 
-⇒ 本文件放**全部与形状无关的语义**：
-    * 数值：`s32`/`s64`/`f32`/位模式互转（溢出回绕、浮点按 f32 收窄）
-    * 内存：**稀疏** `Mem`（`cells[字节偏移] = 64 位字`）+ `Ptr`
-    * 算术：整数/浮点/比较（含 `sdiv`/`srem` 的除零与 `INT_MIN/-1` 归一化）
-    * 内存原语：`_load`/`_store`/`load_word`/`store_word`/指针槽
-    * 控制流信号：`Ret`/`BreakLoop`/`ContinueLoop`/`Budget`/`Unsupported`
-    * 运行时库：`getint`/`putint`/`llvm.memcpy`/`llvm.memset` …（**唯一实现**）
-    * 确定性输入：固定种子 PRNG（整数**故意取小值**，见 `next_int`）
-
-两个执行器各自只负责"**取下一条指令**"：
-    * `loopnorm_exec.Exec`  —— 结构化 IR（Region 树）
-    * `flat_exec.FlatExec`  —— 平面 IR（基本块 + 终结符）
-
+执行器：`loopnorm_exec.Exec`（Region 树）和 `flat_exec.FlatExec`（基本块）。
 ⚠️ 本文件是**纯库**（不打印任何东西、不读环境变量）；跳过/报错由调用方决定。
 """
 
@@ -163,6 +146,7 @@ class Machine(object):
         self.globals = {}          # 全局名 → Ptr
         self.out = []              # 输出缓冲（putint/putch/…）
         self.loop_trace = []       # 循环迭代次数序列（**只记次数**）
+        self.effects = hashlib.sha256()
         self.steps = 0
         self.rng = seed
         self.depth = 0
@@ -192,7 +176,16 @@ class Machine(object):
         return p.mem.read_word(p.off + off, width)
 
     def store_word(self, p, off, width, val):
-        p.mem.write_word((p.off + off) & MASK64, width, val)
+        addr = (p.off + off) & MASK64
+        p.mem.write_word(addr, width, val)
+        self._record_global_write(p, addr, width, val)
+
+    def _record_global_write(self, p, addr, width, val):
+        g = self.globals.get(p.mem.name)
+        if g is not None and g.mem is p.mem:
+            data = p.mem.name.encode() + b'\0' + addr.to_bytes(8, 'little')
+            data += bytes([width]) + (int(val) & ((1 << (8 * width)) - 1)).to_bytes(width, 'little')
+            self.effects.update(data)
 
     def ptr_slot_get(self, p):
         return self.ptr_slots.get((id(p.mem), p.off & MASK64))
@@ -376,16 +369,10 @@ class Machine(object):
                     self.out.append('f%08x' % (self.load_word(p, i * 4, 4) & MASK32))
                 return None
         if name in BUILTIN_VOID:
-            # ★★ 两个内建的**字节数 = n × 元素宽度** ★★
             #   LLVM 的签名是 `memcpy(dst, src, n, align)` / `memset(dst, val, n, align)`
             #   且 `n` 是**字节数**；它的"批量宽度"在 LLVM 里是 `align` 之外的
             #   指令属性，而我们这一层的发射器按 `iset.txt` 的口径把**元素宽度**
             #   放在第 4 个参数上（对齐/宽度这一个槽）。
-            #   ⚠️ 第一版把 `args[3]` **整个忽略**、并把 `n` 当元素个数用：
-            #     发射器给的是 `n = 24（字节）`、宽度 4 ⇒ 只该复制 24 字节，
-            #     却被当成"24 个元素" = 96 字节 ⇒ 越界复制、把后面的数据冲掉。
-            #     实测 `int c[2][3] = {{1,2,3},{4,5,6}}; return c[1][2];`
-            #     gcc 是 6、我们算 0（元素在错误的偏移上）。
             #   判据与 `Mem.write_word(off, width, v)` 的 `width` 同一口径。
             esz = int(args[3]) if len(args) > 3 else 1
             if esz <= 0:
@@ -398,7 +385,9 @@ class Machine(object):
                 if n > 10 ** 7:
                     raise Unsupported('memset too large (%d)' % n)
                 for off in range(0, n, esz):
-                    p.mem.cells.pop((p.off + off) & MASK64, None)
+                    addr = (p.off + off) & MASK64
+                    p.mem.cells.pop(addr, None)
+                    self._record_global_write(p, addr, esz, 0)
                 return None
             # llvm.memcpy
             dst, src, n = args[0], args[1], int(args[2])
@@ -410,8 +399,17 @@ class Machine(object):
                 v = src.mem.cells.get((src.off + off) & MASK64)
                 if v:
                     words[off] = v
-            for off, v in words.items():
-                dst.mem.cells[(dst.off + off) & MASK64] = v
+            for off in range(0, n, step):
+                addr = (dst.off + off) & MASK64
+                if off in words:
+                    dst.mem.cells[addr] = words[off]
+                else:
+                    dst.mem.cells.pop(addr, None)
+            g = self.globals.get(dst.mem.name)
+            if g is not None and g.mem is dst.mem:
+                for off in range(0, n, step):
+                    self._record_global_write(dst, (dst.off + off) & MASK64,
+                                              step, words.get(off, 0))
             return None
         if name in RUNTIME_RET:
             if name == 'getint':
@@ -442,7 +440,8 @@ class Machine(object):
             h.update(name.encode())
             h.update(g.mem.digest().encode())
         return {'loops': list(self.loop_trace), 'out': list(self.out),
-                'mem': h.hexdigest()[:16], 'ret': ret}
+                'mem': h.hexdigest()[:16], 'ret': ret,
+                'effects': self.effects.hexdigest()[:16], 'input_state': self.rng}
 
     # ── 确定性（`%a` 十六进制浮点，与 dump 的格式一致）───────────────────
     @staticmethod

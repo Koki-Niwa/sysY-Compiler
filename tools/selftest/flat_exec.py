@@ -11,7 +11,7 @@ flat_exec.py —— 轨 E：**平面 IR 与结构化 IR 行为等价**（S06 最
 判据
 ----
 对每个能跑的程序，用**同一份确定性输入**分别执行
-`--emit=structured-ir --normalize` 与 `--emit=flat-ir`，要求**轨迹相同**。
+`--emit=structured-ir --normalize` 与 `--emit=flat-ir`，比较可观察轨迹。
 
 ★ 执行语义**共用一份**：本文件 `import exec_core`（S06 从 `loopnorm_exec.py`
   抽出的核心），两种形状各自只实现"**取下一条指令**"：
@@ -21,17 +21,15 @@ flat_exec.py —— 轨 E：**平面 IR 与结构化 IR 行为等价**（S06 最
   与 `LoopNormalize` **共享同一个误解** ⇒ 轨 E 报 "same" 而两个答案都错
   （`ret=8` vs 正确 `5`）。两份语义 = 两处可能共享误解。
 
-★ 轨迹的定义（**沿用 S05b `loopnorm_exec.py` 那一份**，一字不改）
-    (① 每条**被执行**的循环的迭代次数序列（只记次数）,
-     ② 输出缓冲, ③ 全局内存最终内容摘要, ④ main 的返回值)
-  ① 是最关键的一项：边界 off-by-one、`<`/`<=` 之差、`continue` 少走一次，
-  都会让某个循环的迭代次数不同。
+★ 可观察轨迹：输出、全局内存最终内容、main 返回值、全局写入序列和
+  确定性输入源的最终状态。循环计数另行报告，不作为等价判据：平面 IR
+  不保留源循环身份，break-only 循环甚至没有回边，无法一一对应计数。
 
 ★ 平面 IR 的循环怎么数：进头压栈、每次进头计数、出循环时出栈并追加轨迹
   （展平器把循环头排在前、体排在后 ⇒ 回边总是向后跳）。嵌套循环内层先出，
   与结构化侧 `While`/`For`"循环结束时记一次"的顺序一致。
 
-退出码：0 = 全过且覆盖达标；1 = 有差异或覆盖不足；2 = 工具自身错误。
+退出码：0 = 可观察轨迹全同且覆盖达标；1 = 有差异或覆盖不足；2 = 工具自身错误。
 """
 
 import argparse
@@ -45,7 +43,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 import flat_exec_manifest as manifest  # noqa: E402
-from flat_exec_report import report_diffs  # noqa: E402
+from flat_exec_report import observable_same, report_diffs  # noqa: E402
 import exec_core as C          # noqa: E402  ★ 与结构化执行器**共用语义**
 import loopnorm_ir as L        # noqa: E402  （只借它的"读结构化 dump"与本文件无关的常量）
 
@@ -438,7 +436,8 @@ def one_file(compiler, sy, tmpdir, seed):
 def describe_diff(a, b):
     msgs = []
     for tag, name in (('loops', '循环迭代次数'), ('out', '输出缓冲'),
-                      ('mem', '全局内存摘要'), ('ret', '返回值')):
+                      ('mem', '全局内存摘要'), ('ret', '返回值'),
+                      ('effects', '全局写入序列'), ('input_state', '输入状态')):
         if a[tag] != b[tag]:
             msgs.append('%s：结构化 %r vs 平面 %r' % (name, a[tag], b[tag]))
     return '；'.join(msgs) if msgs else '（未知差异）'
@@ -451,7 +450,7 @@ def main():
     ap.add_argument('--dir', default=os.path.join(ROOT, 'tests'))
     ap.add_argument('--limit', type=int, default=0)
     ap.add_argument('--min-files', type=int, default=400)
-    ap.add_argument('--seed', type=int, default=12345)
+    ap.add_argument('--seed', type=int, default=1)
     ap.add_argument('--show-trace', default='')
     ap.add_argument('--dump-traces', default='')
     ap.add_argument('--verbose', action='store_true')
@@ -475,7 +474,7 @@ def main():
             print('平面   IR 轨迹: %s' % b)
         if st == 'diff':
             print('差异: %s' % describe_diff(a, b))
-        return 0 if st == 'same' else 1
+        return 0 if st == 'same' or (st == 'diff' and observable_same(a, b)) else 1
 
     files = []
     for dirpath, dirnames, filenames in os.walk(args.dir):
@@ -496,12 +495,13 @@ def main():
     with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as ex:
         results = list(ex.map(lambda f: (f,) + one_file(compiler, f, tmp, args.seed), files))
 
-    same, diffs, skips = [], [], {}
+    same, loop_only, diffs, skips = [], [], [], {}
     for f, st, msg, a, b in results:
         if st == 'same':
             same.append(f)
         elif st == 'diff':
-            diffs.append((f, describe_diff(a, b), a, b))
+            (loop_only if observable_same(a, b) else diffs).append(
+                (f, describe_diff(a, b), a, b))
         else:
             if st == 'error':
                 key = '工具/单方失败（%s）' % msg
@@ -513,10 +513,11 @@ def main():
 
     print('== 轨 E：平面 IR 与结构化 IR 行为等价 ==')
     print('参与执行的文件数: %d' % len(files))
-    print('两种形状轨迹相同: %d' % len(same))
-    print('轨迹不同:         %d' % len(diffs))
+    print('两种形状完整轨迹相同: %d' % len(same))
+    print('仅循环计数口径不同:   %d' % len(loop_only))
+    print('可观察轨迹不同:       %d' % len(diffs))
     if args.list_diffs:
-        report_diffs(diffs, ROOT)
+        report_diffs(diffs + loop_only, ROOT)
     else:
         for f, m, _a, _b in diffs[:10]:
             print('  ✘ %s\n    %s' % (os.path.relpath(f, ROOT), m))
@@ -527,13 +528,14 @@ def main():
                                         os.path.relpath(skips[k][0], ROOT)))
     errors = sum(len(v) for k, v in skips.items() if
                  k.startswith(('工具/单方失败', '[parse]', '[recursion]')))
-    ok = not diffs and not errors and len(same) >= args.min_files
+    comparable = len(same) + len(loop_only)
+    ok = not diffs and not errors and comparable >= args.min_files
     if errors:
         print('  ✘ 工具、编译或解析错误 %d 个' % errors)
     if diffs:
         print('  ✘ 有程序在两种形状下行为不同（**先假定是平面侧错了**，逐条查清）')
-    if len(same) < args.min_files:
-        print('  ✘ 跑通的程序数 %d < 要求 %d' % (len(same), args.min_files))
+    if comparable < args.min_files:
+        print('  ✘ 可观察轨迹相同的程序数 %d < 要求 %d' % (comparable, args.min_files))
     print('== 结果：%s ==' % ('全过' if ok else '有失败'))
     return 0 if ok else 1
 

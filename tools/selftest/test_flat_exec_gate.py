@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from tools.selftest import exec_core
+from tools.selftest.flat_exec_report import observable_same
 
 
 HERE = Path(__file__).resolve().parent
@@ -16,6 +17,31 @@ SOURCE = ROOT / 'tests/final_arm/functional/00_main.sy'
 
 
 class FlatExecGateTests(unittest.TestCase):
+    def test_overwritten_global_write_changes_effect_trace(self):
+        def trace(writes):
+            machine = exec_core.Machine(1)
+            memory = exec_core.Mem(4, 'g')
+            pointer = exec_core.Ptr(memory, 0)
+            machine.globals['g'] = pointer
+            for value in writes:
+                machine.store_word(pointer, 0, 4, value)
+            return machine.finish_trace(0)
+
+        early_write, no_early_write = trace([1, 2]), trace([2])
+        self.assertEqual(early_write['mem'], no_early_write['mem'])
+        self.assertFalse(observable_same(early_write, no_early_write))
+
+    def test_memcpy_clears_destination_when_source_is_sparse_zero(self):
+        machine = exec_core.Machine(1)
+        dst_mem, src_mem = exec_core.Mem(4, 'g'), exec_core.Mem(4, 'src')
+        dst, src = exec_core.Ptr(dst_mem, 0), exec_core.Ptr(src_mem, 0)
+        machine.globals['g'] = dst
+        machine.store_word(dst, 0, 4, 7)
+        before = machine.finish_trace(0)['effects']
+        machine.runtime('llvm.memcpy', [dst, src, 4, 4], None)
+        self.assertEqual(machine.load_word(dst, 0, 4), 0)
+        self.assertNotEqual(machine.finish_trace(0)['effects'], before)
+
     def test_f32_overflow_saturates_to_infinity(self):
         self.assertEqual(exec_core.bits_of_f32(10 ** 1000), 0x7f800000)
         self.assertEqual(exec_core.bits_of_f32(-(10 ** 1000)), 0xff800000)
@@ -43,8 +69,8 @@ class FlatExecGateTests(unittest.TestCase):
             result = subprocess.run([sys.executable, str(TOOL), '--compiler',
                                      str(compiler), '--dir', tmp,
                                      '--min-files', '0'], capture_output=True, text=True)
-        self.assertEqual(result.returncode, 1)
-        self.assertIn('轨迹不同:', result.stdout)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('仅循环计数口径不同:', result.stdout)
         self.assertNotIn('Traceback', result.stderr)
 
 

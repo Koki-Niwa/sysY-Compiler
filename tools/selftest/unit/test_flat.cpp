@@ -6,10 +6,17 @@
 #include <string>
 #include <vector>
 
+#include "frontend/InitLowering.h"
+#include "frontend/Lexer.h"
+#include "frontend/Parser.h"
+#include "frontend/Sema.h"
 #include "ir/FlatDump.h"
 #include "ir/FlatVerifier.h"
-#include "ir/Module.h"
-
+#include "structured/AllocaHoist.h"
+#include "structured/FlattenInternal.h"
+#include "structured/IRGen.h"
+#include "structured/LoopNormalize.h"
+#include "support/SourceFile.h"
 namespace {
 
 int gFail = 0;
@@ -44,7 +51,6 @@ using sysy::flat::Module;
 using sysy::flat::Opcode;
 using sysy::flat::typePool;
 using sysy::flat::Value;
-
 // 【后置】造一条"常量指令"（平面 dump 里的常量是**指令形态**：
 //   `Opcode::ConstantInt`/`ConstantFP`，见 ir/Instruction.h 的说明）。
 //   `Module::getIntConst` 返回的是另一套（模块级 interned 的 `Constant`）。
@@ -275,52 +281,46 @@ void testLoopPhi() {
   if (!vs.empty()) std::printf("%s", sysy::flat::formatViolations(vs).c_str());
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // ④ 临界边必须被拆开（源块多后继 + 目标块多前驱）
-// ═══════════════════════════════════════════════════════════════════════════
 void testCriticalEdge() {
   std::printf("\u2500\u2500 \u2463 \u4e34\u754c\u8fb9\u5fc5\u987b\u88ab\u62c6\u5f00 \u2500\u2500\n");
+  const std::string src = "int main(){int i=0;int sum=0;while(i<100){if(i==50){break;}sum=sum+i;i=i+1;}return sum;}";
+  sysy::SourceFile file = sysy::SourceFile::fromString("29_break.sy", src);
+  sysy::DiagnosticEngine diags; diags.setSourceFile(&file);
+  sysy::Lexer lexer(file, diags); sysy::Parser parser(lexer, diags);
+  auto unit = parser.parseCompUnit();
+  expect(unit != nullptr, "临界边回归：29_break.sy 能解析"); if (unit == nullptr) return;
+  sysy::Sema sema(diags); sema.run(*unit);
+  const sysy::InitPlan plan = sysy::runInitLowering(*unit, sema);
+  sysy::sir::Arena arena;
+  sysy::sir::Op* smod = sysy::sir::buildModule(arena, *unit, plan, "29_break.sy", diags);
+  sysy::sir::LoopNormStats stats;
+  smod = sysy::sir::normalizeLoops(smod, arena, stats); sysy::sir::hoistAllocas(smod);
   Module m;
-  Function* f = m.createFunction("crit", typePool().i32());
-  const sysy::SourceLoc L(4, 1);
-  BasicBlock* e = m.createBlock(f);
-  BasicBlock* a = m.createBlock(f);
-  BasicBlock* b = m.createBlock(f);
-  BasicBlock* j = m.createBlock(f);   // 目标块：2 个前驱（a、b）
-  BasicBlock* k = m.createBlock(f);
-  Instruction* c0 = createICmp(IPred::Eq, kInt(m, 0, L),
-                               kInt(m, 0, L), L);
-  m.ownInst(c0);
-  Instruction* b0 = createCondBr(c0, a, b, L);
-  m.ownInst(b0);
-  e->addInst(b0);
-  // a 有 2 个后继（j、k），而 j 有 2 个前驱（a、b）⇒ (a, j) 是临界边
-  Instruction* ba = createCondBr(c0, j, k, L);
-  m.ownInst(ba);
-  a->addInst(ba);
-  Instruction* bb = createBr(j, L);
-  m.ownInst(bb);
-  b->addInst(bb);
-  Instruction* bj = createBr(k, L);
-  m.ownInst(bj);
-  j->addInst(bj);
-  Instruction* rk = createRet(kInt(m, 1, L), L);
-  m.ownInst(rk);
-  k->addInst(rk);
-  m.rebuildCFG();
-  m.rebuildUseDef();
-  // 手工构造里 (a,j) 是临界边（不拆的话 φ 无法表达"从哪条边来"）。
-//   …（2 行说明）
-  //   在 check_flat.py 里；这里只钉住"源块多后继 + 目标多前驱"这个事实）。
-  Instruction* at = a->terminator();
-  expect(at->numSuccs() == 2, "临界边：源块 a 有 2 个后继");
-  expect(j->numPreds() == 2, "临界边：目标块 j 有 2 个前驱");
-  expect(at->succ(0) == j, "临界边：(a, j) 确实是临界边");
+  expect(sysy::flat::flattenModule(smod, m, diags) != nullptr && !diags.hasError(),
+         "临界边回归：真实流水线展平成功");
+  Function* f = m.findFunction("main");
+  bool hasCritical = false;
+  BasicBlock* mid = nullptr;
+  for (BasicBlock* b : f->blocks()) {
+    if (b->name() == "crit") mid = b;
+    Instruction* t = b->terminator();
+    if (t == nullptr || sysy::flat::distinctSuccessorCount(t) < 2) continue;
+    for (BasicBlock* dst : t->succs()) {
+      if (dst != nullptr && dst->numPreds() > 1) hasCritical = true;
+    }
+  }
+  expect(!hasCritical, "临界边回归：展平产物不再保留 L1→L3 形状的临界边");
+  expect(mid != nullptr && mid->size() == 1 && mid->terminator() != nullptr &&
+             mid->terminator()->op() == Opcode::Br && !mid->terminator()->loc().valid(),
+         "临界边回归：插入的 crit 块只含无源码位置的 br");
+  const std::vector<sysy::flat::Violation> vs = sysy::flat::verifyFlatModule(m);
+  expect(vs.empty(), "临界边回归：拆边后 FlatVerifier 零违反");
+  Instruction* dup = createCondBr(nullptr, mid, mid, sysy::SourceLoc()); m.ownInst(dup);
+  expect(sysy::flat::distinctSuccessorCount(dup) == 1, "重复目标分支按一个 CFG 后继计数");
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // ⑤ 空块（只有一个跳转）与不可达块
-// ═══════════════════════════════════════════════════════════════════════════
 void testEmptyAndUnreachable() {
   std::printf("\u2500\u2500 \u2464 \u7a7a\u5757\u4e0e\u4e0d\u53ef\u8fbe\u5757 \u2500\u2500\n");
   Module m;

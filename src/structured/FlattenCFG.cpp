@@ -396,23 +396,25 @@ void FlatBuilder::enterJoin(BasicBlock* b, std::vector<Env> inEnvs, SourceLoc lo
     env_[slot] = phi;
   }
 }
-
-// ============================================================================
-// ★ 临界边拆分（prompt §二.3）
-//   一条边 `(src, dst)` 是**临界边** ⟺ `outdeg(src) > 1 && indeg(dst) > 1`。
-//   不拆的话 φ 无法表达"这次是从哪条边来的" ⇒ 结果偶尔错。
-//   做法：插入一个**空的中转块**（只有 `br dst`），并把 φ 的入值键从 src
-//   改到中转块。中转块**没有 `@line`**（它不对应任何源码位置）。
-//   ⚠️ 必须**在所有 φ 都放好之后**做（否则新插的中转块不会出现在 φ 的入值里）。
-// ============================================================================
+// 临界边判据与 φ 改键契约见 FlattenCFG.h；必须在所有 φ 放好后拆。
+// 先从终结符快照唯一前驱数，不能读取最终 `rebuildCFG()` 才会填充的缓存。
 void FlatBuilder::splitCriticalEdges() {
+  std::unordered_map<BasicBlock*, size_t> indegree;
+  for (BasicBlock* pred : blocks_) {
+    Instruction* term = pred->terminator();
+    if (term == nullptr) continue;
+    std::unordered_set<BasicBlock*> seen;
+    for (BasicBlock* succ : term->succs()) {
+      if (succ != nullptr && seen.insert(succ).second) ++indegree[succ];
+    }
+  }
   for (size_t bi = 0; bi < blocks_.size(); ++bi) {
     BasicBlock* src = blocks_[bi];
     Instruction* t = src->terminator();
-    if (t == nullptr || t->op() != Opcode::Br || t->numSuccs() < 2) continue;
+    if (t == nullptr || t->op() != Opcode::Br || distinctSuccessorCount(t) < 2) continue;
     for (size_t si = 0; si < t->numSuccs(); ++si) {
       BasicBlock* dst = t->succ(si);
-      if (dst == nullptr || dst->numPreds() < 2) continue;
+      if (dst == nullptr || indegree[dst] < 2) continue;
       BasicBlock* mid = newBlock("crit");
       Instruction* br = createBr(dst, SourceLoc());
       ownInst(br);

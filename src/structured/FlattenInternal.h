@@ -50,6 +50,14 @@ using sir::Region;
 // 【后置】结构化层的类型 → 平面层的类型（同一个形状、同一个类型池）。
 const Type* toFlatType(const sir::Type* t);
 
+// CFG 把条件分支的两个相同目标视为一个后继（与 rebuildCFG 的前驱去重一致）。
+inline size_t distinctSuccessorCount(const Instruction* term) {
+  if (term == nullptr) return 0;
+  std::unordered_set<BasicBlock*> seen;
+  for (BasicBlock* succ : term->succs()) if (succ != nullptr) seen.insert(succ);
+  return seen.size();
+}
+
 // 降级动作的结果。`kStop` = 致命错误（已报诊断，外层放弃产物）。
 enum class Action { kOk, kStop };
 

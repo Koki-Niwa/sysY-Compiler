@@ -104,12 +104,20 @@ std::unique_ptr<Stmt> Parser::parseStmt() {
   DepthGuard guard(*this);
   if (depthExceeded()) {
     // ⚠️ 超限时必须**消费 token**，不能只是返回一个空语句：调用方
-    //    （parseBlock 的循环 / while 的 body）会原地重试同一个 token → 死循环。
-    //    S02 在 4100 层嵌套块上实测卡死过一次。
-    //    注意 `{` 要**先消费掉**再跳到配平的 `}`：skipToMatchingBrace 是从
-    //    "当前 token"开始计数的，留着 `{` 会多跳一层。
-    if (accept(TokKind::LBrace)) skipToMatchingBrace();
-    return std::make_unique<ExprStmt>(cur().loc);
+    //    （parseBlock 的循环 / while 的 body）会原地重试同一个 token → 死循环，
+    //    同时不断往 BlockStmt::items 追加空语句，直到耗尽内存。
+    //    S02 在 4100 层嵌套块上实测卡死过一次；4000 层块内紧跟 `return`
+    //    还会在这里落到非 `{` 分支，曾实测增长到十几 GiB 后 OOM。
+    const SourceLoc loc = cur().loc;
+    // `{` 要**先消费掉**再跳到配平的 `}`：skipToMatchingBrace 是从
+    // "当前 token"开始计数的，留着 `{` 会多跳一层。其它 token 则恢复到
+    // 当前语句的同步点；recoverToStmtEnd 保证只要未到 EOF 就至少前进一步。
+    if (accept(TokKind::LBrace)) {
+      skipToMatchingBrace();
+    } else {
+      recoverToStmtEnd();
+    }
+    return std::make_unique<ExprStmt>(loc);
   }
 
   const SourceLoc loc = cur().loc;

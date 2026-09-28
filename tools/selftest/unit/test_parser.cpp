@@ -622,7 +622,6 @@ static void testErrorRecovery() {
   checkEq("只有注释", shapeOf("// hi\n/* there */\n"), "");
 }
 
-
 // ============================================================================
 // 七、病态输入下的健壮性（★ 这一组是 S02 实测抓到 bug 之后补的回归）
 //
@@ -652,11 +651,8 @@ static void testPathologicalInputs() {
   struct Case {
     const char* name;
     std::string src;
-    // 该输入**必须**报出诊断吗？
-    //   ⚠️ 这一列是必须的，不许再靠名字去猜：原先的判据是"只有含 NUL 的那例要求报错"，
-    //   于是"深度超限后静默丢掉上千个节点、退出码仍然是 0"这个真 bug
-    //   从单测里漏了过去 —— 它是被一份**独立实现**的语法分析器交叉验证抓出来的。
-    //   "合法但超出我们处理能力"的输入同样**必须报错**：静默产出错误的 AST 比崩溃更糟。
+    // 必须显式记录是否应诊断；旧判据曾漏掉深度超限后静默丢 AST 的 bug。
+    // 合法但超出处理能力的输入也必须报错：静默产出错误 AST 比崩溃更糟。
     bool expectError = true;
   };
   std::vector<Case> cases;
@@ -670,8 +666,8 @@ static void testPathologicalInputs() {
   cases.push_back({"二元链 3 万个 +（左倾 3 万层深的树）",
                    "int main(){ int a; a = 1" + rep("+1", 30000) + "; return a; }",
                    /*expectError=*/false});
-  // ★ 深度上限的**边界**回归：3997 层合法且必须不报错；4001 层必须报错。
-  //   两者只差 4 层，但修复前的行为是"4001 层静默成功"，所以这个边界必须钉住。
+  // ★ 深度上限的边界：3997 层合法且必须不报错；4001 层必须报错。
+  // 两者只差 4 层，但修复前 4001 层会静默成功，所以这个边界必须钉住。
   cases.push_back({"嵌套块 3997 层（上限内）",
                    "int main(){ " + std::string(3997, '{') + std::string(3997, '}') +
                        " return 0; }",
@@ -679,6 +675,11 @@ static void testPathologicalInputs() {
   cases.push_back({"嵌套块 4001 层（刚过上限）",
                    "int main(){ " + std::string(4001, '{') + std::string(4001, '}') +
                        " return 0; }",
+                   /*expectError=*/true});
+  // 非 `{` token 上超限也必须前进；旧实现只在当前 token 是 `{` 时前进，
+  // 站在这里的 `return` 上会无限追加空 ExprStmt，直到 OOM。
+  cases.push_back({"嵌套块 4000 层后接 return（非左花括号处超限）",
+                   "int main(){ " + std::string(4000, '{') + "return 0;" + std::string(4000, '}') + " }",
                    /*expectError=*/true});
   cases.push_back({"初始化列表 10 万层",
                    "int a = " + std::string(100000, '{') + std::string(100000, '}') + ";"});
@@ -711,7 +712,6 @@ static void testPathologicalInputs() {
     }
   }
 }
-
 // ============================================================================
 // 八、CLI 往返（调用真实编译器二进制；找不到就跳过）
 // ============================================================================

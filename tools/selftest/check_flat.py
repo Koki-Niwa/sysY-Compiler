@@ -36,6 +36,9 @@ import sys
 import tempfile
 from concurrent.futures import ProcessPoolExecutor
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import flat_exec_manifest as manifest  # noqa: E402  （语料身份的**唯一**出处）
+
 # ── 独立手写的指令集清单（**照 `docs/handoff/iset.txt` 逐条抄，不是从
 #    `Instruction.h` 生成的**）。生成式的清单只能证明"实现与实现一致"。
 OPCODES = {
@@ -563,15 +566,6 @@ def run_bad(comp, root):
 # ============================================================================
 # ⑦ 主流程
 # ============================================================================
-def corpus(root):
-    out = []
-    for dirpath, _, files in os.walk(os.path.join(root, 'tests')):
-        for f in files:
-            if f.endswith('.sy'):
-                out.append(os.path.relpath(os.path.join(dirpath, f), root))
-    return sorted(out)
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--compiler', default='compiler/build/compiler')
@@ -588,7 +582,7 @@ def main():
     comp = os.path.abspath(os.path.join(root, a.compiler))
 
     if not a.bad:
-        rels = corpus(root)
+        rels = manifest.corpus(root)
         if a.only:
             rels = [r for r in rels if a.only in r]
         total = len(rels)
@@ -600,6 +594,9 @@ def main():
                 buckets.setdefault(st, []).append((rel, detail))
                 if st == 'ok':
                     okd.append((rel, sz, nops))
+        mism = manifest.identity_mismatches(buckets, root, a.only)
+        if mism:  # 身份错位要移出原桶 ⇒ 计数也对不上清单（只加新桶会被"计数抵消"骗过）
+            buckets = manifest.with_identity_bucket(buckets, mism)
         for st in sorted(buckets, key=lambda s: -len(buckets[s])):
             v = buckets[st]
             print('  %-11s %4d' % (st, len(v)))

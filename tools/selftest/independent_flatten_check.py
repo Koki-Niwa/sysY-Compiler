@@ -211,6 +211,7 @@ class Flattener(object):
     def emit(self, inst):
         if self.cur is None:          # 终结符之后还有 Op（不该发生）→ 补一个不可达块
             self.cur = self.new_block()
+        inst.block = self.cur
         self.cur.insts.append(inst)
         return inst
     def term(self, parts, line, env):
@@ -268,7 +269,7 @@ class Flattener(object):
             av = mk(ptr_to(obj), ['alloca %s' % obj], line)
             # §6.1: alloca 恒在 L0；后遇到的 alloca 插到入口前缀。
             if self.cur is self.fn.blocks[0]: self.emit(av)
-            else: self.fn.blocks[0].insts.insert(0, av)
+            else: av.block = self.fn.blocks[0]; self.fn.blocks[0].insts.insert(0, av)
             self.vmap[res] = av
             if op in self.tracked: self.tracked_flat[self.vmap[res]] = True
         elif k == 'GetGlobal':                           # 模块级地址：按需物化
@@ -341,6 +342,12 @@ class Flattener(object):
         env.clear()
         env.update(self.merge(lj, inc, srcline(op)))
         return True
+    def value_pos(self, v):
+        v = deref(v)
+        if v is None or v.block is None or v.k == 'e': return (-1, -1)
+        bi = self.fn.blocks.index(v.block)
+        if v.k == 'f': return (bi, -v.block.phis.index(v))
+        return (bi, len(v.block.phis) + v.block.insts.index(v))
     def merge(self, block, incoming, line):
         """汇合：前驱 ≥ 2 才可能有 φ；值全同不放；缺值补零（判据 1/2/3）。"""
         if not incoming: return {}
@@ -349,6 +356,7 @@ class Flattener(object):
         for _pb, e in incoming:
             for s in e:
                 if s not in slots: slots.append(s)
+        slots.sort(key=lambda s: self.value_pos(incoming[0][1].get(s)))
         for slot in slots:
             vals = []
             for _pb, e in incoming:
@@ -363,7 +371,7 @@ class Flattener(object):
             if all(v is vals[0] for v in vals): out[slot] = vals[0]
             else:
                 ph = V('f', pointee(dsty(slot)))
-                ph.line = line
+                ph.line, ph.block = line, block
                 ph.incoming = [(v, pb) for v, (pb, _e) in zip(vals, incoming)]
                 block.phis.append(ph)
                 out[slot] = ph
@@ -381,13 +389,13 @@ class Flattener(object):
             if all(v is vals[0] for v in vals): c.resolved = vals[0]
             else:
                 c.resolved = V('f', c.ty)
-                c.resolved.line = c.line
+                c.resolved.line, c.resolved.block = c.line, c.block
                 c.resolved.incoming = list(c.incoming)
                 c.block.phis.append(c.resolved)
-    def head_cells(self, lh, env_lp, line):
+    def head_cells(self, lh, env_lp, line, reverse=False):
         """循环头：所有被跟踪的槽先放 Cell 占位（回边的值展平体之后才知道）。"""
         henv, cells = dict(env_lp), {}
-        for slot in env_lp:
+        for slot in (reversed(env_lp) if reverse else env_lp):
             if slot not in self.tracked_flat: continue
             cells[slot] = henv[slot] = V('e', pointee(dsty(slot)))
             cells[slot].block, cells[slot].line = lh, line
@@ -397,7 +405,7 @@ class Flattener(object):
         lp, env_lp = self.cur, dict(env)
         lh = self.new_block()
         self.term(['br ', lh], srcline(op), env_lp)
-        henv, cells = self.head_cells(lh, env_lp, srcline(op))
+        henv, cells = self.head_cells(lh, env_lp, srcline(op), True)
         lb, lx = self.new_block(), self.new_block()
         self.cur = lh
         cenv = dict(henv)
@@ -463,16 +471,21 @@ class Flattener(object):
         env.clear()
         env.update(self.merge(lx, [(lh, hres)] + lp_['breaks'], line))
     def finish(self):
-        """收尾：两边都终结的 join（空块）补 `unreachable`，然后拆临界边。"""
+        """收尾：补空块 `unreachable`，删无非 φ 使用路径的 φ（含纯环），再拆临界边。"""
         for b in self.fn.blocks:
             if b.term is None: b.term = mk(None, ['unreachable'], 0)
+        phis = set(ph for b in self.fn.blocks for ph in b.phis); live = set()
+        work = [x for b in self.fn.blocks for i in b.insts + [b.term] for x in
+                (deref(v) for v in operands_of(i)) if x in phis]
+        while work:
+            ph = work.pop()
+            if ph in live: continue
+            live.add(ph); work += [deref(v) for v in operands_of(ph) if deref(v) in phis]
+        for b in self.fn.blocks: b.phis[:] = [ph for ph in b.phis if ph in live]
         self.split_critical()
         return self.fn
     def split_critical(self):
-        """★ §6.4 临界边拆分：**临界边** = 源块有多个后继、目标块有多个前驱。等 φ 全放好
-        后扫描全部有向边，为每个这样的 (src, dst) 追加一个**只有 br** 的空中转块（约定
-        6.4.1：没有 @line；块号按扫描顺序追加在函数块列表末尾），并把 φ 的入值键从 src 改到
-        中转块（约定 6.4.2）。"""
+        """§6.4：拆临界边；中转块只有无 @line 的 br，并同步改 φ 入值块。"""
         blocks = list(self.fn.blocks)
         succ, pred = {}, {}
         for b in blocks:
@@ -495,8 +508,7 @@ class Flattener(object):
                 pred[mid], succ[mid] = [src], [dst]
                 succ[src] = [mid if x is dst else x for x in succ[src]]
 def flatten_dump(text):
-    """【前置】`--emit=structured-ir --normalize` 的产物（可能畸形）。
-    【后置】返回平面 IR 文本（末尾恰好一个换行）。畸形输入抛 ParseError/FlattenError。"""
+    """结构化 dump → 末尾恰好一个换行的平面 IR；畸形输入抛 ParseError/FlattenError。"""
     mod, names, fnret = L.parse_dump(text)
     modops = L.module_region(mod)
     lines = [global_line(op) for op in modops if op.kind == 'GlobalVar']
@@ -528,8 +540,7 @@ def global_line(op):
     return '@%s = global %s %s%s' % (op.name, ty, init, ' @line %d' % n if n else '')
 
 def render_function(fn):
-    """为什么必须**两遍**：循环头的 φ 的入值来自回边，而回边的定义在文本里排在后面
-    （§6.2 的 `%iv = phi [... (%iv.next Linc)]`），打印 φ 时那些值还没有号。"""
+    """两遍编号：循环头 φ 的回边值在文本后方，打印 φ 时也必须已有编号。"""
     n, cdefs = [0], []
     def alloc(v):
         v.num = n[0]; n[0] += 1

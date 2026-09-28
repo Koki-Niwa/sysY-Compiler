@@ -602,15 +602,9 @@ else
   else
     c_skip "run_loopnorm_cases.py 未实现（S05b 的交付物）"
   fi
-
 fi
-
-# ─────────────────────────────────────────────────────────────────────────────
+# 两份自洽判据可能共享误解；C8 的可观察结果还须由 GCC 锚点验证。
 hdr "C8. 平面 IR 自校验（若 --emit=flat-ir 已实现 —— S06 起）"
-# ─────────────────────────────────────────────────────────────────────────────
-# 这一关的判据有一条特殊之处：**两条赛道可能共享同一个误解**（S06 实证：五处真 bug
-# 全部穿过独立实现与行为等价，只有外部锚 gcc 抓得住）。所以关卡除了跑那两条轨，
-# 还要求"锚点用例"里 gcc 的期望值写在 README 里、判据是"等于 gcc"而不是"两边相等"。
 CAN_FLAT=0
 if [ -x "$COMPILER" ] && [ -f "$TOOLS/selftest/check_flat.py" ]; then
   if "$COMPILER" --emit=flat-ir "$TESTS/final_arm/functional/00_main.sy" \
@@ -621,6 +615,12 @@ fi
 if [ "$CAN_FLAT" = "0" ]; then
   c_skip "平面 IR 跳过：--emit=flat-ir 尚未实现（S06 的交付物）"
 else
+  EX6="$ROOT/compiler/tests/flat/example"
+  if [ -f "$EX6/example.sy" ] && [ -f "$EX6/example.emit-flat.txt" ] && "$COMPILER" --emit=flat-ir "$EX6/example.sy" -o "$WORK/ex6.txt" >/dev/null 2>&1 && cmp -s "$WORK/ex6.txt" "$EX6/example.emit-flat.txt"; then
+    c_ok "平面 IR：与真实生成的样例对逐字节相同"
+  else
+    c_bad "平面 IR 样例对缺失或不一致（违反格式契约）"
+  fi
   # check_flat.py 的常规模式跑完整语料与坏 IR 反证；--bad 只跑反证。
   FLOG="$WORK/flat.log"
   FLAT_RC=0

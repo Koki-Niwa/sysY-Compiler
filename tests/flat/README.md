@@ -17,6 +17,7 @@ runner 另行执行 `--emit=flat-ir` / `--from-flat` 并用独立 GCC 运行结�
 ```
 tests/flat/
   README.md                     ← 本文件
+  example/                      ← 平面 dump 的逐字节冻结样例对（C8 `cmp -s`）
   golden/<NN>-<短名>/
       case.sy                   ← 源码（合法 SysY，零诊断、退出码 0）
       expect                    ← **真实运行产出**的转储，不许手写
@@ -41,8 +42,8 @@ tests/flat/
 | 编号 | 钉住 |
 |---|---|
 | 01 | 直线代码 + `int`/`float` 互转（`I2F`、`F2I` 饱和守卫） |
-| 02 | `if`/`else` 合流 —— **φ 位点**（合流后读同一个槽） |
-| 03 | 嵌套 `if`（φ 的入值本身是另一个 φ 的结果） |
+| 02 | `if`/`else` 合流后的局部变量仍从内存 `load`，不留下死 φ |
+| 03 | 嵌套 `if` 的两层控制流合流及真实内存读取 |
 | 04 | `while`（`--normalize` 后成 `For`） |
 | 05 | `break`（真 break ⇒ 保留 `While` + `BreakOp`） |
 | 06 | `continue`（消解成 `if (!cond) { 剩余体 }`） |
@@ -50,13 +51,13 @@ tests/flat/
 | 08 | 函数调用（非 void 被调 / void 被调 / void 运行时调用） |
 | 09 | 数组（全局、局部、`a[i][j]`、数组实参） |
 | 10 | `alloca` 位置（循环体内声明 ⇒ Alloca 仍在入口 Region） |
-| 11 | 临界边（2 后继 × 2 前驱） |
+| 11 | 临界边（2 后继 × 2 前驱）；拆边不依赖 φ 是否存在 |
 | 12 | `return`/`break` 之后的不可达代码（不产生 Op） |
 | 13 | **不做 mem2reg 的证据**（store 之后紧跟 load） |
 | 14 | `starttime`/`stoptime`（行号作为实参） |
 | 15 | 三维全局数组对象布局；平面类型不得把最内层数组写成指针元素 |
 
-`min/` 的 13 组：φ 读/不读、循环边界可提升/不可提升、声明在循环内/外、
+`min/` 的 13 组：合流后局部变量读/不读、循环边界可提升/不可提升、声明在循环内/外、
 `continue`/`break`、嵌套/单层 `if`、IV 循环后读/不读、变量下标/常量下标、
 全局零初始化/数据初始化、浮点乘/整数乘、`while`/`if`。
 每组差在哪一处、dump 里能看出什么，见该目录的 `README`。
@@ -86,7 +87,8 @@ python3 compiler/tools/selftest/run_flat_cases.py --compiler compiler/build/comp
 ```
 
 ⚠️ **绝对不要手写 `expect`。** `--update` 只刷新结构化 IR 的冻结文本；
-平面 IR 不冻结为文本 golden，因为错误的平面产物也会稳定往返。刷新时仍会
+平面 IR 的排版由 `example/` 冻结；各 `golden/min` 目录不另存平面文本，
+因为错误的平面产物也会稳定往返。刷新时仍会
 执行 GCC 对照，防止把错误行为当成新基线。
 
 ## 判据（`run_flat_cases.py`）

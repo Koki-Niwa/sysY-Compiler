@@ -1,0 +1,20 @@
+const int LIMIT = 4;
+
+int bump(int x) {
+  return x + 1;
+}
+
+int main() {
+  int i = 0;
+  int sum = 0;
+  while (i < LIMIT) {
+    if (i < 2) {
+      sum = bump(sum);
+    } else {
+      sum = sum + i;
+    }
+    i = i + 1;
+  }
+  putint(sum);
+  return sum;
+}

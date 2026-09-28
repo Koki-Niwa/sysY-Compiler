@@ -24,7 +24,7 @@ ICMP_PRED = {'Eq': 'eq', 'Ne': 'ne', 'Lt': 'slt', 'Le': 'sle', 'Gt': 'sgt', 'Ge'
 FCMP_PRED = {'Eq': 'oeq', 'Ne': 'une', 'Lt': 'olt', 'Le': 'ole', 'Gt': 'ogt', 'Ge': 'oge'}
 INT_BIN = {'AddI': 'add', 'SubI': 'sub', 'MulI': 'mul', 'DivI': 'sdiv', 'ModI': 'srem'}
 FLT_BIN = {'AddF': 'fadd', 'SubF': 'fsub', 'MulF': 'fmul', 'DivF': 'fdiv'}
-CASTS = {'I2F': ('f32', 'sitofp i32 ', ' to f32'), 'F2I': ('i32', 'fptosi f32 ', ' to i32'),
+CASTS = {'I2F': ('f32', 'sitofp i32 ', ' to f32'),
          'Sext': ('i64', 'sext i32 ', ' to i64')}
 ZERO_TEXT = {'i32': '0', 'i64': '0', 'f32': '0x0p+0'}
 SCALAR_TY = ('i32', 'f32', 'i64')
@@ -37,9 +37,7 @@ TERM = re.compile(r'^  (br |ret |unreachable(\s|$))')
 class FlattenError(Exception):
     """本实现拒绝展平的输入（畸形 / 超出结构化层规格）。"""
 def norm_ty(t):
-    """类型拼法规范化：共用的结构化解析器在**嵌套** `[` 后会留下空格
-    （`ptr [[2 x i32]]`），而 C++ 两侧的类型打印都是 `ptr[[2 x i32]]`（§3：两层同一个
-    拼法）⇒ 这里统一去掉 `[` 后、`]` 前的空白。"""
+    """统一结构化解析器在嵌套 `[` 附近留下的空白。"""
     t = re.sub(r'\[\s+', '[', t)              # `[ 3 x i32]` → `[3 x i32]`
     t = re.sub(r'\s+\]', ']', t)              # `[3 x i32 ]` → `[3 x i32]`
     return re.sub(r'\bptr\s+\[', 'ptr[', t)   # `ptr [i32]` → `ptr[i32]`
@@ -72,9 +70,7 @@ def func_sig(op):
 
 # ── 平面层的值模型（先建结构，**最后**统一编号：编号只依赖最终结构）───────────
 class V(object):
-    """一个平面值。`k`：'p' 形参 / 'c' 常量 / 'g' 全局地址 / 'i' 指令 / 'f' φ / 'e' Cell。
-    `ty` 类型、`num` 编号（编号遍填）、`resolved`（只有 Cell 用）、`parts/text/name/line/
-    incoming/block` 按种类使用。"""
+    """平面值：形参 p / 常量 c / 全局 g / 指令 i / φ f / Cell e。"""
     __slots__ = ('k', 'ty', 'num', 'resolved', 'parts', 'text', 'name', 'line',
                  'incoming', 'block')
     def __init__(self, k, ty):
@@ -134,16 +130,7 @@ def operands_of(item):
         out.append(p.val if isinstance(p, Typed) else p if isinstance(p, V) else None)
     return [v for v in out if v is not None]
 class Flattener(object):
-    """一份结构化 dump → 一份平面 IR。
-    ★ φ 的放置判据（§6.3，先写成注释再写代码）：
-      ① 只在**前驱数 ≥ 2** 的块放：If 的 join、While/For 的循环头、循环出口；
-      ② 只对"在分支里被 store 过、又在别处被 load 过"的直接 alloca 槽放；
-         只写不读的槽**一个 φ 都不放**；
-      ③ 每个 φ 至少有一个非自身入值（循环头 φ 的入值来自循环前与循环体）。
-      实现走"变量版本"的 env（槽 → 当前值，不建支配树）：store 到一个"被读过"的槽 ⇒ 更新
-      env（指令照发：不做 mem2reg，铁律 1）；load 始终从原地址读取，
-      不能用 env 的槽值替代真实内存；汇合点各入边值全同就不放 φ，缺值补零。
-    """
+    """结构化 dump → 平面 IR；只在多边汇合处为被读写的标量槽放 φ。"""
     def __init__(self, names, fnret, fop):
         self.names, self.fnret, self.fop = names, fnret, fop
         self.ret, self.pty = func_sig(fop)
@@ -171,8 +158,7 @@ class Flattener(object):
                 for reg in op.regions:
                     visit(reg, depth + (1 if k in ('If', 'While', 'For') else 0))
         visit(self.fop.regions[0] if self.fop.regions else [], 0)
-        # ★ 判据 2：只写不读的槽不跟踪（"只写不读 ⇒ 一个 φ 都不放"）；被读过的槽才进
-        # env（§6.3"实现方式"）；For 的 IV 槽**强制**跟踪（§6.2 明文要 φ）。
+        # 只写不读的槽不跟踪；For 的 IV 槽强制跟踪（§6.2）。
         self.tracked = set(op for op in self.slot_order if id(op) in self.forslot or
                            (id(op) in self.read and id(op) in self.brwrite))
     def root_slot(self, pname):
@@ -219,8 +205,7 @@ class Flattener(object):
             self.cur.term = mk(None, parts, line)
             self.cur = None
     def run_region(self, ops, env):
-        """【后置】展平到 self.cur；返回 ('yield', 值, 行) / ('break'|'return'|
-        'unreachable'|'fell', None, 行)。"""
+        """展平到 self.cur；返回 (退出方式, yield 值, 行)。"""
         for op in ops:
             k = op.kind
             if k == 'Yield':
@@ -318,6 +303,17 @@ class Flattener(object):
             self.vmap[res] = self.emit(mk('i32', [
                 ('fcmp %s f32 ' % FCMP_PRED[k] if ty == 'f32'
                  else 'icmp %s %s ' % (ICMP_PRED[k], ty)), v0, ', ', v1], line))
+        elif k == 'F2I':
+            nan = self.emit(mk('i32', ['fcmp une f32 ', v0, ', ', v0], line))
+            hi = self.emit(mk('i32', ['fcmp oge f32 ', v0, ', ',
+                                      self.const('f32', '0x1p+31', line)], line))
+            lo = self.emit(mk('i32', ['fcmp olt f32 ', v0, ', ',
+                                      self.const('f32', '-0x1p+31', line)], line))
+            out = self.emit(mk('i32', ['fptosi f32 ', v0, ' to i32'], line))
+            for guard, value in ((hi, self.const('i32', '2147483647', line)),
+                    (lo, self.const('i32', '-2147483648', line)), (nan, self.zero('i32', line))):
+                out = self.emit(mk('i32', ['select i1 ', guard, ', i32 ', value, ', i32 ', out], line))
+            self.vmap[res] = out
         elif k in CASTS:
             spec = CASTS[k]
             self.vmap[res] = self.emit(mk(spec[0], [spec[1], v0, spec[2]], line))
@@ -598,9 +594,7 @@ def parse_flat(text):
     return funcs
 
 def self_check(text):
-    """【后置】返回 (问题列表, 不可达块数)。检查项：① 操作数 `%N` 都在**同一个函数**里
-    有定义；② 每块恰好一个终结符且在最后；③ φ 在块首且入值块集合 == 该块前驱集合
-    （无重复）；④ 除计数到的不可达块外，块都可达（可达性按函数算：块号每函数从 L0 起）。"""
+    """检查函数内引用、终结符、φ 前驱、F2I 饱和链和块可达性。"""
     bad, un = [], 0
     for fn in parse_flat(text):
         name = fn['hdr'][:40]
@@ -610,6 +604,12 @@ def self_check(text):
             if m: defined.add(int(m.group(1)))
         preds, succ = dict((lab, set()) for lab, _l in fn['blocks']), {}
         for lab, lines in fn['blocks']:
+            for i, ln in enumerate(lines):
+                if ' = fptosi f32 ' not in ln: continue
+                got = [DEF.match(s).group(2) if DEF.match(s) else '' for s in lines[i - 3:i + 4]]
+                exp = ('fcmp une ', 'fcmp oge ', 'fcmp olt ', 'fptosi ', 'select ', 'select ', 'select ')
+                if len(got) != len(exp) or any(not x.startswith(y) for x, y in zip(got, exp)):
+                    bad.append('%s %s: F2I 缺少饱和转换链' % (name, lab))
             if len([ln for ln in lines if TERM.match(ln)]) != 1:
                 bad.append('%s %s: 终结符不是恰好 1 个' % (name, lab))
                 continue

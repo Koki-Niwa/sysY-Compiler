@@ -446,7 +446,7 @@ class Gen(object):
         的收尾 Load·Store——照真实输出的结果编号顺序对齐。
         """
         hi = self.cf(2147483648.0, line)
-        g = self.val('Gt @ %s %s' % (v[0], hi[0]), line, 'i32', None)[0]
+        g = self.val('Ge @ %s %s' % (v[0], hi[0]), line, 'i32', None)[0]
         lo = self.cf(-2147483648.0, line)
         l = self.val('Lt @ %s %s' % (v[0], lo[0]), line, 'i32', None)[0]
         nn = self.val('Ne @ %s %s' % (v[0], v[0]), line, 'i32', None)[0]

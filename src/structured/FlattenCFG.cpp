@@ -504,10 +504,10 @@ Function* FlatBuilder::run(const Op* fn) {
     emit(createUnreachable(SourceLoc()));
   }
   splitCriticalEdges();
+  pruneDeadPhis();
   // ★ 块号唯一性自查：`L<n>` 是 dump 的引用键，**重复索引会让 dump 不可读回**
-  //   （读回器判"重复的标签"）。blocks_ 的 index 只在 `addBlock`/`reindexBlocks`
-  //   里设置，理论上唯一 —— 这里把它变成**可执行的判据**，出问题立刻报出来
-  //   而不是留下一个"读不回来"的 dump。
+  //   （读回器判"重复的标签"）。`addBlock`/`reindexBlocks` 设置 index；
+  //   这里把唯一性变成可执行判据，出问题立刻报错，不留下不可读回的 dump。
   {
     std::unordered_set<uint32_t> seenIdx;
     for (BasicBlock* b : blocks_) {

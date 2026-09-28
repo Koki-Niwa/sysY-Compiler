@@ -40,7 +40,7 @@ TESTS=(
   "test_sema|${SUPPORT[*]} ${FRONTEND[*]}"
   "test_initlowering|${SUPPORT[*]} ${FRONTEND[*]}"
   "test_structured|${SUPPORT[*]} ${FRONTEND[*]}" "test_loopnorm|${SUPPORT[*]} ${FRONTEND[*]}"
-  "test_flat|${SUPPORT[*]} ${FRONTEND[*]}")
+  "test_flat|${SUPPORT[*]} ${FRONTEND[*]}" "test_flat_dead_phi|${SUPPORT[*]} ${FRONTEND[*]}")
 
 BENCHES=(
   "bench_lexer|${SUPPORT[*]} ${FRONTEND[*]}"

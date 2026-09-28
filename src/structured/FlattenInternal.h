@@ -165,6 +165,7 @@ class FlatBuilder {
   Action lowerWhile(Op* op, Frame& fr);
   Action lowerFor(Op* op, Frame& fr);
   void splitCriticalEdges();
+  void pruneDeadPhis();
   void collectReadSlots(Region* region);
   void collectStoredSlots(Region* region, std::unordered_set<Value*>& out) const;
 

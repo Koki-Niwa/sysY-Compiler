@@ -19,6 +19,41 @@
 namespace sysy {
 namespace flat {
 
+// 环境合并需在展平中途保守地预造 φ，因为当时还不知后续是否真会用它。
+// 函数成形后从非 φ 使用反向标记；没有通向非 φ 使用的纯 φ 环也会整体移除。
+// 指令仍由 Module 持有，所以摘块后清空引用，最终统一重建 use-def 即可。
+void FlatBuilder::pruneDeadPhis() {
+  std::unordered_set<Instruction*> live;
+  std::vector<Instruction*> work;
+  auto mark = [&live, &work](Value* v) {
+    if (v == nullptr || !v->isInst()) return;
+    Instruction* def = static_cast<Instruction*>(v);
+    if (def->op() == Opcode::Phi && def->parent() != nullptr && live.insert(def).second) {
+      work.push_back(def);
+    }
+  };
+  for (BasicBlock* b : blocks_) {
+    for (Instruction* use : b->insts()) {
+      if (use->op() == Opcode::Phi) continue;
+      for (Value* v : use->operands()) mark(v);
+    }
+  }
+  while (!work.empty()) {
+    Instruction* phi = work.back();
+    work.pop_back();
+    for (Value* v : phi->operands()) mark(v);
+  }
+  for (BasicBlock* b : blocks_) {
+    for (size_t ii = 0; ii < b->size();) {
+      Instruction* phi = b->at(ii);
+      if (phi->op() != Opcode::Phi || live.count(phi) != 0) { ++ii; continue; }
+      b->removeInst(phi);
+      phi->clearOperands();
+      phi->clearSuccs();
+    }
+  }
+}
+
 // ============================================================================
 // `(If c) { then } { else }` →
 //     [cur] --c--> [then] --→ [join] ←-- [else] ←-- [cur]

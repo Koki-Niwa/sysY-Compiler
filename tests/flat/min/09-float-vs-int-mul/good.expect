@@ -23,7 +23,7 @@
     (Store f32 %main.17 %main.13 @line 4)
     (Load %main.18 f32 %main.10 @line 5)
     (Float %main.19 0x1p+31 @line 5)
-    (Gt %main.20 %main.18 %main.19 @line 5)
+    (Ge %main.20 %main.18 %main.19 @line 5)
     (Float %main.21 -0x1p+31 @line 5)
     (Lt %main.22 %main.18 %main.21 @line 5)
     (Ne %main.23 %main.18 %main.18 @line 5)

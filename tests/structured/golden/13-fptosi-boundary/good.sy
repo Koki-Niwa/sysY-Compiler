@@ -1,0 +1,12 @@
+int main() {
+  float upper = 0x1p+31;
+  int a = upper;
+  float below = 0x1.fffffep+30;
+  int b = below;
+  float lower = -0x1p+31;
+  int c = lower;
+  if (a != 2147483647) return 1;
+  if (b != 2147483520) return 2;
+  if (c != (-2147483647 - 1)) return 3;
+  return 0;
+}

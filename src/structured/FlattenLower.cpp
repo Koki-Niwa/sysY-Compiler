@@ -30,8 +30,7 @@ namespace flat {
 namespace {
 
 // 【后置】i32 值对应的 f32 位模式（`memcpy` 不是 constexpr ⇒ 不能是 constexpr 函数）
-uint32_t f32BitsFor(int32_t i) {
-  float f = static_cast<float>(i);
+uint32_t f32BitsFor(float f) {
   uint32_t b = 0;
   std::memcpy(&b, &f, sizeof(b));
   return b;
@@ -480,10 +479,10 @@ Action FlatBuilder::lower(Op* op) {
       //     其余 → fptosi
       Value* a = map(op->operand(0));
       if (a == nullptr) { giveUp("F2I 的操作数缺失", op->loc); return Action::kOk; }
-      const Value* hiC = kFlt(f32BitsFor(2147483647), op->loc);
-      const Value* loC = kFlt(f32BitsFor(-2147483648), op->loc);
+      const Value* hiC = kFlt(f32BitsFor(2147483648.0f), op->loc);
+      const Value* loC = kFlt(f32BitsFor(-2147483648.0f), op->loc);
       Instruction* nanv = createFCmp(FPred::Une, a, a, op->loc);      // NaN ⇒ 真
-      Instruction* tooHigh = createFCmp(FPred::Ogt, a, const_cast<Value*>(hiC), op->loc);
+      Instruction* tooHigh = createFCmp(FPred::Oge, a, const_cast<Value*>(hiC), op->loc);
       Instruction* tooLow = createFCmp(FPred::Olt, a, const_cast<Value*>(loC), op->loc);
       Instruction* conv = createCast(Opcode::FPToSI, a, op->loc);
       emit(nanv);

@@ -47,7 +47,7 @@
     (GetElementPtr %main.38 i32 i64 0 %main.35 %main.37 @line 9)
     (Load %main.39 f32 %main.28 @line 9)
     (Float %main.40 0x1p+31 @line 9)
-    (Gt %main.41 %main.39 %main.40 @line 9)
+    (Ge %main.41 %main.39 %main.40 @line 9)
     (Float %main.42 -0x1p+31 @line 9)
     (Lt %main.43 %main.39 %main.42 @line 9)
     (Ne %main.44 %main.39 %main.39 @line 9)

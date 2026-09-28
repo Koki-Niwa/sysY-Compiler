@@ -419,7 +419,7 @@ Value Gen::genLogical(const Binary& b, int depth) {
 }
 
 // float→int 的**饱和**归一化（prompt §五.5；语义与 `satFptosi` 逐位一致）：
-//   NaN → 0 · v > 2147483647.0f → INT_MAX · v < -2147483648.0f → INT_MIN
+//   NaN → 0 · v >= 2147483648.0f → INT_MAX · v < -2147483648.0f → INT_MIN
 //   否则 → `fptosi`
 // ★ 阈值就是 2^31（在 f32 里精确可表示）。
 Value Gen::genSatFptosi(Value v, SourceLoc loc) {
@@ -427,10 +427,10 @@ Value Gen::genSatFptosi(Value v, SourceLoc loc) {
   uint32_t hiB = 0, loB = 0;
   std::memcpy(&hiB, &hiF, sizeof(hiB));
   std::memcpy(&loB, &loF, sizeof(loB));
-  Value tooHigh = cmp(OpKind::Gt, v, cFlt(hiB, loc), loc);   // NaN ⇒ false
+  Value tooHigh = cmp(OpKind::Ge, v, cFlt(hiB, loc), loc);   // NaN ⇒ false
   Value tooLow = cmp(OpKind::Lt, v, cFlt(loB, loc), loc);    // NaN ⇒ false
   Value nanv = cmp(OpKind::Ne, v, v, loc);                   // NaN ⇒ true
-  // 嵌套三层：NaN 时 Gt/Lt 都为假 ⇒ 只有 nanv 为真 ⇒ 一定落到 0（无需优先级假设）
+  // 嵌套三层：NaN 时 Ge/Lt 都为假 ⇒ 只有 nanv 为真 ⇒ 一定落到 0（无需优先级假设）
   Value notHigh = genConditionalI32(
       tooHigh, [&]() { (void)cInt(INT32_MAX, loc); },
       [&]() {

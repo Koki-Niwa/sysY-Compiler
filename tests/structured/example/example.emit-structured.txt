@@ -125,7 +125,7 @@
     (I2F %main.50 %main.49 @line 20)
     (AddF %main.51 %main.50 %main.38 @line 20)
     (Float %main.52 0x1p+31 @line 20)
-    (Gt %main.53 %main.51 %main.52 @line 20)
+    (Ge %main.53 %main.51 %main.52 @line 20)
     (Float %main.54 -0x1p+31 @line 20)
     (Lt %main.55 %main.51 %main.54 @line 20)
     (Ne %main.56 %main.51 %main.51 @line 20)

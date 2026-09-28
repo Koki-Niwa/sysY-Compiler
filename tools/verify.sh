@@ -378,7 +378,7 @@ if [ "$CAN_INITPLAN" = "1" ]; then
   if [ -f "$TOOLS/selftest/check_initplan.py" ]; then
     ILOG="$WORK/initplan.log"
     if python3 "$TOOLS/selftest/check_initplan.py" --compiler "$COMPILER" \
-          --jobs "$(nproc)" >"$ILOG" 2>&1; then
+          --jobs 4 >"$ILOG" 2>&1; then  # 大数组语料限制并发峰值内存
       c_ok "初始化语义：独立检查器模拟计划并与源码含义逐元素一致"
     else
       c_bad "初始化语义检查失败"

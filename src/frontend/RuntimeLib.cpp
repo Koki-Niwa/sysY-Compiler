@@ -11,6 +11,7 @@
 //   void  starttime();       void  stoptime();    // sylib.h 里是宏，见头注
 // ============================================================================
 #include "frontend/RuntimeLib.h"
+#include "support/RuntimeLib.h"
 
 namespace sysy {
 namespace {
@@ -22,9 +23,17 @@ namespace {
 //    490 个用例里立刻有 100 多个误报。
 TypeContext& libTypes() { return typeContext(); }
 
-// 数组形参的类型：`int a[]` → Array(Int, kUnknownDim)；`float a[]` 同理。
-const Type* paramArray(const Type* elem) {
-  return libTypes().arrayOf(elem, kUnknownDim);
+// 中立签名到前端类型的适配；类型仍由同一 TypeContext 驻留。
+const Type* frontendType(runtime::Kind kind) {
+  TypeContext& t = libTypes();
+  switch (kind) {
+    case runtime::Kind::Void: return t.voidType();
+    case runtime::Kind::Int: return t.intType();
+    case runtime::Kind::Float: return t.floatType();
+    case runtime::Kind::IntArray: return t.arrayOf(t.intType(), kUnknownDim);
+    case runtime::Kind::FloatArray: return t.arrayOf(t.floatType(), kUnknownDim);
+  }
+  return nullptr;
 }
 
 // 用一个小工厂把"表"写成声明式的：每个条目在首次调用时构造一次。
@@ -38,27 +47,15 @@ struct Lib {
   }
 
   Lib() {
-    TypeContext& t = libTypes();
-    const Type* i = t.intType();
-    const Type* f = t.floatType();
-    const Type* v = t.voidType();
-    const Type* ia = paramArray(i);
-    const Type* fa = paramArray(f);
-
-    sigs.reserve(13);
-    funcs.push_back({"getint",     mk(i, {})});
-    funcs.push_back({"getch",      mk(i, {})});
-    funcs.push_back({"getarray",   mk(i, {ia})});
-    funcs.push_back({"getfloat",   mk(f, {})});
-    funcs.push_back({"getfarray",  mk(i, {fa})});
-    funcs.push_back({"putint",     mk(v, {i})});
-    funcs.push_back({"putch",      mk(v, {i})});
-    funcs.push_back({"putarray",   mk(v, {i, ia})});
-    funcs.push_back({"putfloat",   mk(v, {f})});
-    funcs.push_back({"putfarray",  mk(v, {i, fa})});
-    funcs.push_back({"putf",       mk(v, {}, /*uncallable=*/true)});
-    funcs.push_back({"starttime",  mk(v, {})});
-    funcs.push_back({"stoptime",   mk(v, {})});
+    sigs.reserve(runtime::kSignatures.size());
+    for (const runtime::Signature& signature : runtime::kSignatures) {
+      std::vector<const Type*> params;
+      for (size_t i = 0; i < signature.parameterCount; ++i)
+        params.push_back(frontendType(signature.parameters[i]));
+      funcs.push_back({signature.name,
+                      mk(frontendType(signature.result), std::move(params),
+                         signature.uncallable)});
+    }
   }
 };
 

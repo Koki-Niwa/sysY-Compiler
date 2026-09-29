@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # unit/run.sh —— 支撑层 + 前端 + 两层 IR 的单元测试
 #   sourcefile/diagnostic P00 · lexer S01 · parser S02 · sema S03 · initlowering S04
-#   structured S05 · loopnorm S05b · flat S06
+#   structured S05 · loopnorm S05b · flat S06 · LLVM emitter S07
 # 用 clang++ --std=c++17 直接编译；退出 0 即通过。S06 的 ir/ 与 Flatten* 用通配。
 # ============================================================================
 set -uo pipefail
@@ -33,6 +33,7 @@ FRONTEND=("$SRC/frontend/Lexer.cpp" "$SRC/frontend/Parser.cpp" "$SRC/frontend/Pa
 
 # 每个测试：名字 | 需要的源文件（--bench 条目只构建，不参与"通过"判定）
 TESTS=(
+  "test_runtime_catalog|$SRC/frontend/RuntimeLib.cpp"
   "test_sourcefile|${SUPPORT[*]}"
   "test_diagnostic|${SUPPORT[*]}"
   "test_lexer|${SUPPORT[*]} ${FRONTEND[*]}"
@@ -40,7 +41,7 @@ TESTS=(
   "test_sema|${SUPPORT[*]} ${FRONTEND[*]}"
   "test_initlowering|${SUPPORT[*]} ${FRONTEND[*]}"
   "test_structured|${SUPPORT[*]} ${FRONTEND[*]}" "test_loopnorm|${SUPPORT[*]} ${FRONTEND[*]}"
-  "test_flat|${SUPPORT[*]} ${FRONTEND[*]}" "test_flat_f2i|${SUPPORT[*]} ${FRONTEND[*]}" "test_flat_dead_phi|${SUPPORT[*]} ${FRONTEND[*]}")
+  "test_flat|${SUPPORT[*]} ${FRONTEND[*]}" "test_flat_f2i|${SUPPORT[*]} ${FRONTEND[*]}" "test_flat_dead_phi|${SUPPORT[*]} ${FRONTEND[*]}" "test_llvm_emitter|${SUPPORT[*]} ${FRONTEND[*]}")
 
 BENCHES=(
   "bench_lexer|${SUPPORT[*]} ${FRONTEND[*]}"

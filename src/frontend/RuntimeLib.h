@@ -1,11 +1,11 @@
 // ============================================================================
-// RuntimeLib —— SysY 运行时库的函数签名表（S03 交付物 #3）
+// RuntimeLib —— SysY 运行时签名到前端类型的适配（S03 API）
 //
 // 规范依据：`docs/sysy_lang.txt` §1 Overview（"SysY itself does not provide
 // built-in language constructs for I/O. I/O is provided by way of a runtime
 // library"）与官方 `runtime/sylib.h`。
 //
-// ── 合规说明（**这是全项目唯一允许的"名字表"**）──────────────────────────
+// ── 合规说明（**唯一名字表位于 support/RuntimeLib.h**）──────────────────────────
 //   COMPLIANCE.md §二明确允许"使用官方运行时库"，而铁律 2 禁的是
 //   "识别函数名做**特定优化**"。本表**只用于类型检查与（S05 的）ABI 发射**，
 //   不改变任何优化行为：`verify.sh` 的 B 组 grep 明确豁免文件名含

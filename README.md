@@ -1,97 +1,70 @@
 # SysY Compiler — 前端与中端
 
-一个 **SysY → LLVM IR 子集** 编译器的**前端与中端**实现。
+自研 C++17 SysY2022 编译器前中端。产品目标是在正确性与资源约束内，使最终生成汇编的运行性能尽可能高；工程原则是 **Codex 可读性第一、功能模块化设计**。
 
-- **输入**：SysY 源文件（`.sy` / `.sysy`）
-- **输出**：目标无关的 LLVM IR 子集文本（`.ll`）
-- **边界**：本项目**到 `.ll` 为止**。指令选择、寄存器分配、汇编发射由后端负责。
+多层 IR 保留循环、访问和控制流信息，为后续优化 pass、多面体优化、e-graph 与全程序优化提供边界。计划交付目标无关的 LLVM IR 子集文本，指令选择、寄存器分配与汇编发射由后端负责。
 
----
+## 当前能力
 
-## 构建
+已实现前端、结构化 IR、循环规范化、FlattenCFG、平面 IR 及其读回/验证，并能将经过验证的平面 IR 发射为目标无关的 LLVM IR 子集文本。`--from-flat` 可把平面 IR 文本作为发射输入；发射失败时报告诊断且保留既有输出文件。`-O1` 当前只记录选项，没有启用优化。
+
+完整事实与阅读路径：
+
+- [当前状态](docs/CURRENT-STATE.md)
+- [目标](docs/GOALS.md)与[架构及模块契约](docs/ARCHITECTURE.md)
+- [性能扩展与测量契约](docs/PERFORMANCE-EXTENSIONS.md)
+- [开发约定](AGENTS.md)
+
+## 构建与使用
+
+从本仓库目录执行；要求 C++17、CMake ≥ 3.20、Ninja，无第三方产品依赖。既定验收工具链为 `clang++`。
 
 ```bash
 cmake -S . -B build -G Ninja
 cmake --build build
-# 产物：build/compiler
+build/compiler input.sy --emit=structured-ir -o output.sir
+build/compiler input.sy --emit=structured-ir --normalize -o normalized.sir
+build/compiler input.sy --emit=flat-ir -o output.fir
+build/compiler --help
 ```
 
-**要求**：C++17、CMake ≥ 3.20、任意标准库实现（`clang++` / `g++`）。
-**无第三方依赖**。
+当前可用产物：默认 `llvm-ir`、`tokens`、`ast`、`sema`、`initplan`、`structured-ir`、`flat-ir`、`nothing`。
+`--from-ast`、`--from-structured`、`--from-flat` 用于读回对应产物；完整选项以 `--help` 为准。
 
----
+退出码：`0` 成功，`1` 编译或发射错误，`2` 命令行用法错误，`3` 文件读写错误。
 
-## 用法
+## 模块
+
+| 目录 | 职责 |
+|---|---|
+| `src/frontend/` | 词法、AST、语义、常量与初始化计划 |
+| `src/structured/` | AST-to-IR 桥、结构化 IR、循环规范化、展平 |
+| `src/ir/` | 平面 IR 数据模型、读回、验证与 LLVM 文本发射 |
+| `src/support/` | 源码位置、诊断、中立运行库签名 |
+| `src/main/` | CLI 与管线组合 |
+| `tools/` | 开发期验证；`verify.sh` 协调 `gate/` 各检查组 |
+
+`analysis/` 与 `opt/` 是未来扩展方向，当前没有实现通用分析/优化框架。
+
+## 关键语义
+
+- 整数为 32 位回绕语义，不发射 `nsw`/`nuw`；浮点不使用 fast-math。
+- 前端变量读保留显式 load，由后续 mem2reg 负责提升。
+- 结构化到平面 IR 按管线单向降级，每个边界验证不变量。
+- 计划交接的 `.ll` 不带 triple/layout 或主机 CPU 属性，由后端提供目标配置。
+- `tensor` 语法暂不支持；当前官方清单中 490 个用例在范围内，50 个明确排除。
+
+## 验证
 
 ```bash
-build/compiler <input.sy> -o <output.ll> [选项]
-
-选项：
-  -o <file>          输出文件（必填）
-  --emit=<kind>      产物类型: llvm-ir（默认）| tokens | ast | structured-ir | nothing
-  -O0 / -O1          优化级别（-O1 目前只记录，后续生效）
-  --optimize         -O1 的别名
-  -S                 接受但不解释（比赛调用形式: compiler a.sy -S -o a.s）
-  --structured       使用结构化 IR 层（默认）
-  --no-structured    不走结构化 IR 层（供回归对照用）
-  --toy-backend      接受但不解释（测试链路选择：走自研降级器而非 clang）
-  --verbose          打印处理过程
-  -h, --help
-  -v, --version
+python3 tools/selftest/check_architecture.py --root .
+python3 tools/selftest/check_line_budget.py --root .
+python3 tools/selftest/check_cli_capabilities.py
+bash tools/verify.sh --stage S07
 ```
 
-**退出码**：`0` 成功 · `1` 编译错误 · `2` 命令行用法错误 · `3` 文件读写错误
+完整关卡需要工作区的同级 `tests/`、`runtime/` 和开发工具链；本仓库可独立构建并运行上述三个局部检查。`--quick` 仅用于快速反馈，不是完整阶段验收。`tools/gate/*.sh` 由协调器加载，不独立运行。
 
----
+## 实现边界
 
-## 设计要点
-
-| 项 | 说明 |
-|---|---|
-| **两层 IR** | ① 结构化 IR（循环是 Op、带 Region、无 SSA、变量在内存）→ `FlattenCFG` → ② 平面 CFG IR（SSA + φ） |
-| **目标无关的 `.ll`** | 输出**不带** `target triple` / `datalayout` / `target-cpu` / `target-features`；目标由降级阶段决定 |
-| **整数语义** | `int` 是 32 位、溢出按 2³² 回绕；**不打** `nsw`/`nuw` |
-| **浮点语义** | **不加** `fast`/`reassoc`/`nsz`/`contract`（评测精确比对输出） |
-| **地址计算** | 下标算术在 `i32` 里做（允许回绕），算完 `sext` 到 `i64` 再进 `getelementptr` |
-| **未定义行为** | 跨目标规范化（如 `fptosi(NaN)` → 0、`sdiv` 除零 → 0） |
-
----
-
-## 目录
-
-```
-src/
-├── main/       命令行入口
-├── support/    诊断引擎、源文件读取、SourceLoc
-└── ...         前端 / IR / 分析 / 优化（随开发推进填充）
-tools/          开发用脚本（测试运行器、自检链路）
-```
-
----
-
-## 状态
-
-| 阶段 | 状态 |
-|---|---|
-| 骨架与验证基础设施 | ✅ 完成 |
-| 词法分析 | 进行中 |
-| 语法 / 语义 / 两层 IR / 优化 | 计划中 |
-
----
-
-## 开发工具
-
-`tools/` 下的脚本用于本项目的回归测试与链路自检。
-它们**不是编译器的一部分**，只在开发环境使用（需要 `clang` / `llvm-as` / `llc`，
-以及 `runtime/sylib.c`——那是**比赛官方提供的运行时库**，不随本仓库分发）。
-
----
-
-## 合规声明
-
-本项目为**从零实现**，**未使用** GCC / LLVM 等现有编译器及其框架的源代码。
-编译器的运行**不依赖任何外部程序**。
-
-`clang` / `llvm-as` / `llc` 等工具**仅出现在开发期的测试脚本中**，
-用于独立校验产出的 IR 是否合法、以及交叉验证目标平台行为——
-**不参与编译流程，也不随交付物分发**。
+产品不链接 libLLVM、不调用 `clang`/`llc`/`opt` 等外部程序，不使用现有编译器框架源码。开发期测试可调用独立工具验证正确性；研究资料仅用于理解设计。

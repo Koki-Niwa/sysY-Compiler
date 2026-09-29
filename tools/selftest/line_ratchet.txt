@@ -12,7 +12,7 @@
 605  compiler/tools/selftest/check_initplan.py
 237  compiler/tools/selftest/check_initplan_format.py
 540  compiler/tools/selftest/check_lexer.py
-128  compiler/tools/selftest/check_line_budget.py
+137  compiler/tools/selftest/check_line_budget.py
 576  compiler/tools/selftest/check_loopnorm.py
 114  compiler/tools/selftest/check_mem_budget.py
 357  compiler/tools/selftest/check_parser.py
@@ -51,7 +51,7 @@
 81  compiler/tools/selftest/test_arena.py
 76  compiler/tools/selftest/test_loop_backedge_census.py
 82  compiler/tools/selftest/unit/bench_lexer.cpp
-99  compiler/tools/selftest/unit/run.sh
+100  compiler/tools/selftest/unit/run.sh
 215  compiler/tools/selftest/unit/test_diagnostic.cpp
 572  compiler/tools/selftest/unit/test_flat.cpp
 385  compiler/tools/selftest/unit/test_initlowering.cpp
@@ -61,4 +61,4 @@
 420  compiler/tools/selftest/unit/test_sema.cpp
 135  compiler/tools/selftest/unit/test_sourcefile.cpp
 373  compiler/tools/selftest/unit/test_structured.cpp
-842  compiler/tools/verify.sh
+78  compiler/tools/verify.sh

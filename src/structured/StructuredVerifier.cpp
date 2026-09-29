@@ -8,7 +8,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include "frontend/RuntimeLib.h"
+#include "support/RuntimeLib.h"
 
 namespace sysy {
 namespace sir {
@@ -211,10 +211,9 @@ class Checker {
         } else if (callee.rfind("_sysy", 0) == 0 || callee == "llvm.memcpy" ||
                    callee == "llvm.memset") {
           rt = typePool().voidTy();
-        } else if (const FuncSig* sig = lookupRuntimeFunc(callee)) {
-          rt = sig->ret == nullptr ? typePool().i32()
-                                   : (isVoid(sig->ret) ? typePool().voidTy()
-                                                       : typePool().i32());
+        } else if (const runtime::Signature* sig = runtime::lookup(callee)) {
+          // 本项只检查结果个数，非 void 调用均有一个结果。
+          rt = sig->result == runtime::Kind::Void ? typePool().voidTy() : typePool().i32();
         } else {
           // 自递归 / 未在本模块定义（`main` 之外的用户函数都在；残缺树可能缺）
           rt = typePool().i32();

@@ -22,6 +22,7 @@
 #include "frontend/SemaDump.h"
 #include "ir/FlatDump.h"
 #include "ir/FlatVerifier.h"
+#include "ir/LLVMTextEmitter.h"
 #include "structured/AllocaHoist.h"
 #include "structured/FlattenCFG.h"
 #include "structured/IRGen.h"
@@ -121,7 +122,7 @@ bool parseCommandLine(int argc, char** argv, Options& opts) {
     }
     if (a == "-v" || a == "--version") {
       std::cout << "sysy-compiler " << SYSY_COMPILER_VERSION
-                << " (front/middle end; stage S05 — structured IR + IRGen)\n";
+                << " (front/middle end; stage S07 — LLVM IR text emission)\n";
       return false;
     }
     if (a == "-o") {
@@ -394,7 +395,8 @@ std::string renderFromStructured(const SourceFile& src, DiagnosticEngine& diags,
 //   …（此处原有 11 行说明，已并入 S06 报告与设计文档）
 // ============================================================================
 std::string renderFlatIr(const SourceFile& src, DiagnosticEngine& diags, bool fromAst,
-                         bool /*normalizeAlreadyImplied*/, bool flatStats) {
+                         bool /*normalizeAlreadyImplied*/, bool flatStats,
+                         std::unique_ptr<sysy::flat::Module>* moduleOut = nullptr) {
   std::unique_ptr<CompUnit> unit;
   if (fromAst) {
     unit = sysy::parseAstText(src.text(), diags);
@@ -417,24 +419,17 @@ std::string renderFlatIr(const SourceFile& src, DiagnosticEngine& diags, bool fr
     diags.report(DiagLevel::Error, sysy::SourceLoc(0, 0), "E-STRUCT-VERIFY",
                  "展平之前结构化 IR 已违反不变量：\n" + sysy::sir::formatViolations(svs));
   }
-  // ★★ 平面校验只在"前面的阶段全绿"时才有意义 ★★
-  //   前端已经报错时（张量语法、越界构造…），AST 是**带病恢复**出来的，
-  //   结构化 IR 里已经出现"`load` 的操作数不是指针"这类形态 —— 再报一句
-  //   "平面 IR 违反不变量（7 条）"是**假信号**：那些文件本来就不该有产物。
-  //   实测：48 个张量文件共报 398 条 `[V6]`，全部落在**前端已拒绝**的文件里；
-  //   490 个真正产出平面 IR 的文件**一条都不报**。
+  // Recovery IR after a frontend error can violate downstream invariants too;
+  // skip flat verification there to avoid misleading secondary diagnostics.
   const bool pipelineClean = !diags.hasError();
-  sysy::flat::Module fmod;
-  if (sysy::flat::flattenModule(smod, fmod, diags) == nullptr) return std::string();
+  auto fmod = std::make_unique<sysy::flat::Module>();
+  if (sysy::flat::flattenModule(smod, *fmod, diags) == nullptr) return std::string();
   if (pipelineClean) {
-    const std::vector<sysy::flat::Violation> fvs = sysy::flat::verifyFlatModule(fmod);
+    const std::vector<sysy::flat::Violation> fvs = sysy::flat::verifyFlatModule(*fmod);
     if (!fvs.empty()) {
-      // ★ S06 排障设施：`SYSY_DUMP_BAD_FLAT=1` 把**违约的那个平面模块**打到
-      //   stderr。为什么必须留：违约报告只有"块号 + 行号"，而块号在文本 dump
-      //   里才能对上（`L6` 到底有没有终结符、谁跳谁）—— 没有它就只能靠猜。
-      //   ⚠️ 只在**违约束**里生效，正常路径不受影响（不改产物、不改 rc）。
+      // Optional diagnostic dump adds block context to verifier violations.
       if (const char* want = std::getenv("SYSY_DUMP_BAD_FLAT"); want != nullptr && *want != '0') {
-        std::cerr << "===== 违约模块的平面 IR =====\n" << sysy::flat::dumpModule(fmod) << "\n";
+        std::cerr << "===== 违约模块的平面 IR =====\n" << sysy::flat::dumpModule(*fmod) << "\n";
       }
       diags.report(DiagLevel::Error, sysy::SourceLoc(0, 0), "E-FLAT-VERIFY",
                    "平面 IR 违反不变量（" + std::to_string(fvs.size()) + " 条）：\n" +
@@ -442,11 +437,15 @@ std::string renderFlatIr(const SourceFile& src, DiagnosticEngine& diags, bool fr
     }
   }
   if (flatStats) {
-    std::cerr << fmod.formatStats();
+    std::cerr << fmod->formatStats();
     std::cerr << "loopnorm rolled-back " << ls.rolledBack << " allocas-hoisted " << moved
               << "\n";
   }
-  return sysy::flat::dumpModule(fmod);
+  if (moduleOut != nullptr) {
+    *moduleOut = std::move(fmod);
+    return std::string();
+  }
+  return sysy::flat::dumpModule(*fmod);
 }
 
 // ============================================================================
@@ -472,7 +471,34 @@ void ensureReadable(const SourceFile& src) {
   // 只做 I/O（读文件 + CRLF 规范化）。解析由 renderAst / renderTokens 各自负责。
   (void)src.text();
 }
+std::string renderLlvmIr(const SourceFile& src, DiagnosticEngine& diags,
+                         bool fromAst, bool fromFlat, bool normalize, bool flatStats) {
+  std::unique_ptr<sysy::flat::Module> module;
+  if (fromFlat) {
+    module.reset(sysy::flat::parseFlatModule(src.text(), diags));
+    if (module && flatStats) std::cerr << module->formatStats();
+  } else {
+    (void)renderFlatIr(src, diags, fromAst, normalize, flatStats, &module);
+  }
+  if (!module || diags.hasError()) return std::string();
+  const std::vector<sysy::flat::Violation> violations =
+      sysy::flat::verifyFlatModule(*module);
+  if (!violations.empty()) {
+    diags.report(DiagLevel::Error, SourceLoc(0, 0), "E-FLAT-VERIFY",
+                 "发射 LLVM 前平面 IR 违反不变量：\n" +
+                     sysy::flat::formatViolations(violations));
+    return std::string();
+  }
 
+  sysy::flat::LLVMTextEmitter emitter;
+  std::string output;
+  std::string error;
+  if (!emitter.emit(*module, output, error)) {
+    diags.report(DiagLevel::Error, SourceLoc(0, 0), "E-LLVM-EMIT", error);
+    return std::string();
+  }
+  return output;
+}
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -538,16 +564,17 @@ int main(int argc, char** argv) {
                                         opts.flatStats);
           break;
         case EmitKind::LlvmIr:
-          // S07 才实现；本档是占位。
-          artifact = sysy::mainstage::placeholderText(
-              toString(opts.emit), src.path(), src.lineCount(), opts.optLevel >= 1,
-              opts.structured);
+          artifact = renderLlvmIr(src, diags, opts.fromAst, opts.fromFlat,
+                                  opts.normalize, opts.flatStats);
           break;
         case EmitKind::Nothing:
           break;
       }
-      // 【即使有词法错误也照常写出产物】：dump 是"可诊断的中间结果"，
-      // 丢掉它反而让 check_lexer.py 无从定位；错误通过 stderr + 退出码表达。
+      // 文本 dump 即使伴随诊断仍可定位；LLVM 产物必须完整才写入。
+      if (opts.emit == EmitKind::LlvmIr && diags.hasError()) {
+        diags.printAll(std::cerr, false);
+        return kCompileError;
+      }
       writeWholeFile(opts.output, artifact);
     }
   } catch (const IOError& e) {

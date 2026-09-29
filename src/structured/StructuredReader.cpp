@@ -31,7 +31,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "frontend/RuntimeLib.h"
+#include "support/RuntimeLib.h"
 #include "support/Diagnostic.h"
 
 namespace sysy {
@@ -58,9 +58,9 @@ bool isVoidBuiltin(const std::string& callee) {
   //   `putfarray` 是 SysY 层的 void 函数，dump 里是被调名字。
   //   漏了这一步 ⇒ 读回器认为它们有结果 ⇒ 结果序号计数器错位 1
   //   （实测：`matmul1` 的往返在 440 行开始整段偏移）。
-  //   `lookupRuntimeFunc` 是**名字表查询**，不是"按名字写特判"（铁律 2 允许）。
-  const FuncSig* sig = lookupRuntimeFunc(callee);
-  return sig != nullptr && isVoid(sig->ret);
+  //   查询中立签名表，不依赖前端类型或语义分析。
+  const runtime::Signature* sig = runtime::lookup(callee);
+  return sig != nullptr && sig->result == runtime::Kind::Void;
 }
 
 // ── 每个 OpKind 的**结果个数**（0 或 1；`Call` 由被调函数决定）──────────────

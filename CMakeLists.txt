@@ -62,9 +62,8 @@ add_executable(compiler
   src/ir/IR.cpp
   src/ir/FlatDump.cpp
   src/ir/FlatReader.cpp
-  # ⚠️ `.inc` 必须显式列成依赖：CMake **看不见** `#include "*.inc"`，
-  #   改了它而不同时碰 `.cpp` 时**不会重编** —— 实测踩到：修好读回器的
-  #   条件分支解析后 `.o` 还是旧的，白跑了一轮验证。
+  src/ir/LLVMTextEmitter.cpp
+  # 显式列出文本包含片段便于导航；编译器 depfile 同样追踪这些 include。
   src/ir/FlatReaderInst.inc
   src/ir/FlatReaderFunc.inc
   src/ir/FlatVerifier.cpp

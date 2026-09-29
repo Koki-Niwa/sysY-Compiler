@@ -32,7 +32,7 @@ import os
 import sys
 
 SRC_HARD_LIMIT = 600
-SRC_EXTS = ('.h', '.cpp')
+SRC_EXTS = ('.h', '.cpp', '.inc')
 TOOLS_EXTS = ('.py', '.sh', '.c', '.cpp', '.h')
 
 
@@ -59,20 +59,23 @@ def collect(root: str, sub: str, exts) -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument('--root', default='/home/koki1/try')
+    ap.add_argument('--root', default=os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..')))
     ap.add_argument('--update', action='store_true', help='刷新棘轮文件（编排方专用）')
     ap.add_argument('--new-limit', type=int, default=800)
     ap.add_argument('--verbose', action='store_true')
     args = ap.parse_args()
 
     root = args.root
-    if not os.path.isdir(os.path.join(root, 'compiler')):
-        print('找不到 %s/compiler（--root 对吗？）' % root, file=sys.stderr)
+    compiler = os.path.join(root, 'compiler')
+    if os.path.isdir(os.path.join(root, 'src')):
+        compiler = root
+    if not os.path.isdir(os.path.join(compiler, 'src')):
+        print('找不到产品源码目录（--root 应为工作区或 compiler 根）', file=sys.stderr)
         return 2
 
-    src = collect(root, 'compiler/src', SRC_EXTS)
-    tools = collect(root, 'compiler/tools', TOOLS_EXTS)
-    ratchet_path = os.path.join(root, 'compiler/tools/selftest/line_ratchet.txt')
+    src = {'compiler/' + k: v for k, v in collect(compiler, 'src', SRC_EXTS).items()}
+    tools = {'compiler/' + k: v for k, v in collect(compiler, 'tools', TOOLS_EXTS).items()}
+    ratchet_path = os.path.join(compiler, 'tools/selftest/line_ratchet.txt')
 
     if args.update:
         with open(ratchet_path, 'w', encoding='utf-8') as f:
@@ -89,6 +92,12 @@ def main() -> int:
     print('产品代码 (compiler/src): %d 个文件，上限 %d 行' % (len(src), SRC_HARD_LIMIT))
     for v, k in over:
         print('  ✘ %-46s %4d 行（超 %d）' % (k, v, v - SRC_HARD_LIMIT))
+
+    gate_over = [(v, k) for k, v in tools.items() if v > 600 and
+                 (k == 'compiler/tools/verify.sh' or
+                  (k.startswith('compiler/tools/gate/') and k.endswith('.sh')))]
+    for v, k in gate_over:
+        print('  ✘ %s %d 行（关卡脚本硬上限 600，不受棘轮豁免）' % (k, v))
 
     # ── 工具脚本：棘轮 ──
     recorded = {}
@@ -117,7 +126,7 @@ def main() -> int:
     for v, k in newbig:
         print('  ✘ %-46s %4d 行（新文件超过 %d）' % (k, v, args.new_limit))
 
-    if over or grew or newbig:
+    if over or gate_over or grew or newbig:
         print('判定：✘ 违反 §C4（要么拆分，要么由编排方明确改标准）')
         return 1
     print('判定：✔ 行数预算合规')

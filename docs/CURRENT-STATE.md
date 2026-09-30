@@ -24,19 +24,14 @@ an option record and does not enable optimization.
 ## Next milestone
 
 S07, the S08 verifier boundary, S09 mem2reg, and the S10a direct AST interpreter
-are implemented. A later closeout review found gaps in the dynamic remainder
-lowering, FlatVerifier structural/type checks, S09's proof that the CLI really
-performed promotion, S10a's generated-case oracle and durable evidence, and the
-stage dependency model. The working tree contains fixes for those findings, but
-no build, self-test, or stage gate has been run after the fixes. The archived
-S08 **49/0/2**, S09 **51/0/2**, and S10a **115/115 twice plus 32/32** results are
-historical baselines for the earlier committed source, not acceptance evidence
-for the current working tree.
+are implemented. The closeout findings in dynamic remainder lowering,
+FlatVerifier structural/type checks, S09's structural promotion evidence,
+S10a's generated-case oracle and durable evidence, and the stage dependency
+model are fixed. Fresh post-fix S08 and S09 gates and a revision-bound S10a
+runner all pass; exact results are recorded below.
 
-The next acceptance action is a fresh focused and full rerun with a clean source
-revision, including an archived S10a evidence manifest. S11 target execution and
-its performance baseline follow that rerun. S10b target differential work waits
-for S11 and S11b.
+The next milestone is S11 target execution and its performance baseline. S10b
+target differential work waits for S11 and S11b.
 End-to-end execution and target-code runtime measurements remain unimplemented
 and must not be inferred from LLVM assembly validation.
 
@@ -81,63 +76,57 @@ see also the [fresh S06 baseline](../../docs/audit/S06-BASELINE-S07-2026-09-30.m
 LLVM assembly proves text acceptance only; it does not prove target execution
 correctness or performance.
 
-The historical S08 entry gate was rerun after the original FlatVerifier audit
-and its independent review:
+The post-fix S08 entry gate was rerun on a clean source revision after the
+FlatVerifier closeout review:
 
 ```bash
 ulimit -v 8388608 && timeout 2400 bash compiler/tools/verify.sh --stage S08
 ```
 
-It reported **49 passed, 0 failed, 2 expected skips** (S11 target execution and
-S10a interpreter evidence are not required by this stage). The 490-supported /
+It reported **49 passed, 0 failed, 3 expected stage skips** (S09, S11 target
+execution, and S10a interpreter evidence are not required by this stage). The
+490-supported /
 50-tensor LLVM manifest gate passed; flat versus structured execution reported
 359 identical trajectories, 60 loop-count-only differences, 0 observable
 differences, and 121 categorized skips. The S08 public-boundary matrix passed
-28 invalid, 7 positive, and 8 mapped legacy cases. See the [fresh S08 gate
-report](../../docs/audit/S08-FRESH-2026-09-30.md) for the complete evidence and
-the initial compliance-check failure followed by its fix and passing rerun. A
-later review found missing predecessor-cache, malformed ownership/index, phi
-cardinality, operand/type, and unreachable-dominance cases; the current fixes
-have not yet been rerun.
+44 invalid, 7 positive, and 8 mapped legacy cases. This supersedes the earlier
+49/0/2 and 28/7/8 historical baseline for the current source. The gate also
+passed the dynamic remainder regressions and independent IRGen comparison.
 
-The historical S09 gate passed after the candidate transaction, phi predecessor
-ordering, and negative-test fixes:
+The post-fix S09 gate passed on the same clean source revision:
 
 ```bash
 ulimit -v 8388608 && timeout 2400 bash compiler/tools/verify.sh --stage S09
 ```
 
-It reported **51 passed, 0 failed, 2 expected stage skips**. The promoted flat
+It reported **52 passed, 0 failed, 2 expected stage skips**. The promoted flat
 path ran across 540 files: **359 identical complete trajectories, 60
 loop-count-only differences, 0 observable differences, and 121 categorized
 skips**. S08's public matrix again reported 28 invalid / 7 positive / 8 legacy
-cases; the same run passed the 490-supported / 50-tensor LLVM manifest. The
-fresh run proves interpreter-observed behavior preservation, not target runtime
-correctness or performance. See the [S09 fresh gate report](../../docs/audit/S09-FRESH-2026-09-30.md).
-That gate did not prove that `--mem2reg` changed the CLI-produced flat IR: the
-current gate adds a designated memory-form fixture, structural before/after
-checks, promotion statistics, and a no-op CLI that forges statistics as a
-negative control. These additions have not yet been run.
+cases in the historical baseline and 44 / 7 / 8 in this post-fix run; the same
+gate passed the 490-supported / 50-tensor LLVM manifest. Its designated fixture
+changed from 1 alloca, 1 load, and 3 stores to no memory instructions and 1 phi.
+A no-op CLI that forged the promotion statistic was rejected. The fresh run
+proves interpreter-observed behavior preservation and a real structural
+transformation, not target runtime correctness or performance.
 
-The historical S10a isolated runner invocation
-`bash tools/selftest/interpreter/run_s10a.sh --keep` reported 115/115 fixed
-cases on both runs and 32/32 seeded cases (seed `24176631846`). Its generated
-expected values were computed in the generator's own mode branches, and its
-only retained artifacts were under `/tmp/sysy_s10a_KtKIA7`; therefore that run
-does not establish an independent, revision-bound generated-case oracle. The
-current runner separates recipe generation from `s10a-recipe-oracle-v1`, adds a
-generated-expectation negative control, and can atomically write a
-RUNNING/FAIL/PASS JSON manifest with source revision and artifact hashes. PASS
-requires a clean compiler worktree and all required log markers. After the
-current changes are committed, archive a fresh manifest with, for example:
+The post-fix S10a isolated runner separates recipe generation from
+`s10a-recipe-oracle-v1`, checks a generated-expectation negative control, and
+atomically writes a RUNNING/FAIL/PASS JSON manifest with source revision and
+artifact hashes. PASS requires a clean compiler worktree and all required log
+markers. The fresh invocation was:
 
 ```bash
 bash tools/selftest/interpreter/run_s10a.sh --keep \
-  --report ../docs/handoff/reports/S10A-FRESH-YYYY-MM-DD.json
+  --report ../docs/handoff/reports/S10A-REVIEW-FIX-2026-09-30.json
 ```
 
-No such post-fix PASS manifest exists yet. The interpreter defines `getch`
-bytes as unsigned; target comparisons are limited to ASCII until target
+It reported **115/115 fixed cases on both runs and 32/32 generated cases** with
+seed `24176631846`; replay, the independent oracle, both negative controls,
+constraints, hash vectors, and every resource-limit check passed. The
+[revision-bound manifest](../../docs/handoff/reports/S10A-REVIEW-FIX-2026-09-30.json)
+records the exact clean revision and artifact hashes. The interpreter defines
+`getch` bytes as unsigned; target comparisons are limited to ASCII until target
 behavior is measured. Target differential remains an S10b/S11/S11b task.
 
 S05 defines integer `% 0` as the dividend based on cross-target measurements.
@@ -145,7 +134,7 @@ The interpreter, flat execution helper, and constant evaluator already follow
 that rule. The current IRGen fix makes conditional-result branches return their
 values explicitly, so dynamic `x % 0` returns `x` instead of an inferred zero;
 focused positive, negative, ordinary-remainder, and `INT_MIN % -1` regressions
-were added but have not been run. A target-backed regression is still required
+and both post-fix stage gates pass. A target-backed regression is still required
 before claiming target agreement.
 
 Capability requirements: S07 requires real `.ll` validation with `llvm-as` and

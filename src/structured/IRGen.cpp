@@ -359,8 +359,8 @@ Value Gen::genNormDiv(Value a, Value b, SourceLoc loc) {
   Value isOvf = bin(OpKind::MulI, i32(), intMin, negOne, loc);   // 布尔与（int 1/0）
   Value bad = bin(OpKind::AddI, i32(), isZero, isOvf, loc);      // 两者不可能同时为真
   return genConditionalI32(
-      bad, [&]() { (void)cInt(0, loc); },                         // then：结果 0
-      [&]() { (void)bin(OpKind::DivI, i32(), a, b, loc); },       // else：真正的商
+      bad, [&]() { return cInt(0, loc); },                         // then：结果 0
+      [&]() { return bin(OpKind::DivI, i32(), a, b, loc); },       // else：真正的商
       loc);
 }
 
@@ -376,12 +376,12 @@ Value Gen::genNormRem(Value a, Value b, SourceLoc loc) {
   Value bad = bin(OpKind::AddI, i32(), isZero, isOvf, loc);
   return genConditionalI32(
       bad,
-      [&]() {
+      [&]() -> Value {
         // bad 里要区分"除零 ⇒ x"与"INT_MIN%-1 ⇒ 0"
-        (void)genConditionalI32(
-            isZero, [&]() { (void)a; }, [&]() { (void)cInt(0, loc); }, loc);
+        return genConditionalI32(
+            isZero, [&]() { return a; }, [&]() { return cInt(0, loc); }, loc);
       },
-      [&]() { (void)bin(OpKind::ModI, i32(), a, b, loc); }, loc);
+      [&]() { return bin(OpKind::ModI, i32(), a, b, loc); }, loc);
 }
 
 // `x && y` / `x || y` 的**短路**求值：右侧只在需要时求值。
@@ -397,22 +397,22 @@ Value Gen::genLogical(const Binary& b, int depth) {
   const bool isAnd = (b.op == TokKind::AmpAmp);
   return genConditionalI32(
       lhBool,
-      [&]() {
+      [&]() -> Value {
         if (isAnd) {
           Value rhs = genExpr(b.rhs.get(), depth);
-          (void)(isFloat(b.rhs->type) ? cmp(OpKind::Ne, rhs, cFlt(0u, loc), loc)
-                                      : cmp(OpKind::Ne, rhs, cInt(0, loc), loc));
+          return isFloat(b.rhs->type) ? cmp(OpKind::Ne, rhs, cFlt(0u, loc), loc)
+                                      : cmp(OpKind::Ne, rhs, cInt(0, loc), loc);
         } else {
-          (void)cInt(1, loc);
+          return cInt(1, loc);
         }
       },
-      [&]() {
+      [&]() -> Value {
         if (isAnd) {
-          (void)cInt(0, loc);
+          return cInt(0, loc);
         } else {
           Value rhs = genExpr(b.rhs.get(), depth);
-          (void)(isFloat(b.rhs->type) ? cmp(OpKind::Ne, rhs, cFlt(0u, loc), loc)
-                                      : cmp(OpKind::Ne, rhs, cInt(0, loc), loc));
+          return isFloat(b.rhs->type) ? cmp(OpKind::Ne, rhs, cFlt(0u, loc), loc)
+                                      : cmp(OpKind::Ne, rhs, cInt(0, loc), loc);
         }
       },
       loc);
@@ -432,14 +432,14 @@ Value Gen::genSatFptosi(Value v, SourceLoc loc) {
   Value nanv = cmp(OpKind::Ne, v, v, loc);                   // NaN ⇒ true
   // 嵌套三层：NaN 时 Ge/Lt 都为假 ⇒ 只有 nanv 为真 ⇒ 一定落到 0（无需优先级假设）
   Value notHigh = genConditionalI32(
-      tooHigh, [&]() { (void)cInt(INT32_MAX, loc); },
+      tooHigh, [&]() { return cInt(INT32_MAX, loc); },
       [&]() {
-        (void)genConditionalI32(
-            tooLow, [&]() { (void)cInt(INT32_MIN, loc); },
+        return genConditionalI32(
+            tooLow, [&]() { return cInt(INT32_MIN, loc); },
             [&]() {
-              (void)genConditionalI32(
-                  nanv, [&]() { (void)cInt(0, loc); },
-                  [&]() { (void)un(OpKind::F2I, i32(), v, loc); }, loc);
+              return genConditionalI32(
+                  nanv, [&]() { return cInt(0, loc); },
+                  [&]() { return un(OpKind::F2I, i32(), v, loc); }, loc);
             },
             loc);
       },
@@ -458,22 +458,20 @@ void Gen::genYieldInto(Region* r, const std::function<void()>& body, SourceLoc l
   cur_ = saved;
 }
 
-Value Gen::genConditionalI32(Value cond, const std::function<void()>& genThen,
-                             const std::function<void()>& genElse, SourceLoc loc) {
+Value Gen::genConditionalI32(Value cond, const std::function<Value()>& genThen,
+                             const std::function<Value()>& genElse, SourceLoc loc) {
   Value slot = emitAlloca(i32(), loc);
   Region* thenR = mkRegion();
   Region* elseR = mkRegion();
-  // 两个 Region 都把"最后一个有结果的 Op"写进槽（没有 ⇒ 写 0，保守且确定）
+  // 两个 Region 都把回调显式返回的 Value 写进槽；不依赖最后一条 Op 的结果。
   genYieldInto(thenR, [&]() {
-    genThen();
-    Op* last = thenR->empty() ? nullptr : thenR->back();
-    Value v = (last != nullptr && last->numResults() > 0) ? last->result(0) : cInt(0, loc);
+    Value v = genThen();
+    if (v == nullptr) v = cInt(0, loc);
     store(i32(), v, slot, loc);
   }, loc);
   genYieldInto(elseR, [&]() {
-    genElse();
-    Op* last = elseR->empty() ? nullptr : elseR->back();
-    Value v = (last != nullptr && last->numResults() > 0) ? last->result(0) : cInt(0, loc);
+    Value v = genElse();
+    if (v == nullptr) v = cInt(0, loc);
     store(i32(), v, slot, loc);
   }, loc);
   Op* ifOp = mk(OpKind::If, loc);

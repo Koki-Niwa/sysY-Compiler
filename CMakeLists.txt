@@ -68,6 +68,7 @@ add_executable(compiler
   src/ir/FlatReaderInst.inc
   src/ir/FlatReaderFunc.inc
   src/ir/DominatorTree.cpp
+  src/ir/FlatSemantics.cpp
   src/ir/FlatVerifier.cpp
   # ── S09：平面标量 alloca → SSA promotion ────────────────────────────────
   src/opt/Mem2Reg.cpp

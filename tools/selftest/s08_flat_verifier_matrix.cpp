@@ -6,9 +6,7 @@
 #include <memory>
 #include <string>
 #include <vector>
-
 #include "ir/FlatVerifier.h"
-
 namespace {
 
 using sysy::SourceLoc;
@@ -480,6 +478,114 @@ std::unique_ptr<Module> badPhiNullPred() {
   return m;
 }
 
+std::unique_ptr<Module> badBlockIndex() {
+  std::unique_ptr<Module> m = validBranch();
+  m->function(0)->entry()->setIndex(77);
+  return m;
+}
+
+std::unique_ptr<Module> badInstructionOwnership() {
+  std::unique_ptr<Module> m(new Module());
+  Function* f = fn(*m, "bad_instruction_owner");
+  BasicBlock* second = m->createBlock(f);
+  Instruction* value = own(*m, createBin(Opcode::Add, cconst(*m, 1), cconst(*m, 2), L));
+  add(f->entry(), value);
+  add(f->entry(), own(*m, createBr(second, L)));
+  add(second, value);  // leaves the first block with a stale duplicate pointer.
+  add(second, own(*m, createRet(cconst(*m, 0), L)));
+  finish(*m);
+  return m;
+}
+
+std::unique_ptr<Module> badPredMissing() {
+  std::unique_ptr<Module> m = validBranch();
+  m->function(0)->at(3)->clearPreds();
+  return m;
+}
+
+std::unique_ptr<Module> badPredExtra() {
+  std::unique_ptr<Module> m = validBranch();
+  Function* f = m->function(0);
+  f->at(3)->addPred(f->entry());
+  return m;
+}
+
+std::unique_ptr<Module> badPredDuplicate() {
+  std::unique_ptr<Module> m = validBranch();
+  Function* f = m->function(0);
+  f->at(3)->addPred(f->at(1));
+  return m;
+}
+
+#include "s08_flat_verifier_boundaries.h"
+
+std::unique_ptr<Module> badPhiType() {
+  std::unique_ptr<Module> m = validPhi();
+  Function* f = m->function(0);
+  Instruction* phi = f->at(3)->at(0);
+  phi->setType(typePool().f32());
+  return m;
+}
+
+std::unique_ptr<Module> badFloatCondBr() {
+  std::unique_ptr<Module> m(new Module());
+  Function* f = fn(*m, "bad_float_cond");
+  BasicBlock* yes = m->createBlock(f);
+  BasicBlock* no = m->createBlock(f);
+  add(f->entry(), own(*m, createCondBr(m->getFloatConst(0x3f800000), yes, no, L)));
+  add(yes, own(*m, createRet(cconst(*m, 1), L)));
+  add(no, own(*m, createRet(cconst(*m, 0), L)));
+  finish(*m);
+  return m;
+}
+
+std::unique_ptr<Module> badFloatArithmetic() {
+  std::unique_ptr<Module> m(new Module());
+  Function* f = fn(*m, "bad_float_arith");
+  Instruction* value = own(*m, m->createInst(Opcode::FAdd, typePool().f32(), L));
+  value->addOperand(cconst(*m, 1));
+  value->addOperand(cconst(*m, 2));
+  add(f->entry(), value);
+  add(f->entry(), own(*m, createRet(cconst(*m, 0), L)));
+  finish(*m);
+  return m;
+}
+
+std::unique_ptr<Module> badCastTypes() {
+  std::unique_ptr<Module> m(new Module());
+  Function* f = fn(*m, "bad_cast_types");
+  Instruction* value = own(*m, m->createInst(Opcode::SIToFP, typePool().f32(), L));
+  value->addOperand(cconst(*m, 1));
+  value->setType(typePool().i32());
+  add(f->entry(), value);
+  add(f->entry(), own(*m, createRet(cconst(*m, 0), L)));
+  finish(*m);
+  return m;
+}
+
+std::unique_ptr<Module> badStoreTypes() {
+  std::unique_ptr<Module> m(new Module());
+  Function* f = fn(*m, "bad_store_types");
+  Instruction* slot = own(*m, createAlloca(typePool().i32(), L));
+  add(f->entry(), slot);
+  add(f->entry(), own(*m, createStore(typePool().f32(),
+                                     m->getFloatConst(0x3f800000), slot, L)));
+  add(f->entry(), own(*m, createRet(cconst(*m, 0), L)));
+  finish(*m);
+  return m;
+}
+
+std::unique_ptr<Module> badSelectTypes() {
+  std::unique_ptr<Module> m(new Module());
+  Function* f = fn(*m, "bad_select_types");
+  Instruction* select = own(*m, createSelect(cconst(*m, 1), cconst(*m, 2),
+                                             m->getFloatConst(0x3f800000), L));
+  add(f->entry(), select);
+  add(f->entry(), own(*m, createRet(cconst(*m, 0), L)));
+  finish(*m);
+  return m;
+}
+
 struct MatrixCase {
   const char* name;
   const char* expected;
@@ -502,6 +608,36 @@ int runCase(const MatrixCase& c) {
   return passed ? 0 : 1;
 }
 
+int runNullGlobalAddrCase() {
+  Module module;
+  GlobalAddr nullAddress(nullptr, typePool().ptrTo(typePool().i32()));
+  Function* function = fn(module, "null_global_addr");
+  add(function->entry(), own(module, createCall("sink", nullptr, {&nullAddress}, L)));
+  add(function->entry(), own(module, createRet(cconst(module, 0), L)));
+  finish(module);
+  const std::vector<Violation> violations = verifyFlatModule(module);
+  const bool passed = !violations.empty() && violations.front().invariant == "V1";
+  std::printf("MATRIX %-32s expected=V1     actual=%-6s %s\n", "global_addr_null",
+              firstInvariant(violations), passed ? "PASS" : "FAIL");
+  if (!passed) std::printf("%s", formatViolations(violations).c_str());
+  return passed ? 0 : 1;
+}
+
+int runPhiSelfDiagnosticCase() {
+  std::unique_ptr<Module> module = badPhiSelfOnly();
+  const std::vector<Violation> violations = verifyFlatModule(*module);
+  bool found = false;
+  for (const Violation& violation : violations) {
+    if (violation.invariant == "V3" && violation.message.find("全部指向它自己") != std::string::npos) {
+      found = true;
+    }
+  }
+  std::printf("DETAIL %-32s expected=self-reference-diagnostic %s\n",
+              "phi_all_self", found ? "PASS" : "FAIL");
+  if (!found) std::printf("%s", formatViolations(violations).c_str());
+  return found ? 0 : 1;
+}
+
 int runCrossModuleParamCase() {
   std::unique_ptr<Module> source(new Module());
   Function* sourceFunction = fn(*source, "foreign_param_owner");
@@ -521,6 +657,29 @@ int runCrossModuleParamCase() {
   std::printf("MATRIX %-32s expected=V1     actual=%-6s %s\n",
               "param_cross_module_owner", firstInvariant(vs), passed ? "PASS" : "FAIL");
   if (!passed) std::printf("%s", formatViolations(vs).c_str());
+  return passed ? 0 : 1;
+}
+
+int runDominanceBoundaryCases() {
+  Module module;
+  Function* function = fn(module, "dominance_boundaries");
+  BasicBlock* entry = function->entry();
+  BasicBlock* unreachable = module.createBlock(function);
+  add(entry, own(module, createRet(cconst(module, 0), L)));
+  add(unreachable, own(module, createRet(cconst(module, 1), L)));
+  finish(module);
+  DominatorTree tree(*function);
+
+  Module foreignModule;
+  Function* foreignFunction = fn(foreignModule, "foreign");
+  BasicBlock* foreign = foreignFunction->entry();
+  const bool passed = tree.dominates(entry, entry) &&
+                      !tree.dominates(unreachable, unreachable) &&
+                      !tree.dominates(entry, unreachable) &&
+                      !tree.dominates(foreign, entry);
+  std::printf("MATRIX %-32s expected=BOUNDARY actual=%s %s\n",
+              "dominance_foreign_unreachable", passed ? "BOUNDARY" : "BAD",
+              passed ? "PASS" : "FAIL");
   return passed ? 0 : 1;
 }
 
@@ -597,13 +756,31 @@ int main() {
       {"phi_predecessor_count", "V3", badPhiArity},
       {"phi_all_self", "V3", badPhiSelfOnly},
       {"phi_null_cached_predecessor", "V3", badPhiNullPred},
+      {"block_bad_index", "V4", badBlockIndex},
+      {"instruction_bad_owner", "V1", badInstructionOwnership},
+      {"pred_cache_missing", "V4", badPredMissing},
+      {"pred_cache_extra", "V4", badPredExtra},
+      {"pred_cache_duplicate", "V4", badPredDuplicate},
+      {"pred_cache_order", "V4", badPredOrder},
+      {"nonterminator_successor", "V6", badNonTerminatorSuccessor},
+      {"global_addr_foreign", "V1", badForeignGlobalAddr},
+      {"global_addr_type", "V1", badRetypedGlobalAddr},
+      {"phi_incoming_type", "V6", badPhiType},
+      {"branch_float_condition", "V4", badFloatCondBr},
+      {"float_arithmetic_type", "V6", badFloatArithmetic},
+      {"cast_type", "V6", badCastTypes},
+      {"store_type", "V6", badStoreTypes},
+      {"select_type", "V6", badSelectTypes},
   };
   int failures = printLegacyMap();
   size_t invalidCount = 0;
   size_t positiveCount = 0;
   for (const MatrixCase& c : cases) failures += runCase(c);
+  failures += runNullGlobalAddrCase();
+  failures += runPhiSelfDiagnosticCase();
   failures += runCrossModuleParamCase();
-  ++invalidCount;
+  failures += runDominanceBoundaryCases();
+  invalidCount += 2;
   for (const MatrixCase& c : cases) {
     if (std::string(c.expected) == "ACCEPT") ++positiveCount;
     else ++invalidCount;

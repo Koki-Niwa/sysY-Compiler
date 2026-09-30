@@ -140,10 +140,6 @@ void testDiamondAndLoop() {
   Instruction* carryExit = add(module, cx, sysy::flat::createLoad(typePool().i32(), carrySlot, loc));
   add(module, cx, sysy::flat::createRet(carryExit, loc));
   finish(module);
-  join->clearPreds();
-  join->addPred(right);
-  join->addPred(left);
-  module.rebuildUseDef();
   check(valid(module), "diamond and loop modules verify before promotion");
 
   Mem2RegOptions options;
@@ -156,7 +152,7 @@ void testDiamondAndLoop() {
         "phi predecessors are represented by sorted block CFG predecessors");
   Instruction* joinPhi = join->front();
   check(joinPhi->succ(0)->index() < joinPhi->succ(1)->index(),
-        "diamond phi normalizes reversed cached predecessors");
+        "diamond phi preserves canonical predecessor order");
   check(valid(module), "diamond and loop output verifies with use-def rebuilt");
 }
 

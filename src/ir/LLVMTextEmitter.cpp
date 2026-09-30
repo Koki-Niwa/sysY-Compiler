@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "ir/Module.h"
+#include "ir/FlatSemantics.h"
 
 namespace sysy {
 namespace flat {

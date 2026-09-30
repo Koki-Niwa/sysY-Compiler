@@ -23,18 +23,20 @@ an option record and does not enable optimization.
 
 ## Next milestone
 
-S07 is implemented. S10a's direct AST interpreter and isolated fixed/seeded
-self-test are implemented and wired into the stage gate. After independent
-review findings were addressed, a fresh run passed 115/115 fixed cases twice
-and 32/32 generated cases, including replay, oracle negative control, resource
-limits, and checked expected returns. Independent review approved the
-cross-layer contract reconciliation. S08 is complete: the public `FlatVerifier`
-matrix passed independent review, and a fresh S08 gate on the S07 source state
-passed 49 checks with 0 failures and 2 expected stage-inapplicable skips. S09's
-fresh full gate has passed and the post-fix independent review approved the
-implementation and evidence with no actionable findings. S11 target execution
-and its performance baseline are next. S10b target differential work waits for
-S11.
+S07, the S08 verifier boundary, S09 mem2reg, and the S10a direct AST interpreter
+are implemented. A later closeout review found gaps in the dynamic remainder
+lowering, FlatVerifier structural/type checks, S09's proof that the CLI really
+performed promotion, S10a's generated-case oracle and durable evidence, and the
+stage dependency model. The working tree contains fixes for those findings, but
+no build, self-test, or stage gate has been run after the fixes. The archived
+S08 **49/0/2**, S09 **51/0/2**, and S10a **115/115 twice plus 32/32** results are
+historical baselines for the earlier committed source, not acceptance evidence
+for the current working tree.
+
+The next acceptance action is a fresh focused and full rerun with a clean source
+revision, including an archived S10a evidence manifest. S11 target execution and
+its performance baseline follow that rerun. S10b target differential work waits
+for S11 and S11b.
 End-to-end execution and target-code runtime measurements remain unimplemented
 and must not be inferred from LLVM assembly validation.
 
@@ -79,8 +81,8 @@ see also the [fresh S06 baseline](../../docs/audit/S06-BASELINE-S07-2026-09-30.m
 LLVM assembly proves text acceptance only; it does not prove target execution
 correctness or performance.
 
-The fresh S08 entry gate was rerun after the FlatVerifier audit and its
-independent review:
+The historical S08 entry gate was rerun after the original FlatVerifier audit
+and its independent review:
 
 ```bash
 ulimit -v 8388608 && timeout 2400 bash compiler/tools/verify.sh --stage S08
@@ -93,9 +95,12 @@ S10a interpreter evidence are not required by this stage). The 490-supported /
 differences, and 121 categorized skips. The S08 public-boundary matrix passed
 28 invalid, 7 positive, and 8 mapped legacy cases. See the [fresh S08 gate
 report](../../docs/audit/S08-FRESH-2026-09-30.md) for the complete evidence and
-the initial compliance-check failure followed by its fix and passing rerun.
+the initial compliance-check failure followed by its fix and passing rerun. A
+later review found missing predecessor-cache, malformed ownership/index, phi
+cardinality, operand/type, and unreachable-dominance cases; the current fixes
+have not yet been rerun.
 
-The fresh S09 gate passed after the candidate transaction, phi predecessor
+The historical S09 gate passed after the candidate transaction, phi predecessor
 ordering, and negative-test fixes:
 
 ```bash
@@ -109,23 +114,39 @@ skips**. S08's public matrix again reported 28 invalid / 7 positive / 8 legacy
 cases; the same run passed the 490-supported / 50-tensor LLVM manifest. The
 fresh run proves interpreter-observed behavior preservation, not target runtime
 correctness or performance. See the [S09 fresh gate report](../../docs/audit/S09-FRESH-2026-09-30.md).
+That gate did not prove that `--mem2reg` changed the CLI-produced flat IR: the
+current gate adds a designated memory-form fixture, structural before/after
+checks, promotion statistics, and a no-op CLI that forges statistics as a
+negative control. These additions have not yet been run.
 
-The S10a isolated interpreter runner passed after hardening:
+The historical S10a isolated runner invocation
 `bash tools/selftest/interpreter/run_s10a.sh --keep` reported 115/115 fixed
-cases on both runs, 32/32 seeded cases (seed `24176631846`), and passing replay,
-constraints, independent return-value checks for generated inputs, stderr
-checks, hash vectors, resource limits, invalid input/AST, undefined-local,
-missing-return, and negative-control checks. The root's fresh run retained
-artifacts under `/tmp/sysy_s10a_KtKIA7`. The interpreter defines `getch` bytes
-as unsigned; target comparisons are limited to ASCII until target behavior is
-measured. Independent code review approved the current contract. Target
-differential remains an S10b/S11 task.
+cases on both runs and 32/32 seeded cases (seed `24176631846`). Its generated
+expected values were computed in the generator's own mode branches, and its
+only retained artifacts were under `/tmp/sysy_s10a_KtKIA7`; therefore that run
+does not establish an independent, revision-bound generated-case oracle. The
+current runner separates recipe generation from `s10a-recipe-oracle-v1`, adds a
+generated-expectation negative control, and can atomically write a
+RUNNING/FAIL/PASS JSON manifest with source revision and artifact hashes. PASS
+requires a clean compiler worktree and all required log markers. After the
+current changes are committed, archive a fresh manifest with, for example:
+
+```bash
+bash tools/selftest/interpreter/run_s10a.sh --keep \
+  --report ../docs/handoff/reports/S10A-FRESH-YYYY-MM-DD.json
+```
+
+No such post-fix PASS manifest exists yet. The interpreter defines `getch`
+bytes as unsigned; target comparisons are limited to ASCII until target
+behavior is measured. Target differential remains an S10b/S11/S11b task.
 
 S05 defines integer `% 0` as the dividend based on cross-target measurements.
-The interpreter and flat execution helper already follow that rule; this update
-corrects `normRemInt` and adds a constant-initializer regression so constant
-folding agrees. The isolated S10a and initializer tests cover the source oracle;
-a target-backed regression is still required before claiming target agreement.
+The interpreter, flat execution helper, and constant evaluator already follow
+that rule. The current IRGen fix makes conditional-result branches return their
+values explicitly, so dynamic `x % 0` returns `x` instead of an inferred zero;
+focused positive, negative, ordinary-remainder, and `INT_MIN % -1` regressions
+were added but have not been run. A target-backed regression is still required
+before claiming target agreement.
 
 Capability requirements: S07 requires real `.ll` validation with `llvm-as` and
 the exact supported manifest. S11 requires the three target pipelines and exact

@@ -1,9 +1,13 @@
 # Sourced by tools/verify.sh; requires a fresh full behavior run on promoted flat IR.
 MEM2REG_OK=0
-if [ -n "${STAGE:-}" ] && declare -F stage_index >/dev/null; then
-  requested_stage=$(stage_index "$STAGE") || return 2
-  s09_stage=$(stage_index S09) || return 2
-  if [ "$requested_stage" -lt "$s09_stage" ]; then
+if [ -n "${STAGE:-}" ]; then
+  declare -F stage_requires >/dev/null || return 2
+  stage_requirement=0
+  stage_requires "$STAGE" S09
+  stage_requirement=$?
+  if [ "$stage_requirement" -gt 1 ]; then
+    return "$stage_requirement"
+  elif [ "$stage_requirement" = 1 ]; then
     hdr "C8b. mem2reg 行为对照"
     c_skip "阶段 $STAGE 不要求 S09 mem2reg"
     return 0
@@ -17,6 +21,21 @@ if [ "$QUICK" = 1 ]; then
 fi
 if [ ! -x "$COMPILER" ] || [ ! -f "$TOOLS/selftest/flat_exec.py" ]; then
   c_bad "S09 mem2reg 编译器或行为对照工具缺失"
+  return 0
+fi
+
+S09_FIXTURE="$TOOLS/selftest/s09/promotable.flat"
+S09_SHIM="$TOOLS/selftest/s09/noop_mem2reg.sh"
+S09_HARNESS="$TOOLS/selftest/s09/check_mem2reg.py"
+S09_STRUCTURE_LOG="$WORK/mem2reg_structure.log"
+if python3 "$S09_HARNESS" --compiler "$COMPILER" --shim "$S09_SHIM" \
+      --source "$S09_FIXTURE" --work "$WORK/s09" >"$S09_STRUCTURE_LOG" 2>&1; then
+  c_ok "S09：结构化提升证据通过（baseline memory form -> promoted SSA/direct form）"
+  grep -E '^S09_(PROMOTED|BASELINE|PROMOTED_MEMORY)|^S09 negative' \
+    "$S09_STRUCTURE_LOG" | sed 's/^/      /'
+else
+  c_bad "S09 结构化提升证据失败，或伪造统计量负控未被拒绝"
+  tail -20 "$S09_STRUCTURE_LOG" | sed 's/^/      /'
   return 0
 fi
 

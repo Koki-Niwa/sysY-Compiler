@@ -106,8 +106,8 @@ printf 'RESULT %s %s\n' "${!FLAG}" "$FAIL"
     def test_s07_stage_does_not_run_s11_execution_gate(self):
         command = '''
 FAIL=0; CAN_IR=1; STAGE=S07
-stage_index(){ case "$1" in S07) echo 0;; S11) echo 1;; *) return 1;; esac; }
 hdr(){ :; }; c_skip(){ echo "SKIP $1"; }; c_ok(){ :; }; c_bad(){ FAIL=$((FAIL+1)); }
+source "$GATE/stages.sh"
 source "$GATE/execution.sh"
 printf 'RESULT %s\n' "$FAIL"
 '''

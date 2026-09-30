@@ -34,28 +34,22 @@ std::vector<GeneratedCase> generate(const GeneratorConfig& config) {
     const int32_t b = small(next(state));
     const int32_t c = small(next(state));
     const uint32_t n = 1 + static_cast<uint32_t>(next(state) % maxLoop);
-    const uint32_t mode = static_cast<uint32_t>(next(state) % 3ULL);
-    int32_t expectedReturn = 0;
+    const GeneratedMode mode = static_cast<GeneratedMode>(next(state) % 3ULL);
     std::string source;
-    if (mode == 0) {
+    if (mode == GeneratedMode::ArrayCycle) {
       source = "int main(){int a[3]={" + std::to_string(a) + "," + std::to_string(b) + "," +
                std::to_string(c) + "};int i=0,s=0;while(i<" + std::to_string(n) +
                "){s=s+a[i%3];i=i+1;}return s;}";
-      for (uint32_t i = 0; i < n; ++i)
-        expectedReturn += i % 3 == 0 ? a : (i % 3 == 1 ? b : c);
-    } else if (mode == 1) {
+    } else if (mode == GeneratedMode::RepeatedAdd) {
       source = "int add(int x,int y){return x+y;}int main(){int i=0,s=" + std::to_string(a) +
                ";while(i<" + std::to_string(n) + "){s=add(s," + std::to_string(b) +
                ");i=i+1;}return s+" + std::to_string(c) + ";}";
-      expectedReturn = a + static_cast<int32_t>(n) * b + c;
     } else {
       source = "int main(){int i=0,s=0;while(i<" + std::to_string(n) +
                "){if(i%2==0)s=s+" + std::to_string(a) + ";else s=s-" + std::to_string(b) +
                ";i=i+1;}return s+" + std::to_string(c) + ";}";
-      for (uint32_t i = 0; i < n; ++i) expectedReturn += i % 2 == 0 ? a : -b;
-      expectedReturn += c;
     }
-    result.push_back(GeneratedCase{index, n, expectedReturn, sourceHash(source), std::move(source)});
+    result.push_back(GeneratedCase{index, mode, a, b, c, n, sourceHash(source), std::move(source)});
   }
   return result;
 }

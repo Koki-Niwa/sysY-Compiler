@@ -63,14 +63,20 @@ class DominatorTree {
  public:
   explicit DominatorTree(const Function& f);
 
-  bool reachable(size_t blockIdx) const { return reach_[blockIdx]; }
-  BasicBlock* idom(size_t blockIdx) const { return idom_[blockIdx]; }
+  bool reachable(size_t blockIdx) const {
+    return blockIdx < reach_.size() && reach_[blockIdx] != 0;
+  }
+  BasicBlock* idom(size_t blockIdx) const {
+    return blockIdx < idom_.size() ? idom_[blockIdx] : nullptr;
+  }
   // 【后置】a 是否支配 b（a == b 时**为真** —— 支配是自反的）。
   //         任一块不可达 → false（不可达块之间不谈支配）。
   bool dominates(const BasicBlock* a, const BasicBlock* b) const;
   const std::vector<int>& postOrder() const { return post_; }
 
  private:
+  const Function* owner_ = nullptr;
+  std::vector<BasicBlock*> blocks_;
   std::vector<BasicBlock*> idom_;
   std::vector<char> reach_;
   std::vector<int> post_;      // 块下标 → 逆后序号

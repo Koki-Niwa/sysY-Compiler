@@ -1,0 +1,19 @@
+define i32 @main() {
+  %0 = i32 0
+  %1 = i32 1
+  %2 = i32 2
+L0:
+  %3 = alloca i32
+  store i32 %0, ptr[i32] %3
+  %4 = icmp eq i32 %0, %1
+  br i1 %4, label L1, label L2
+L1:
+  store i32 %1, ptr[i32] %3
+  br L3
+L2:
+  store i32 %2, ptr[i32] %3
+  br L3
+L3:
+  %5 = load i32, ptr[i32] %3
+  ret i32 %5
+}

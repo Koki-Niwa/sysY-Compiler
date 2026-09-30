@@ -1,9 +1,12 @@
 # Sourced by tools/verify.sh; shared state/contract: gate/README.md.
 S08_OK=0
-if [ -n "${STAGE:-}" ] && declare -F stage_index >/dev/null; then
-  requested_stage=$(stage_index "$STAGE") || return 2
-  s08_stage=$(stage_index S08) || return 2
-  if [ "$requested_stage" -lt "$s08_stage" ]; then
+if [ -n "${STAGE:-}" ]; then
+  declare -F stage_requires >/dev/null || return 2
+  stage_requires "$STAGE" S08
+  stage_requirement=$?
+  if [ "$stage_requirement" -gt 1 ]; then
+    return "$stage_requirement"
+  elif [ "$stage_requirement" = 1 ]; then
     hdr "C8a. FlatVerifier API 契约矩阵"
     c_skip "阶段 $STAGE 不要求 S08 API 矩阵"
     return 0

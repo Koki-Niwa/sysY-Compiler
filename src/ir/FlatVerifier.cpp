@@ -1,38 +1,22 @@
-// ============================================================================
-// ir/FlatVerifier.cpp —— 平面 IR 的不变量检查器（规格见 FlatVerifier.h）
-//
-//   本文件是**只读**的：它不改 IR 一个字节（所以可以在任何 pass 之后调用）。
-//   唯一的"写"是构造支配树时的内部状态。
-// ============================================================================
+// Flat IR invariant checking. Structural checks precede all indexed CFG and
+// SSA analysis so malformed public input is reported instead of dereferenced.
 #include "ir/FlatVerifier.h"
+
+#include "ir/FlatSemantics.h"
 
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace sysy {
 namespace flat {
 namespace {
 
-// 35 个**真** opcode 的容器内表示（`Nop` 与两个常量不是指令；
-// `LLVMMemCpy`/`LLVMMemSet` 属于 `call` 家族）。
-//   ⚠️ 这里只是**编译期自查**；判据的权威是 `check_flat.py` 里那份
-//   **独立手写**的清单（从 C++ 枚举生成等于自己证明自己，prompt §三.2）。
-bool isRealOpcode(Opcode k) {
-  switch (k) {
-    case Opcode::Nop:
-    case Opcode::ConstantInt:
-    case Opcode::ConstantFP:
-    case Opcode::kCount:
-      return false;
-    default:
-      return true;
-  }
-}
-
-bool isCallFamily(Opcode k) {
-  return k == Opcode::Call || k == Opcode::LLVMMemCpy || k == Opcode::LLVMMemSet;
+bool isRealOpcode(Opcode op) {
+  return op != Opcode::Nop && op != Opcode::ConstantInt && op != Opcode::ConstantFP &&
+         op != Opcode::kCount;
 }
 
 template <typename T>
@@ -40,8 +24,6 @@ size_t pointerCount(const std::vector<T*>& values, const T* needle) {
   return static_cast<size_t>(std::count(values.begin(), values.end(), needle));
 }
 
-// 【后置】定义和使用是否在同一个块中且定义严格先于使用。
-//   块级支配只回答"两个点在哪个块"；SSA 在同一块里还需要这个顺序条件。
 bool definedBefore(const Instruction* def, const Instruction* use) {
   if (def == nullptr || use == nullptr || def == use || def->parent() == nullptr ||
       def->parent() != use->parent()) {
@@ -55,468 +37,427 @@ bool definedBefore(const Instruction* def, const Instruction* use) {
   return false;
 }
 
-std::string kindName(Opcode k) {
-  if (k == Opcode::ConstantInt || k == Opcode::ConstantFP) return "常量";
-  return opcodeName(k);
+std::string kindName(Opcode op) {
+  if (op == Opcode::ConstantInt || op == Opcode::ConstantFP) return "常量";
+  return opcodeName(op);
 }
 
 }  // namespace
 
-// ============================================================================
-// 检查
-// ============================================================================
 std::vector<Violation> verifyFlatModule(const Module& m) {
   std::vector<Violation> bad;
-  auto add = [&](const char* inv, const std::string& fn, SourceLoc loc,
-                 const std::string& msg) {
-    bad.push_back(Violation{inv, loc, msg, fn});
+  auto add = [&](const char* invariant, const std::string& function, SourceLoc loc,
+                 const std::string& message) {
+    bad.push_back(Violation{invariant, loc, message, function});
   };
+  std::unordered_set<GlobalVariable*> moduleGlobals;
+  for (GlobalVariable* global : m.globals()) {
+    if (global != nullptr) moduleGlobals.insert(global);
+  }
 
   for (size_t fi = 0; fi < m.numFunctions(); ++fi) {
     Function* f = m.function(fi);
-    if (f == nullptr || f->isDeclaration()) continue;
+    if (f == nullptr) {
+      add("V4", std::string(), SourceLoc(), "模块函数表含有空函数");
+      continue;
+    }
+    if (f->isDeclaration()) continue;
+    if (f->blockCount() == 0) {
+      add("V4", f->name(), SourceLoc(), "非声明函数没有基本块");
+      continue;
+    }
     const std::string& fname = f->name();
-    // ★ S06 排障设施：`SYSY_DBG_CFG=1` 打印**校验器看到的边**。
-    //   为什么需要：φ 的入值块集合与前驱集合不符时，光看文本 dump 分不清是
-    //   "边没建出来"还是"φ 的键错了" —— 这两个方向的修法完全相反。
-    if (const char* dbg = std::getenv("SYSY_DBG_CFG"); dbg != nullptr && *dbg != '0') {
-      for (BasicBlock* b : f->blocks()) {
-        Instruction* t = b->terminator();
-        std::fprintf(stderr, "[CFG] %s L%u 终=%s 后继=%u", fname.c_str(),
-                     static_cast<unsigned>(b->index()),
-                     t != nullptr ? opcodeName(t->op()) : "(无)",
-                     t != nullptr ? static_cast<unsigned>(t->numSuccs()) : 0u);
-        if (t != nullptr) {
-          for (size_t k = 0; k < t->numSuccs(); ++k) {
-            std::fprintf(stderr, " L%d", t->succ(k) != nullptr
-                                            ? static_cast<int>(t->succ(k)->index())
-                                            : -1);
+
+    // The vector and ownership checks are intentionally independent from
+    // rebuildCFG. A stale cache is a public counterexample, and a caller can
+    // also mutate block/index/parent fields before verification.
+    std::vector<BasicBlock*> blocks;
+    std::unordered_set<BasicBlock*> blockSet;
+    std::unordered_set<Instruction*> instructionSet;
+    std::unordered_map<BasicBlock*, std::unordered_set<BasicBlock*>> expectedPreds;
+    std::unordered_set<Instruction*> validTerminators;
+    bool structurallySafe = true;
+
+    for (size_t bi = 0; bi < f->blockCount(); ++bi) {
+      BasicBlock* block = f->at(bi);
+      if (block == nullptr) {
+        add("V4", fname, SourceLoc(), "函数块表含有空块");
+        structurallySafe = false;
+        continue;
+      }
+      if (!blockSet.insert(block).second) {
+        add("V4", fname, SourceLoc(), "函数块表重复登记同一个基本块");
+        structurallySafe = false;
+      }
+      if (block->parent() != f) {
+        add("V4", fname, SourceLoc(), "基本块归属函数与块表不一致");
+        structurallySafe = false;
+      }
+      if (block->index() != bi) {
+        add("V4", fname, SourceLoc(),
+            "基本块下标不密集或与块表位置不一致：L" + std::to_string(block->index()) +
+                " 应为 L" + std::to_string(bi));
+        structurallySafe = false;
+      }
+      blocks.push_back(block);
+    }
+
+    for (BasicBlock* block : blocks) {
+      size_t terminatorCount = 0;
+      Instruction* lastTerminator = nullptr;
+      for (size_t ii = 0; ii < block->size(); ++ii) {
+        Instruction* instruction = block->at(ii);
+        if (instruction == nullptr) {
+          add("V1", fname, SourceLoc(), "基本块指令表含有空指令");
+          structurallySafe = false;
+          continue;
+        }
+        if (!instructionSet.insert(instruction).second) {
+          add("V1", fname, instruction->loc(), "同一条指令重复出现在多个基本块中");
+          structurallySafe = false;
+        }
+        if (instruction->parent() != block) {
+          add("V1", fname, instruction->loc(), "指令归属基本块与指令表不一致");
+          structurallySafe = false;
+        }
+        if (!isRealOpcode(instruction->op())) {
+          add("V6", fname, instruction->loc(),
+              "出现了非指令的 opcode：" + kindName(instruction->op()) +
+                  "（容器占位不该被发射）");
+        } else {
+          std::string error;
+          if (!validateFlatInstruction(*instruction, error)) {
+            bool nullOperand = false;
+            for (Value* operand : instruction->operands()) {
+              if (operand == nullptr || operand->type() == nullptr) {
+                nullOperand = true;
+                break;
+              }
+            }
+            add(nullOperand ? "V1" : (isTerminatorOpcode(instruction->op()) ? "V4" : "V6"),
+                fname, instruction->loc(), error);
+            structurallySafe = false;
           }
         }
-        std::fprintf(stderr, " | 前驱=%u", static_cast<unsigned>(b->numPreds()));
-        for (size_t k = 0; k < b->numPreds(); ++k) {
-          std::fprintf(stderr, " L%d", b->pred(k) != nullptr
-                                           ? static_cast<int>(b->pred(k)->index())
-                                           : -1);
+        for (BasicBlock* successor : instruction->succs()) {
+          if (successor == nullptr || successor->parent() != f ||
+              blockSet.count(successor) == 0) {
+            add("V4", fname, instruction->loc(), "后继块为空或不属于该函数的块表");
+            structurallySafe = false;
+          }
+        }
+        if (isTerminatorOpcode(instruction->op())) {
+          ++terminatorCount;
+          lastTerminator = instruction;
+          if (ii + 1 != block->size()) {
+            add("V4", fname, instruction->loc(),
+                std::string("终结符不是最后一条：") + opcodeName(instruction->op()) +
+                    " 后面还有指令");
+            structurallySafe = false;
+          }
+        }
+      }
+      if (terminatorCount == 0) {
+        add("V4", fname, SourceLoc(), "块没有终结符（每个块恰好一个）");
+        structurallySafe = false;
+      } else if (terminatorCount != 1) {
+        add("V4", fname, lastTerminator->loc(),
+            "块有 " + std::to_string(terminatorCount) + " 个终结符");
+        structurallySafe = false;
+      }
+      if (terminatorCount == 1 && lastTerminator == block->back()) {
+        std::string error;
+        if (validateFlatInstruction(*lastTerminator, error)) {
+          validTerminators.insert(lastTerminator);
+        } else {
+          structurallySafe = false;
+        }
+      }
+    }
+
+    // Recompute predecessor membership from validated terminators. A source
+    // with two identical successor entries contributes one predecessor.
+    for (BasicBlock* block : blocks) {
+      Instruction* terminator = block->back();
+      if (terminator == nullptr || validTerminators.count(terminator) == 0) continue;
+      for (size_t si = 0; si < terminator->numSuccs(); ++si) {
+        BasicBlock* successor = terminator->succ(si);
+        if (successor == nullptr) {
+          add("V4", fname, terminator->loc(), "分支目标为空");
+          structurallySafe = false;
+          continue;
+        }
+        if (successor->parent() != f || blockSet.count(successor) == 0) {
+          add("V4", fname, terminator->loc(), "分支目标不属于该函数的块表");
+          structurallySafe = false;
+          continue;
+        }
+        expectedPreds[successor].insert(block);
+      }
+    }
+    for (BasicBlock* block : blocks) {
+      std::unordered_set<BasicBlock*> cached;
+      bool hasPhi = false;
+      for (Instruction* instruction : block->insts()) {
+        if (instruction != nullptr && instruction->op() == Opcode::Phi) {
+          hasPhi = true;
+          break;
+        }
+      }
+      const char* cacheInvariant = hasPhi ? "V3" : "V4";
+      for (BasicBlock* predecessor : block->preds()) {
+        if (predecessor == nullptr || predecessor->parent() != f ||
+            blockSet.count(predecessor) == 0) {
+          add(cacheInvariant, fname, SourceLoc(), "前驱缓存含有空项或函数外基本块");
+          structurallySafe = false;
+          continue;
+        }
+        if (!cached.insert(predecessor).second) {
+          add(cacheInvariant, fname, SourceLoc(), "前驱缓存含有重复来源");
+          structurallySafe = false;
+        }
+      }
+      for (size_t pi = 1; pi < block->numPreds(); ++pi) {
+        BasicBlock* previous = block->pred(pi - 1);
+        BasicBlock* current = block->pred(pi);
+        if (previous == nullptr || current == nullptr) continue;
+        if (previous->index() >= current->index()) {
+          add(cacheInvariant, fname, SourceLoc(), "前驱缓存没有按块号严格升序排列");
+          structurallySafe = false;
+          break;
+        }
+      }
+      const auto found = expectedPreds.find(block);
+      const std::unordered_set<BasicBlock*> empty;
+      const auto& expected = found == expectedPreds.end() ? empty : found->second;
+      if (cached != expected) {
+        add(cacheInvariant, fname, SourceLoc(), "前驱缓存与终结符重算的来源集合不一致");
+        structurallySafe = false;
+      }
+    }
+
+    // No indexed analysis or pointer arithmetic is allowed after a failed
+    // structural preflight. The structural diagnostics above are complete.
+    if (!structurallySafe) continue;
+
+    if (const char* debug = std::getenv("SYSY_DBG_CFG"); debug != nullptr && *debug != '0') {
+      for (BasicBlock* block : blocks) {
+        Instruction* terminator = block->back();
+        std::fprintf(stderr, "[CFG] %s L%u 终=%s 后继=%u", fname.c_str(),
+                     static_cast<unsigned>(block->index()),
+                     terminator != nullptr ? opcodeName(terminator->op()) : "(无)",
+                     terminator != nullptr ? static_cast<unsigned>(terminator->numSuccs()) : 0u);
+        if (terminator != nullptr) {
+          for (size_t si = 0; si < terminator->numSuccs(); ++si) {
+            std::fprintf(stderr, " L%u", static_cast<unsigned>(terminator->succ(si)->index()));
+          }
+        }
+        std::fprintf(stderr, " | 前驱=%u", static_cast<unsigned>(block->numPreds()));
+        for (BasicBlock* predecessor : block->preds()) {
+          std::fprintf(stderr, " L%u", static_cast<unsigned>(predecessor->index()));
         }
         std::fprintf(stderr, "\n");
       }
     }
 
-    // ── V6：指令集封闭 + 结果类型一致性 ────────────────────────────────
+    // V4 function return signature is context dependent and therefore stays
+    // outside the dependency leaf validator.
     for (size_t bi = 0; bi < f->blockCount(); ++bi) {
-      BasicBlock* b = f->at(bi);
-      for (size_t ii = 0; ii < b->size(); ++ii) {
-        Instruction* in = b->at(ii);
-        if (!isRealOpcode(in->op())) {
-          add("V6", fname, in->loc(),
-              "出现了非指令的 opcode：" + kindName(in->op()) + "（容器占位不该被发射）");
-          continue;
-        }
-        // 结果类型：固定类型必须与 `fixedResultType` 一致
-        const Type* want = fixedResultType(in->op());
-        if (want != nullptr && in->type() != want) {
-          add("V6", fname, in->loc(),
-              std::string("结果类型与 opcode 不符：") + opcodeName(in->op()) + " 应为 " +
-                  typeText(want) + "，实际 " + typeText(in->type()));
-        }
-        // 操作数个数
-        const size_t nops = in->numOperands();
-        const bool okArity =
-            (in->isBinOp() && nops == 2) ||
-            (in->op() == Opcode::FNeg && nops == 1) ||
-            (in->op() == Opcode::Load && nops == 1) ||
-            (in->op() == Opcode::Store && nops == 2) ||
-            (in->op() == Opcode::GEP && nops == 2) ||
-            (in->op() == Opcode::BitCast && nops == 1) ||
-            (in->op() == Opcode::ICmp && nops == 2) ||
-            (in->op() == Opcode::FCmp && nops == 2) ||
-            (in->op() == Opcode::Select && nops == 3) ||
-            (in->op() == Opcode::Alloca && nops == 0) ||
-            (in->op() == Opcode::Phi && nops >= 1) ||
-            (isCallFamily(in->op())) ||
-            (in->op() == Opcode::SIToFP && nops == 1) ||
-            (in->op() == Opcode::FPToSI && nops == 1) ||
-            (in->op() == Opcode::FPExt && nops == 1) ||
-            (in->op() == Opcode::SExt && nops == 1) ||
-            (in->op() == Opcode::ZExt && nops == 1) ||
-            (in->op() == Opcode::Trunc && nops == 1) ||
-            (in->op() == Opcode::Ret) ||
-            (in->op() == Opcode::Br) ||
-            (in->op() == Opcode::Unreachable);
-        if (!okArity) {
-          add("V6", fname, in->loc(),
-              std::string("操作数个数不合规：") + opcodeName(in->op()) + " 有 " +
-                  std::to_string(nops) + " 个");
-        }
-        // 内存指令：**只查"操作数是不是指针 / 值类型是否为空"**。
-        //   ⚠️ 这里**不查** "`load <ty>` 的 `ty` 必须等于指针的元素类型"。
-        //   原因（一个用实测换来的结论）：结构化层的类型推导有两处已知污染
-        //   （`StructuredReader` 在**解析属性之前**就算 `GetElementPtr` 的结果
-        //   类型 ⇒ 多包一层 `ptr`，而那个类型又被别处的推导链引用），
-        //   而那份 dump 是**冻结契约**（往返必须逐字节相同）⇒ 不能改读回器。
-        //   平面层于是按"结构化层的 `<ty>` 优先"来展开，两种口径在少数
-        //   **数组形参/数组对象**的 load 上不一致。判据的**权威**因此落在
-        //   另一条上：`check_flat.py` 轨 B 用独立实现从文本重判类型一致性，
-        //   而"结果类型与指针元素不一致"这一条在那边按**同一份 dump 的口径**
-        //   检查（不会把结构性差异当成红）。
-        if (in->op() == Opcode::Load && nops == 1) {
-          Value* p = in->operand(0);
-          const Type* pt = p != nullptr ? p->type() : nullptr;
-          if (pt == nullptr || !pt->isPtr()) {
-            add("V6", fname, in->loc(), "load 的操作数不是指针类型");
-          }
-        }
-        if (in->op() == Opcode::Store && nops == 2) {
-          Value* v = in->operand(0);
-          Value* p = in->operand(1);
-          const Type* pt = p != nullptr ? p->type() : nullptr;
-          if (pt == nullptr || !pt->isPtr()) {
-            add("V6", fname, in->loc(), "store 的目标不是指针类型");
-          }
-          if (v != nullptr && v->type() == nullptr) {
-            add("V6", fname, in->loc(), "store 的值没有类型");
-          }
-        }
-        // ⚠️ GEP **不要求**"基址的元素类型 == `<ty>`"：结构化层的
-        //   `GetElementPtr <ty> <idxty> 0 ptr idx` 是**带类型的偏移运算**
-        //   （`<ty>` 说明"结果指向什么"，可以比基址的元素更靠里，例如
-        //    数组形参 `int arr[][2]` 的 `arr[i][j]`：基址 `ptr[ptr[[2 x i32]]]`、
-        //    `<ty>` 是 `i32`）。后端按"结果类型 = ptr[<ty>]"发射即可。
-        if (in->op() == Opcode::GEP && nops == 2) {
-          const Type* et = in->srcElemType();
-          Value* p = in->operand(0);
-          Value* idx = in->operand(1);
-          if (et == nullptr || p == nullptr || idx == nullptr) {
-            add("V6", fname, in->loc(), "getelementptr 缺少元素类型或操作数");
-          } else if (in->type() != typePool().ptrTo(et)) {
-            add("V6", fname, in->loc(), "getelementptr 的结果类型应为 ptr[" +
-                                            typeText(et) + "]，实际 " + typeText(in->type()));
-          } else if (p->type() == nullptr || !p->type()->isPtr()) {
-            add("V6", fname, in->loc(), "getelementptr 的基址不是指针");
-          } else if (idx->type() != typePool().i64()) {
-            add("V6", fname, in->loc(), "getelementptr 的下标必须是 i64（i32 里算完再 sext）");
-          }
-        }
-        // 终结符不能出现在中间（V4 的另一半）
-        if (isTerminatorOpcode(in->op()) && ii + 1 != b->size()) {
-          add("V4", fname, in->loc(),
-              std::string("终结符不是最后一条：") + opcodeName(in->op()) + " 后面还有指令");
-        }
+      BasicBlock* block = f->at(bi);
+      Instruction* terminator = block->back();
+      if (terminator == nullptr || terminator->op() != Opcode::Ret) continue;
+      const bool voidFunction = f->retType() == nullptr || f->retType()->isVoid();
+      if ((voidFunction && terminator->numOperands() != 0) ||
+          (!voidFunction && terminator->numOperands() != 1) ||
+          (!voidFunction && terminator->operand(0) != nullptr &&
+           terminator->operand(0)->type() != f->retType())) {
+        add("V4", fname, terminator->loc(), "ret 的值类型与函数返回类型不符");
       }
     }
 
-    // ── V4：每个块恰好一个终结符，且在最后 ────────────────────────────
-    for (size_t bi = 0; bi < f->blockCount(); ++bi) {
-      BasicBlock* b = f->at(bi);
-      Instruction* t = b->terminator();
-      if (t == nullptr) {
-        add("V4", fname, SourceLoc(),
-            "块 L" + std::to_string(bi) + " 没有终结符（每个块恰好一个）");
-        continue;
-      }
-      size_t nterm = 0;
-      for (size_t ii = 0; ii < b->size(); ++ii) {
-        if (isTerminatorOpcode(b->at(ii)->op())) ++nterm;
-      }
-      if (nterm != 1) {
-        add("V4", fname, t->loc(),
-            "块 L" + std::to_string(bi) + " 有 " + std::to_string(nterm) + " 个终结符");
-      }
-      // `br` 的目标必须属于同一个函数
-      for (size_t k = 0; k < t->numSuccs(); ++k) {
-        BasicBlock* s = t->succ(k);
-        if (s == nullptr) {
-          add("V4", fname, t->loc(), "分支目标为空");
-        } else if (s->parent() != f) {
-          add("V4", fname, t->loc(), "分支目标不属于同一个函数");
-        }
-      }
-      if (t->op() == Opcode::Br) {
-        if (t->numSuccs() != 1 && t->numSuccs() != 2) {
-          add("V4", fname, t->loc(), "br 的后继个数只能是 1 或 2");
-        } else if (t->numSuccs() == 1 && t->numOperands() != 0) {
-          add("V4", fname, t->loc(), "无条件 br 不能带条件操作数");
-        } else if (t->numSuccs() == 2 && t->numOperands() != 1) {
-          add("V4", fname, t->loc(), "条件 br 必须恰好一个条件操作数");
-        }
-      }
-      if (t->op() == Opcode::Ret) {
-        if (t->numSuccs() != 0) {
-          add("V4", fname, t->loc(), "ret 不能有后继块");
-        }
-        const bool voidFn = f->retType() == nullptr || f->retType()->isVoid();
-        if (!voidFn && t->numOperands() != 1) {
-          add("V4", fname, t->loc(), "非 void 函数的 ret 必须带一个返回值");
-        } else if (!voidFn && t->operand(0) != nullptr && t->operand(0)->type() != f->retType()) {
-          add("V4", fname, t->loc(),
-              "ret 的值类型与函数返回类型不符：" + typeText(t->operand(0)->type()) + " vs " +
-                  typeText(f->retType()));
-        } else if (voidFn && t->numOperands() != 0) {
-          add("V4", fname, t->loc(), "void 函数的 ret 不能带返回值");
-        }
-      } else if (t->op() == Opcode::Unreachable &&
-                 (t->numOperands() != 0 || t->numSuccs() != 0)) {
-        add("V4", fname, t->loc(), "unreachable 不能有操作数或后继块");
-      }
-    }
-
-    // ── V5：`alloca` 全在入口块（不变量 2）────────────────────────────
+    // V5: allocas remain in the entry block.
     BasicBlock* entry = f->entry();
     for (size_t bi = 0; bi < f->blockCount(); ++bi) {
-      BasicBlock* b = f->at(bi);
-      if (b == entry) continue;
-      for (size_t ii = 0; ii < b->size(); ++ii) {
-        if (b->at(ii)->op() == Opcode::Alloca) {
-          add("V5", fname, b->at(ii)->loc(),
-              "alloca 出现在非入口块 L" + std::to_string(bi) + "（不变量 2）");
+      BasicBlock* block = f->at(bi);
+      if (block == entry) continue;
+      for (Instruction* instruction : block->insts()) {
+        if (instruction->op() == Opcode::Alloca) {
+          add("V5", fname, instruction->loc(),
+              "alloca 出现在非入口块 L" + std::to_string(bi));
         }
       }
     }
-    // ⚠️ V5 **只查"全在入口块"**，不查"是否连续排在块首"。
-    //   为什么：`alloca` 的**初始化顺序**是语义的一部分
-    //   （`int x = 0; int y = x + 1;` 的 store 顺序不能动），
-    //   而结构化层的每个 `Alloca` 后面紧跟它自己的初始化 Store。
-    //   把 alloca 全部挪到块首会**改变 store 的相对顺序** ⇒ 语义风险。
-    //   后端要的是"能一次性扫出入口块的全部 alloca 来布局栈帧"，
-    //   这与"非 alloca 指令排在它们之间"并不冲突（扫一遍即可）。
-    //   ⇒ 判据 = "非入口块里 alloca 数 == 0"（上面那个循环），没有第二条。
 
-    // ── V1：use-def 双向一致 ──────────────────────────────────────────
+    // V1: use-def consistency in both directions.
     for (size_t bi = 0; bi < f->blockCount(); ++bi) {
-      BasicBlock* b = f->at(bi);
-      for (size_t ii = 0; ii < b->size(); ++ii) {
-        Instruction* in = b->at(ii);
+      BasicBlock* block = f->at(bi);
+      for (Instruction* instruction : block->insts()) {
         std::unordered_set<const Instruction*> checkedDefinitions;
-        for (size_t k = 0; k < in->numOperands(); ++k) {
-          Value* v = in->operand(k);
-          if (v == nullptr) {
-            add("V1", fname, in->loc(),
-                std::string("操作数为空：") + opcodeName(in->op()));
+        for (Value* value : instruction->operands()) {
+          if (value == nullptr) {
+            add("V1", fname, instruction->loc(),
+                std::string("操作数为空：") + opcodeName(instruction->op()));
             continue;
           }
-          // 模块级 interned 常量（`ValueKind::Constant`）**没有 parent 且合法**
-          //   —— `Module::getIntConst` 的产物就是这种形态。第一版只排除了
-          //   "指令形态的常量"，于是手工构造的 CFG（用 `getIntConst`）被误报
-          //   "操作数指向一条不属于任何块的指令"（`test_flat.cpp` 的菱形断言
-          //   抓出来的）。
-          // 模块级 interned 常量没有 parent 且合法
-          if (v->isInternedConstant()) continue;
-          if (v->isInst()) {
-            Instruction* d = static_cast<Instruction*>(v);
-            if (!checkedDefinitions.insert(d).second) continue;
-            if (d->isConstant()) continue;
-            if (d->isParam()) {
-              bool belongsToFunction = false;
-              for (size_t pi = 0; pi < f->numParams(); ++pi) {
-                if (f->param(pi) == d) { belongsToFunction = true; break; }
+          if (value->isInternedConstant()) continue;
+          if (value->isInst()) {
+            Instruction* definition = static_cast<Instruction*>(value);
+            if (!checkedDefinitions.insert(definition).second) continue;
+            if (definition->isConstant()) continue;
+            if (definition->isParam()) {
+              bool registered = false;
+              for (Instruction* parameter : f->params()) {
+                if (parameter == definition) { registered = true; break; }
               }
-              if (!belongsToFunction) {
-                add("V1", fname, in->loc(), "操作数引用了未登记在当前函数中的形参");
+              if (!registered) {
+                add("V1", fname, instruction->loc(), "操作数引用了未登记在当前函数中的形参");
                 continue;
               }
-              if (d->paramOwner() != f) {
-                add("V1", fname, in->loc(), "形参归属的函数与当前函数不一致");
+              if (definition->paramOwner() != f) {
+                add("V1", fname, instruction->loc(), "形参归属的函数与当前函数不一致");
                 continue;
               }
-              const std::vector<Instruction*>& us = d->users();
-              const size_t actualUses = pointerCount(in->operands(), static_cast<Value*>(d));
-              const size_t reverseUses = pointerCount(us, in);
-              if (actualUses != reverseUses) {
-                add("V1", fname, in->loc(),
-                    "形参的 use-def 使用次数不一致：操作数 " +
-                        std::to_string(actualUses) + "，反向边 " +
-                        std::to_string(reverseUses));
-              }
+            } else if (definition->parent() == nullptr || definition->parent()->parent() != f) {
+              add("V1", fname, instruction->loc(), "操作数指向一条不属于当前函数的指令");
               continue;
             }
-            // 值必须来自当前函数。仅检查 parent != nullptr 会把另一函数的
-            // 指令误当成合法定义；常量指令是没有 parent 的合法值形态。
-            if (d->parent() == nullptr || d->parent()->parent() != f) {
-              add("V1", fname, in->loc(), "操作数指向一条不属于任何块的指令");
-              continue;
-            }
-            // 反向边必须存在（**两个方向都查**）
-            const std::vector<Instruction*>& us = d->users();
-            const size_t actualUses = pointerCount(in->operands(), static_cast<Value*>(d));
-            const size_t reverseUses = pointerCount(us, in);
+            const size_t actualUses = pointerCount(instruction->operands(), static_cast<Value*>(definition));
+            const size_t reverseUses = pointerCount(definition->users(), instruction);
             if (actualUses != reverseUses) {
-              add("V1", fname, in->loc(),
+              add("V1", fname, instruction->loc(),
                   "use-def 使用次数不一致：操作数 " + std::to_string(actualUses) +
                       "，反向边 " + std::to_string(reverseUses));
             }
-          } else if (!v->isInternedConstant() && !v->isGlobalAddr() &&
-                     !v->isBlockAddr()) {
-            add("V1", fname, in->loc(), "操作数不是可用的值形态");
+          } else if (value->isGlobalAddr()) {
+            const auto* address = static_cast<const GlobalAddr*>(value);
+            GlobalVariable* global = address->global();
+            if (global == nullptr || moduleGlobals.count(global) == 0 ||
+                global->objType() == nullptr || address->type() != global->addrType()) {
+              add("V1", fname, instruction->loc(),
+                  "全局地址为空、属于其他模块或地址类型与全局对象不一致");
+            }
+          } else if (!value->isBlockAddr()) {
+            add("V1", fname, instruction->loc(), "操作数不是可用的值形态");
           }
         }
       }
     }
-    // 反向：每个登记的 user 必须真的用到我
     for (size_t bi = 0; bi < f->blockCount(); ++bi) {
-      BasicBlock* b = f->at(bi);
-      for (size_t ii = 0; ii < b->size(); ++ii) {
-        Instruction* d = b->at(ii);
+      for (Instruction* definition : f->at(bi)->insts()) {
         std::unordered_set<const Instruction*> checkedUsers;
-        for (Instruction* u : d->users()) {
-          if (!checkedUsers.insert(u).second) continue;
-          const size_t reverseUses = pointerCount(d->users(), u);
-          const size_t actualUses = u == nullptr
+        for (Instruction* user : definition->users()) {
+          if (!checkedUsers.insert(user).second) continue;
+          const size_t reverseUses = pointerCount(definition->users(), user);
+          const size_t actualUses = user == nullptr
                                         ? 0
-                                        : pointerCount(u->operands(), static_cast<Value*>(d));
+                                        : pointerCount(user->operands(), static_cast<Value*>(definition));
           if (actualUses != reverseUses) {
-            add("V1", fname, d->loc(),
+            add("V1", fname, definition->loc(),
                 "反向 use-def 使用次数不一致：操作数 " + std::to_string(actualUses) +
                     "，users() 边 " + std::to_string(reverseUses));
           }
         }
       }
     }
-    // 参数侧的 use-def
     for (size_t pi = 0; pi < f->numParams(); ++pi) {
-      Instruction* p = f->param(pi);
-      if (p == nullptr) {
+      Instruction* parameter = f->param(pi);
+      if (parameter == nullptr) {
         add("V1", fname, SourceLoc(), "形参表里有空项");
         continue;
       }
-      if (!p->isParam()) {
-        add("V1", fname, p->loc(), "形参表中含有非形参指令");
+      if (!parameter->isParam()) add("V1", fname, parameter->loc(), "形参表中含有非形参指令");
+      if (parameter->paramOwner() != f) {
+        add("V1", fname, parameter->loc(), "形参归属的函数与登记它的函数不一致");
       }
-      if (p->paramOwner() != f) {
-        add("V1", fname, p->loc(), "形参归属的函数与登记它的函数不一致");
+      if (pointerCount(f->params(), parameter) != 1) {
+        add("V1", fname, parameter->loc(), "形参表重复登记同一个形参");
       }
-      for (size_t prior = 0; prior < pi; ++prior) {
-        if (f->param(prior) == p) {
-          add("V1", fname, p->loc(), "形参表重复登记同一个形参");
-          break;
-        }
-      }
-      std::unordered_set<const Instruction*> checkedUsers;
-      for (Instruction* u : p->users()) {
-        if (!checkedUsers.insert(u).second) continue;
-        const size_t reverseUses = pointerCount(p->users(), u);
-        const size_t actualUses = u == nullptr
+      for (Instruction* user : parameter->users()) {
+        const size_t actualUses = user == nullptr
                                       ? 0
-                                      : pointerCount(u->operands(), static_cast<Value*>(p));
-        if (actualUses != reverseUses) {
-          add("V1", fname, SourceLoc(), "形参的 use-def 使用次数不一致");
+                                      : pointerCount(user->operands(), static_cast<Value*>(parameter));
+        if (actualUses != pointerCount(parameter->users(), user)) {
+          add("V1", fname, parameter->loc(), "形参的 use-def 使用次数不一致");
         }
       }
     }
-    if (f->entry() != nullptr) {
-      BasicBlock* entryBlock = f->entry();
-      if (entryBlock->numParams() != f->numParams()) {
-        add("V1", fname, SourceLoc(), "入口块形参表与函数形参表长度不同");
-      }
-      const size_t common = std::min(entryBlock->numParams(), f->numParams());
-      for (size_t pi = 0; pi < common; ++pi) {
-        if (entryBlock->param(pi) != f->param(pi)) {
+    if (entry->numParams() != f->numParams()) {
+      add("V1", fname, SourceLoc(), "入口块形参表与函数形参表长度不同");
+    } else {
+      for (size_t pi = 0; pi < f->numParams(); ++pi) {
+        if (entry->param(pi) != f->param(pi)) {
           add("V1", fname, SourceLoc(), "入口块形参与函数形参表顺序不一致");
         }
       }
     }
 
-    // ── V2：SSA 支配（**真的算支配树**）────────────────────────────────
-    DominatorTree dt(*f);
+    // V2: SSA definition dominance.
+    DominatorTree dominators(*f);
     for (size_t bi = 0; bi < f->blockCount(); ++bi) {
-      BasicBlock* b = f->at(bi);
-      if (!dt.reachable(bi)) continue;     // 不可达块：不谈支配（单独由 V4 管）
-      for (size_t ii = 0; ii < b->size(); ++ii) {
-        Instruction* in = b->at(ii);
-        // φ 的入值单独按"支配对应前驱块"检查（见 V3）
-        if (in->op() == Opcode::Phi) continue;
-        for (size_t k = 0; k < in->numOperands(); ++k) {
-          Value* v = in->operand(k);
-          if (v == nullptr || !v->isInst()) continue;
-          Instruction* d = static_cast<Instruction*>(v);
-          const BasicBlock* db = d->isParam() ? f->entry() : d->parent();
-          if (db == nullptr) continue;      // V1 已经报过
-          if (db == b) {
-            // 支配树对块是自反的，但同一块内的定义仍必须严格早于使用。
-            if (!d->isParam() && !definedBefore(d, in)) {
-              add("V2", fname, in->loc(),
-                  "同一块内的定义没有先于使用：L" + std::to_string(bi));
+      BasicBlock* block = f->at(bi);
+      if (!dominators.reachable(bi)) continue;
+      for (Instruction* instruction : block->insts()) {
+        if (instruction->op() == Opcode::Phi) continue;
+        for (Value* value : instruction->operands()) {
+          if (value == nullptr || !value->isInst()) continue;
+          Instruction* definition = static_cast<Instruction*>(value);
+          const BasicBlock* definitionBlock = definition->isParam() ? f->entry() : definition->parent();
+          if (definitionBlock == nullptr) continue;
+          if (definitionBlock == block) {
+            if (!definition->isParam() && !definedBefore(definition, instruction)) {
+              add("V2", fname, instruction->loc(), "同一块内的定义没有先于使用");
             }
-          } else if (!dt.dominates(db, b)) {
-            add("V2", fname, in->loc(),
-                "使用点不被定义支配：值定义在 L" + std::to_string(db->index()) +
-                    "，使用在 L" + std::to_string(bi));
+          } else if (!dominators.dominates(definitionBlock, block)) {
+            add("V2", fname, instruction->loc(), "使用点不被定义支配");
           }
         }
       }
     }
 
-    // ── V3：φ 的合法性 ────────────────────────────────────────────────
+    // V3: phi placement, count, exact predecessor coverage, and dominance.
     for (size_t bi = 0; bi < f->blockCount(); ++bi) {
-      BasicBlock* b = f->at(bi);
-      // ① φ 只在块首、连续排列
+      BasicBlock* block = f->at(bi);
       bool phiEnded = false;
-      for (size_t ii = 0; ii < b->size(); ++ii) {
-        Instruction* in = b->at(ii);
-        if (in->op() == Opcode::Phi) {
-          if (phiEnded) {
-            add("V3", fname, in->loc(),
-                "φ 不在块首连续排列（块 L" + std::to_string(bi) + "）");
-          }
-          continue;
+      for (Instruction* instruction : block->insts()) {
+        if (instruction->op() == Opcode::Phi) {
+          if (phiEnded) add("V3", fname, instruction->loc(), "φ 不在块首连续排列");
+        } else {
+          phiEnded = true;
         }
-        phiEnded = true;
       }
-      for (size_t ii = 0; ii < b->size(); ++ii) {
-        Instruction* phi = b->at(ii);
+      for (Instruction* phi : block->insts()) {
         if (phi->op() != Opcode::Phi) continue;
-        // ② 入值个数 == 前驱个数（**入口块没有前驱：它的 φ 是非法的**）
-        if (b == f->entry()) {
-          add("V3", fname, phi->loc(), "入口块不该有 φ（入口块没有前驱）");
+        if (block == entry) {
+          add("V3", fname, phi->loc(), "入口块不该有 φ");
           continue;
         }
-        if (phi->numOperands() != b->numPreds()) {
-          add("V3", fname, phi->loc(),
-              "φ 的入值个数（" + std::to_string(phi->numOperands()) +
-                  "）与前驱个数（" + std::to_string(b->numPreds()) + "）不符");
+        if (phi->numOperands() != block->numPreds()) {
+          add("V3", fname, phi->loc(), "φ 的入值个数与前驱个数不符");
         }
-        // ③ 前驱集合 == 入值块集合（**完全相同**，不是"包含"）
-        std::unordered_set<const BasicBlock*> phiPreds, realPreds;
-        for (size_t k = 0; k < phi->numSuccs(); ++k) {
-          if (phi->succ(k) != nullptr) phiPreds.insert(phi->succ(k));
+        std::unordered_set<BasicBlock*> phiPreds;
+        bool duplicatePhiPred = false;
+        for (BasicBlock* predecessor : phi->succs()) {
+          if (!phiPreds.insert(predecessor).second) duplicatePhiPred = true;
         }
-        for (size_t k = 0; k < b->numPreds(); ++k) {
-          BasicBlock* pred = b->pred(k);
-          realPreds.insert(pred);
-          if (pred == nullptr) {
-            add("V3", fname, phi->loc(), "块前驱表中含有空项");
+        if (duplicatePhiPred) add("V3", fname, phi->loc(), "φ 的前驱含有重复来源");
+        std::unordered_set<BasicBlock*> actualPreds(block->preds().begin(), block->preds().end());
+        if (phiPreds != actualPreds) {
+          add("V3", fname, phi->loc(), "φ 的入值块集合与块的前驱集合不同");
+        }
+        size_t selfReferences = 0;
+        for (size_t pi = 0; pi < phi->numOperands(); ++pi) {
+          Value* value = phi->operand(pi);
+          BasicBlock* predecessor = phi->succ(pi);
+          if (value == static_cast<Value*>(phi)) ++selfReferences;
+          if (value == nullptr || predecessor == nullptr || !value->isInst()) continue;
+          Instruction* definition = static_cast<Instruction*>(value);
+          const BasicBlock* definitionBlock = definition->isParam() ? f->entry() : definition->parent();
+          if (definitionBlock != nullptr && !dominators.dominates(definitionBlock, predecessor)) {
+            add("V3", fname, phi->loc(), "φ 的入值不支配对应的前驱块");
           }
         }
-        if (phiPreds != realPreds) {
-          std::string d = "φ 的前驱 {";
-          for (const BasicBlock* pb : phiPreds) {
-            d += pb == nullptr ? "null " : "L" + std::to_string(pb->index()) + " ";
-          }
-          d += "} vs 块前驱 {";
-          for (const BasicBlock* pb : realPreds) {
-            d += pb == nullptr ? "null " : "L" + std::to_string(pb->index()) + " ";
-          }
-          d += "}";
-          add("V3", fname, phi->loc(), "φ 的入值块集合与块的前驱集合不同：" + d);
-        }
-        // ④ 每个入值支配对应的前驱块；且**至少一个非自身入值**
-        size_t selfRefs = 0;
-        for (size_t k = 0; k < phi->numOperands(); ++k) {
-          Value* v = phi->operand(k);
-          BasicBlock* pb = phi->succ(k);
-          if (v == static_cast<const Value*>(phi)) ++selfRefs;
-          if (v == nullptr || pb == nullptr) continue;
-          if (v->isInst()) {
-            Instruction* d = static_cast<Instruction*>(v);
-            const BasicBlock* db = d->isParam() ? f->entry() : d->parent();
-            if (db != nullptr && !dt.dominates(db, pb)) {
-              add("V3", fname, phi->loc(),
-                  "φ 的入值不支配对应的前驱块 L" + std::to_string(pb->index()));
-            }
-          }
-        }
-        if (selfRefs == phi->numOperands()) {
-          add("V3", fname, phi->loc(), "φ 的入值全部指向它自己（至少一个非自身入值）");
+        if (selfReferences == phi->numOperands() && phi->numOperands() != 0) {
+          add("V3", fname, phi->loc(), "φ 的入值全部指向它自己");
         }
       }
     }
@@ -524,25 +465,17 @@ std::vector<Violation> verifyFlatModule(const Module& m) {
   return bad;
 }
 
-std::string formatViolations(const std::vector<Violation>& vs) {
-  std::string out;
-  for (const Violation& v : vs) {
-    out += "  [";
-    out += v.invariant;
-    out += "] ";
-    if (!v.func.empty()) {
-      out += v.func;
-      out += ": ";
+std::string formatViolations(const std::vector<Violation>& violations) {
+  std::string output;
+  for (const Violation& violation : violations) {
+    output += "  [" + violation.invariant + "] ";
+    if (!violation.func.empty()) output += violation.func + ": ";
+    if (violation.loc.line != 0) {
+      output += "line " + std::to_string(violation.loc.line) + ": ";
     }
-    if (v.loc.line != 0) {
-      out += "line ";
-      out += std::to_string(v.loc.line);
-      out += ": ";
-    }
-    out += v.message;
-    out += '\n';
+    output += violation.message + '\n';
   }
-  return out;
+  return output;
 }
 
 }  // namespace flat

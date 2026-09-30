@@ -15,10 +15,19 @@ struct GeneratorConfig {
   uint32_t maxLoopIterations = 8;
 };
 
+enum class GeneratedMode : uint8_t {
+  ArrayCycle = 0,
+  RepeatedAdd,
+  Alternating,
+};
+
 struct GeneratedCase {
   uint32_t index = 0;
+  GeneratedMode mode = GeneratedMode::ArrayCycle;
+  int32_t a = 0;
+  int32_t b = 0;
+  int32_t c = 0;
   uint32_t loopIterations = 0;
-  int32_t expectedReturn = 0;
   uint64_t sourceHash = 0;
   std::string source;
 };

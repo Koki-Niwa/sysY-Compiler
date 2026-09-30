@@ -160,14 +160,15 @@ class Gen {
   // 【后置】把"按 cond 在 then/else 两个 Region 里各算一个 i32"降级成
   //   **内存形式**：`slot = ...; if (cond) { slot = then } else { slot = else }`，
   //   返回 `load slot`。
+  //   两个回调必须显式返回该分支的 i32 Value；helper 不从 Region 尾部猜值。
   //   ★ 为什么不用"带结果的 IfOp"（MLIR `scf.if` 形态）：那会让 dump 出现
   //     **文本歧义** —— `(If %x @line 5) {` 里的 `%x` 既可能是结果名、也可能是
   //     条件操作数，而两者在文本上都写在 Region 之前，**读回器无法区分**
   //     （实测：往返后条件变成 `%?`）。结构化层本来就是"变量全在内存"
   //     （设计文档 §1.1），用临时槽是**与本层语义一致**的表达，且 mem2reg(S09)
   //     在平面层会把这些槽全部提升掉。
-  Value genConditionalI32(Value cond, const std::function<void()>& genThen,
-                          const std::function<void()>& genElse, SourceLoc loc);
+  Value genConditionalI32(Value cond, const std::function<Value()>& genThen,
+                          const std::function<Value()>& genElse, SourceLoc loc);
   // 【后置】把 `then` 里 yield 的 i32 写进 slot（供 genConditionalI32 复用）
   void genYieldInto(Region* r, const std::function<void()>& body, SourceLoc loc);
   // 【后置】在一个**新** Region 里生成 body 的语句，并以终结 Op 收尾；

@@ -10,6 +10,7 @@ from unittest.mock import patch
 from tools.selftest import exec_core
 from tools.selftest.flat_exec import one_file
 from tools.selftest.flat_exec_report import observable_same
+from tools.selftest.s09.check_mem2reg import promotion_stats, transformation_errors
 
 
 HERE = Path(__file__).resolve().parent
@@ -63,6 +64,20 @@ class FlatExecGateTests(unittest.TestCase):
             one_file('/fake/compiler', str(SOURCE), tmp, 1, mem2reg=True)
         self.assertEqual(run.call_count, 2)
         self.assertIn('--mem2reg', run.call_args_list[1].args[0])
+
+    def test_forged_mem2reg_statistic_cannot_accept_unchanged_flat_ir(self):
+        baseline = """define i32 @main() {
+L0:
+  %0 = alloca i32
+  store i32 7, ptr %0
+  %1 = load i32, ptr %0
+  ret i32 %1
+}
+"""
+        forged = promotion_stats(
+            'mem2reg promoted 1 allocas generated-phis 0 eliminated-phis 0\n')
+        self.assertIsNotNone(forged)
+        self.assertTrue(transformation_errors(baseline, baseline, forged))
 
     def test_success_without_output_cannot_reuse_stale_ir(self):
         result = subprocess.run([sys.executable, str(TOOL), '--compiler',

@@ -67,10 +67,75 @@ check_stage "$STAGE"
         result = self.run_stage('S10b', ['E2E_AARCH64'])
         self.assertEqual(1, result.returncode)
         self.assertIn('E2E_AARCH64', result.stdout)
+        result = self.run_stage('S10b', ['TOY_OK'])
+        self.assertEqual(1, result.returncode)
+        self.assertIn('TOY_OK', result.stdout)
 
-    def test_s11b_and_later_require_toy(self):
+    def test_dependency_closure_keeps_s10a_independent_and_orders_s11b(self):
+        for missing in ('INTERP_OK', 'DIFF_OK', 'TOY_OK'):
+            self.assertEqual(0, self.run_stage('S12', [missing]).returncode,
+                             f'S12 unexpectedly requires {missing}')
+        command = '''
+source "$GATE/stages.sh"
+stage_requires S10a S03 && stage_requires S10a S04
+test "$?" -ne 0 && exit 1
+stage_requires S10a S08 && exit 1
+stage_requires S10a S09 && exit 1
+stage_requires S10b S11b || exit 1
+stage_requires S11b S10b && exit 1
+stage_requires S12 S11 || exit 1
+stage_requires S12 S10a && exit 1
+stage_requires S12 S10b && exit 1
+stage_requires S12 S11b && exit 1
+true
+'''
+        result = subprocess.run(['bash', '-c', command], env=dict(os.environ, GATE=str(GATE)),
+                                capture_output=True, text=True)
+        self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_unknown_and_cycle_dependencies_are_hard_failures(self):
+        unknown = subprocess.run(['bash', '-c', '''
+source "$GATE/stages.sh"
+STAGE_DEPS[S09]="S08 S_UNKNOWN"
+validate_stage_graph
+'''], env=dict(os.environ, GATE=str(GATE)), capture_output=True, text=True)
+        self.assertNotEqual(0, unknown.returncode)
+        self.assertIn('未知阶段依赖', unknown.stderr)
+
+        cycle = subprocess.run(['bash', '-c', '''
+source "$GATE/stages.sh"
+STAGE_DEPS[S09]="S09"
+validate_stage_graph
+'''], env=dict(os.environ, GATE=str(GATE)), capture_output=True, text=True)
+        self.assertNotEqual(0, cycle.returncode)
+        self.assertIn('阶段依赖环', cycle.stderr)
+
+        missing = subprocess.run(['bash', '-c', '''
+source "$GATE/stages.sh"
+unset 'STAGE_DEPS[S09]'
+validate_stage_graph
+'''], env=dict(os.environ, GATE=str(GATE)), capture_output=True, text=True)
+        self.assertNotEqual(0, missing.returncode)
+        self.assertIn('阶段缺少依赖注册', missing.stderr)
+
+    def test_stage_checks_do_not_fall_back_to_numeric_stage_index(self):
+        env = dict(os.environ, GATE=str(GATE), STAGE='S10a')
+        env.update({key: '1' for key in FLAGS})
+        result = subprocess.run(['bash', '-c', '''
+FAIL=0
+c_bad(){ FAIL=$((FAIL+1)); }
+source "$GATE/stages.sh"
+stage_index(){ echo "numeric fallback called" >&2; return 99; }
+validate_stage "$STAGE" || exit 2
+check_stage "$STAGE"
+[ "$FAIL" = 0 ]
+'''], env=env, capture_output=True, text=True)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertNotIn('numeric fallback called', result.stderr)
+
+    def test_s11b_and_s10b_require_toy(self):
         self.assertEqual(0, self.run_stage('S11', ['TOY_OK']).returncode)
-        for stage in ('S11b', 'S12', 'S28'):
+        for stage in ('S11b', 'S10b'):
             self.assertEqual(1, self.run_stage(stage, ['TOY_OK']).returncode)
 
     def test_unknown_stage_rejected(self):

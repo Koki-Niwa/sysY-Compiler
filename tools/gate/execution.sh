@@ -1,8 +1,11 @@
 # 完整执行：进程成功且逐文件身份和覆盖范围均通过，才设置证据位。
-if [ -n "${STAGE:-}" ] && declare -F stage_index >/dev/null; then
-  requested_stage=$(stage_index "$STAGE") || return 2
-  execution_stage=$(stage_index S11) || return 2
-  if [ "$requested_stage" -lt "$execution_stage" ]; then
+if [ -n "${STAGE:-}" ]; then
+  declare -F stage_requires >/dev/null || return 2
+  stage_requires "$STAGE" S11
+  stage_requirement=$?
+  if [ "$stage_requirement" -gt 1 ]; then
+    return "$stage_requirement"
+  elif [ "$stage_requirement" = 1 ]; then
     hdr "D. 全量回归（运行 + manifest 身份验证）"
     c_skip "阶段 $STAGE 不要求 S11 目标执行证据"
     return 0

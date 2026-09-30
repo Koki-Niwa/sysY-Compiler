@@ -24,67 +24,9 @@ bool sameType(const Type* a, const Type* b) {
   const bool bv = b == nullptr || b->isVoid();
   return av || bv ? av == bv : llvmType(a) == llvmType(b);
 }
-bool supportedOpcode(Opcode op) {
-  switch (op) {
-    case Opcode::Ret: case Opcode::Br: case Opcode::Unreachable: case Opcode::Alloca: case Opcode::Load:
-    case Opcode::Store: case Opcode::GEP: case Opcode::Add: case Opcode::Sub: case Opcode::Mul: case Opcode::SDiv:
-    case Opcode::SRem: case Opcode::Shl: case Opcode::LShr: case Opcode::AShr: case Opcode::And: case Opcode::Or:
-    case Opcode::Xor: case Opcode::FAdd: case Opcode::FSub: case Opcode::FMul: case Opcode::FDiv: case Opcode::FNeg:
-    case Opcode::ICmp: case Opcode::FCmp: case Opcode::SIToFP: case Opcode::FPToSI: case Opcode::FPExt:
-    case Opcode::SExt: case Opcode::ZExt: case Opcode::Trunc: case Opcode::BitCast: case Opcode::Call:
-    case Opcode::LLVMMemCpy: case Opcode::LLVMMemSet: case Opcode::Phi: case Opcode::Select:
-      return true;
-    default: return false;
-  }
-}
-bool instructionContract(const Instruction& i, std::string& error) {
-  const Type* i32 = typePool().i32(); const Type* i64 = typePool().i64();
-  const Type* f32 = typePool().f32(); const Type* vty = i.type();
-  auto fail = [&](const char* text) { error = std::string(opcodeName(i.op())) + ": " + text; return false; };
-  auto bin = [&](const Type* ty) {
-    return i.numOperands() == 2 && sameType(vty, ty) && i.operand(0)->type() == ty && i.operand(1)->type() == ty;
-  };
-  const Opcode op = i.op();
-  if (op == Opcode::Ret) return i.numOperands() <= 1 ? true : fail("return arity is invalid");
-  if (op == Opcode::Br) return (i.numSuccs() == 1 && i.numOperands() == 0) ||
-      (i.numSuccs() == 2 && i.numOperands() == 1 && i.operand(0)->type() == i32) ? true : fail("branch shape or condition type is invalid");
-  if (op == Opcode::Unreachable) return i.numOperands() == 0 ? true : fail("takes no operands");
-  if (op == Opcode::Alloca) return i.numOperands() == 0 && i.srcElemType() != nullptr && !i.srcElemType()->isVoid() &&
-      vty != nullptr && vty->isPtr() && sameType(vty->elem, i.srcElemType()) ? true : fail("alloca result/object type mismatch");
-  if (op == Opcode::Load) return i.numOperands() == 1 && vty != nullptr && !vty->isVoid() && i.operand(0)->type()->isPtr() &&
-      sameType(i.operand(0)->type()->elem, vty) ? true : fail("load type does not match pointer element type");
-  // Store.srcElemType preserves address-calculation metadata in flat IR; it can
-  // describe an enclosing array. The stored value and typed pointer element are
-  // the actual LLVM store contract.
-  if (op == Opcode::Store) return i.numOperands() == 2 && i.operand(1)->type()->isPtr() &&
-      sameType(i.operand(0)->type(), i.operand(1)->type()->elem) ? true : fail("store value/pointer element mismatch");
-  if (op == Opcode::GEP) return i.numOperands() == 2 && i.srcElemType() != nullptr && i.operand(0)->type()->isPtr() &&
-      i.operand(1)->type() == i64 && vty != nullptr && vty->isPtr() && sameType(vty->elem, i.srcElemType()) ? true : fail("gep type mismatch");
-  if (op >= Opcode::Add && op <= Opcode::Xor) return bin(i32) ? true : fail("integer operands/result must be i32");
-  if (op >= Opcode::FAdd && op <= Opcode::FDiv) return bin(f32) ? true : fail("float operands/result must be float");
-  if (op == Opcode::FNeg) return i.numOperands() == 1 && vty == f32 && i.operand(0)->type() == f32 ? true : fail("fneg type is invalid");
-  if (op == Opcode::ICmp) return i.numOperands() == 2 && vty == i32 && i.operand(0)->type() == i32 && i.operand(1)->type() == i32 ? true : fail("icmp type is invalid");
-  if (op == Opcode::FCmp) return i.numOperands() == 2 && vty == i32 && i.operand(0)->type() == f32 && i.operand(1)->type() == f32 ? true : fail("fcmp type is invalid");
-  if (op >= Opcode::SIToFP && op <= Opcode::Trunc) {
-    if (i.numOperands() != 1) return fail("cast arity is invalid");
-    const Type* src = i.operand(0)->type();
-    if (op == Opcode::SIToFP) return src == i32 && vty == f32 ? true : fail("sitofp types are invalid");
-    if (op == Opcode::FPToSI) return src == f32 && vty == i32 ? true : fail("fptosi types are invalid");
-    if (op == Opcode::FPExt) return src == f32 && vty == f32 ? true : fail("fpext representation is invalid");
-    if (op == Opcode::Trunc) return src == i64 && vty == i32 ? true : fail("trunc types are invalid");
-    return src == i32 && vty == i64 ? true : fail("integer extension types are invalid");
-  }
-  if (op == Opcode::BitCast) return i.numOperands() == 1 && i.operand(0)->type()->isPtr() && vty != nullptr && vty->isPtr() ? true : fail("bitcast supports pointers only");
-  if (op == Opcode::Phi) {
-    if (i.numOperands() == 0 || i.numOperands() != i.numSuccs() || vty == nullptr) return fail("phi shape is invalid");
-    for (Value* value : i.operands()) if (!sameType(value->type(), vty)) return fail("phi incoming type mismatch");
-    return true;
-  }
-  if (op == Opcode::Select) return i.numOperands() == 3 && i.operand(0)->type() == i32 && sameType(i.operand(1)->type(), vty) && sameType(i.operand(2)->type(), vty) ? true : fail("select type mismatch");
-  return op == Opcode::Call || op == Opcode::LLVMMemCpy || op == Opcode::LLVMMemSet ? true : fail("unsupported opcode");
-}
 bool preflight(const Module& module, std::string& error) {
   std::unordered_set<std::string> symbols;
+  std::unordered_set<const GlobalVariable*> globalObjects;
   std::unordered_map<std::string, const Function*> functions;
   for (size_t i = 0; i < module.numGlobals(); ++i) {
     const GlobalVariable* g = module.global(i);
@@ -93,6 +35,7 @@ bool preflight(const Module& module, std::string& error) {
       if (error.empty()) error = "invalid, null, or duplicate global declaration";
       return false;
     }
+    globalObjects.insert(g);
     const int64_t bytes = typeByteSize(g->objType());
     if (bytes < 0) { error = "global object size overflows the supported address range"; return false; }
     for (const auto& item : g->initData()) if ((item.first % 4) != 0 || item.first > static_cast<uint64_t>(bytes) ||
@@ -130,14 +73,22 @@ bool preflight(const Module& module, std::string& error) {
         error = "function contains a null or mis-indexed basic block"; return false;
       }
       for (Instruction* inst : b->insts()) {
-        if (inst == nullptr || inst->parent() != b || !supportedOpcode(inst->op()) || inst->isConstant()) {
+        if (inst == nullptr || inst->parent() != b || inst->isConstant()) {
           error = "function contains a null, constant, or unsupported instruction"; return false;
         }
         if (inst->type() != nullptr && !validType(inst->type(), error)) return false;
         for (Value* v : inst->operands()) {
-          if (v == nullptr || v->type() == nullptr || !validType(v->type(), error) || v->isBlockAddr() ||
-              (v->isGlobalAddr() && static_cast<GlobalAddr*>(v)->global() == nullptr)) {
+          if (v == nullptr || v->type() == nullptr || !validType(v->type(), error) || v->isBlockAddr()) {
             error = "instruction contains a null or unsupported operand"; return false;
+          }
+          if (v->isGlobalAddr()) {
+            const auto* address = static_cast<const GlobalAddr*>(v);
+            const GlobalVariable* global = address->global();
+            if (global == nullptr || globalObjects.count(global) == 0 ||
+                address->type() != global->addrType()) {
+              error = "global address is null, foreign, or has a mismatched type";
+              return false;
+            }
           }
           if (v->isInst()) {
             Instruction* iv = static_cast<Instruction*>(v);
@@ -152,7 +103,7 @@ bool preflight(const Module& module, std::string& error) {
         for (BasicBlock* s : inst->succs()) if (s == nullptr || s->parent() != f) {
           error = "instruction has a null or foreign successor"; return false;
         }
-        if (!instructionContract(*inst, error)) return false;
+        if (!validateFlatInstruction(*inst, error)) return false;
         if (inst->op() == Opcode::Ret) {
           const bool voidRet = f->retType()->isVoid();
           if ((voidRet && inst->numOperands() != 0) || (!voidRet && inst->numOperands() != 1) ||

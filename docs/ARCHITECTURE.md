@@ -24,6 +24,13 @@ labels do not prove purity or describe the entire lowered backend ABI.
 The S10a reference interpreter is built by its isolated self-test, not linked
 into the compiler CLI. It consumes analyzed AST and depends on frontend/support
 contracts only; it must not call IR generation, either IR, LLVM, or target tools.
+Seeded generation serializes bounded recipes and source text; the separate
+`s10a_oracle` evaluates recipe fields without parsing or executing that text and
+shares no expression-building helper with the generator or interpreter. The
+runner's optional `--report` path writes an atomic RUNNING/FAIL/PASS manifest.
+A PASS manifest requires a clean compiler revision, exact fixed/generated
+counts, both negative controls, the oracle version, empty stderr, and hashes of
+the retained artifacts and relevant interpreter self-test sources.
 
 ## Ownership and reading order
 
@@ -44,6 +51,22 @@ contracts only; it must not call IR generation, either IR, LLVM, or target tools
   reviewed boundary for a given pipeline.
 - Flat blocks have explicit terminators and valid predecessor/successor links;
   SSA uses and definitions are checked by the verifier.
+- `verifyFlatModule` first validates block and instruction ownership, dense
+  indices, terminator shape, successor membership, and predecessor cache
+  equality. It recomputes predecessor membership from validated terminators,
+  collapsing duplicate edges from one source, and requires the cached vector
+  to remain in strict block-index order. Non-terminators other than phi nodes
+  carry no block successors; malformed structure does not enter indexed CFG or
+  dominance analysis.
+- Flat opcode arity and operand/result type legality live in the dependency
+  leaf `ir/FlatSemantics`. The verifier and LLVM emitter share this contract;
+  LLVM-only ABI and representability checks remain in the emitter boundary.
+- Phi nodes have one incoming value per distinct predecessor, cover that set
+  exactly, and use a value type equal to the phi result type. Dominance is
+  false for foreign or unreachable blocks, including unreachable self pairs.
+- Global-address operands must name an object in the same module and have that
+  object's exact address type; the verifier and emitter both reject null,
+  foreign, or retyped addresses.
 - Integer arithmetic preserves 32-bit wraparound; floating-point transforms
   preserve required evaluation order and do not assume fast-math semantics.
 - Target-independent `.ll` omits triple and data layout. Backend configuration

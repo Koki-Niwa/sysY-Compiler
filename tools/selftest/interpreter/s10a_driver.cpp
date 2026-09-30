@@ -1,6 +1,7 @@
 #include "interpreter/Interpreter.h"
 #include "s10a_cases.h"
 #include "s10a_generator.h"
+#include "s10a_oracle.h"
 
 #include <iostream>
 #include <memory>
@@ -57,6 +58,12 @@ bool sameResult(const RunResult& a, const RunResult& b) {
          a.stderrText == b.stderrText && a.diagnostic == b.diagnostic;
 }
 
+bool generatedMatches(const RunResult& first, const RunResult& second,
+                      int32_t expectedReturn) {
+  return first.status == RunStatus::Returned && first.mainReturn == expectedReturn &&
+         sameResult(first, second);
+}
+
 bool checkFixed(const FixedCase& test, bool& deterministic) {
   const RunResult first = runSource(test.source, test.input);
   const RunResult second = runSource(test.source, test.input);
@@ -106,6 +113,7 @@ int main() {
   const std::vector<GeneratedCase> replay = generate(config);
   bool replayPass = generated.size() == replay.size();
   bool generatedPass = replayPass;
+  bool generatedNegativeControlPass = !generated.empty();
   size_t generatedRuns = 0;
   for (size_t i = 0; i < generated.size(); ++i) {
     std::string reason;
@@ -113,15 +121,32 @@ int main() {
       generatedPass = false; std::cerr << "generator constraint failure " << i << ": " << reason << "\n";
     }
     if (i >= replay.size() || generated[i].index != replay[i].index ||
+        generated[i].mode != replay[i].mode || generated[i].a != replay[i].a ||
+        generated[i].b != replay[i].b || generated[i].c != replay[i].c ||
         generated[i].loopIterations != replay[i].loopIterations ||
-        generated[i].expectedReturn != replay[i].expectedReturn ||
         generated[i].source != replay[i].source ||
         generated[i].sourceHash != replay[i].sourceHash) replayPass = false;
+    int32_t expectedReturn = 0;
+    std::string oracleError;
+    if (!evaluateGeneratedRecipe(generated[i], expectedReturn, oracleError)) {
+      generatedPass = false;
+      std::cerr << "generated oracle failure " << i << ": " << oracleError << "\n";
+    }
     const RunResult first = runSource(generated[i].source, "");
     const RunResult second = runSource(generated[i].source, "");
-    if (first.status != RunStatus::Returned || first.mainReturn != generated[i].expectedReturn ||
-        !sameResult(first, second)) generatedPass = false;
+    const bool generatedCasePass = generatedMatches(first, second, expectedReturn);
+    if (!generatedCasePass) generatedPass = false;
     else ++generatedRuns;
+    if (i == 0) {
+      // Feed a corrupted oracle result through the same verdict function used
+      // above. Source, both interpreter runs, and the comparator are unchanged.
+      const int32_t corruptedExpected = expectedReturn + 1;
+      generatedNegativeControlPass =
+          generatedCasePass && !generatedMatches(first, second, corruptedExpected);
+    }
+    std::cout << "S10a generated-case index=" << generated[i].index
+              << " source-hash=" << generated[i].sourceHash
+              << " expected=" << expectedReturn << "\n";
   }
 
   const bool hashVectorsPass = sourceHash("") == 14695981039346656037ULL &&
@@ -209,6 +234,9 @@ int main() {
   std::cout << "S10a fixed=" << fixedPass << "/" << cases.size() << " repeat=" << repeatPass << "/"
             << cases.size() << " generated=" << generatedRuns << "/" << generated.size()
             << " seed=" << config.seed << " replay=" << (replayPass ? "PASS" : "FAIL")
+            << " oracle=" << generatedOracleVersion()
+            << " generated-negative-control="
+            << (generatedNegativeControlPass ? "PASS" : "FAIL")
             << " constraints=" << (generatedPass ? "PASS" : "FAIL")
             << " hash-vectors=" << (hashVectorsPass ? "PASS" : "FAIL")
             << " limits=" << (limitPass ? "PASS" : "FAIL")
@@ -223,6 +251,7 @@ int main() {
             << " negative-control=" << (negativeControlPass ? "PASS" : "FAIL") << "\n";
   const bool pass = fixedPass == cases.size() && repeatPass == cases.size() && generatedPass &&
                     replayPass && generatedRuns == generated.size() && hashVectorsPass && limitPass &&
+                    generatedNegativeControlPass &&
                     expressionLimitPass && statementLimitPass && totalAllocationLimitPass &&
                     largeArrayLimitPass && invalidInputPass &&
                     invalidAstPass && uninitializedPass && missingReturnPass && negativeControlPass && coveragePass;

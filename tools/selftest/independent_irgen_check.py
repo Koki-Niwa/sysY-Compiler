@@ -555,7 +555,7 @@ class Gen(object):
         self.op2('If %s' % a[0], e.line, [tr, er])
         return self.val('Load @ i32 %s' % t, e.line, 'i32', ('int', ()))
     def gen_divmod(self, e, op):
-        """`/`、`%` 的归一化守卫：x/0→0、INT_MIN/-1→0（% 同样是 0）。
+        """`/`、`%` 的归一化守卫：x/0→0、x%0→x、INT_MIN/-1→0。
         求值顺序照真实输出：`/` 左→右（float 除法也走这条），`%` 右→左。
         """
         k, line = subs(e), e.line
@@ -580,7 +580,7 @@ class Gen(object):
         else:
             t2 = self.temps(e, 2, line)[1]
             inner = self.reg(line, lambda: self.op(
-                'Store i32 %s %s' % (self.ci(0, line)[0], t2), line))
+                'Store i32 %s %s' % (a[0], t2), line))
             inner2 = self.reg(line, lambda: self.op(
                 'Store i32 %s %s' % (self.ci(0, line)[0], t2), line))
             def tbody():

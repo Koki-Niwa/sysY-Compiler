@@ -51,26 +51,25 @@
     (Alloca %g.15 i32 @line 2)
     (If %g.13 @line 2) {
       (If %g.7 @line 2) {
+        (Store i32 %g.5 %g.15 @line 2)
+        (Yield @line 2)
+      }
+      {
         (Int %g.16 0 @line 2)
         (Store i32 %g.16 %g.15 @line 2)
         (Yield @line 2)
       }
-      {
-        (Int %g.17 0 @line 2)
-        (Store i32 %g.17 %g.15 @line 2)
-        (Yield @line 2)
-      }
-      (Load %g.18 i32 %g.15 @line 2)
-      (Store i32 %g.18 %g.14 @line 2)
+      (Load %g.17 i32 %g.15 @line 2)
+      (Store i32 %g.17 %g.14 @line 2)
       (Yield @line 2)
     }
     {
-      (ModI %g.19 %g.5 %g.4 @line 2)
-      (Store i32 %g.19 %g.14 @line 2)
+      (ModI %g.18 %g.5 %g.4 @line 2)
+      (Store i32 %g.18 %g.14 @line 2)
       (Yield @line 2)
     }
-    (Load %g.20 i32 %g.14 @line 2)
-    (Return %g.20 @line 2)
+    (Load %g.19 i32 %g.14 @line 2)
+    (Return %g.19 @line 2)
   }
   (Func "main" :ret i32 :param [] @line 3) {
     (Alloca %main.0 i32 @line 4)

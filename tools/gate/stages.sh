@@ -48,7 +48,8 @@ declare -A STAGE_VISITING=() STAGE_SEEN=() STAGE_CLOSURE=()
 
 stage_known() {
   local stage known
-  stage=$(stage_canonical "$1") || return 1
+  stage="$1"
+  [ "$stage" = S10 ] && stage=S10a
   for known in "${STAGES[@]}"; do
     [ "$known" = "$stage" ] && return 0
   done
@@ -59,7 +60,8 @@ stage_known() {
 # compare these numbers: the graph above is the sole source of prerequisites.
 stage_index() {
   local index stage
-  stage=$(stage_canonical "$1") || return 1
+  stage="$1"
+  [ "$stage" = S10 ] && stage=S10a
   for index in "${!STAGES[@]}"; do
     if [ "${STAGES[$index]}" = "$stage" ]; then echo "$index"; return 0; fi
   done
@@ -87,7 +89,8 @@ stage_dfs() {
 
 stage_closure() {
   local stage
-  stage=$(stage_canonical "$1") || return 1
+  stage="$1"
+  [ "$stage" = S10 ] && stage=S10a
   stage_known "$stage" || { echo "未知阶段: $1" >&2; return 2; }
   STAGE_VISITING=()
   STAGE_SEEN=()
@@ -114,11 +117,16 @@ validate_stage_graph() {
 # prerequisites, 1 when it is independent, and 2+ for an invalid graph/query.
 stage_requires() {
   local stage required
-  stage=$(stage_canonical "$1") || return 1
-  required=$(stage_canonical "$2") || return 1
+  stage="$1"
+  required="$2"
+  [ "$stage" = S10 ] && stage=S10a
+  [ "$required" = S10 ] && required=S10a
   stage_known "$stage" || { echo "未知阶段: $1" >&2; return 2; }
   stage_known "$required" || { echo "未知阶段: $2" >&2; return 2; }
-  validate_stage_graph || return $?
+  # The closure walk validates every edge reachable from the requested stage.
+  # Full graph validation remains at the gate boundary and in
+  # validate_stage_graph(); repeating it for every capability query makes a
+  # single check_stage call traverse the entire graph sixteen extra times.
   stage_closure "$stage" >/dev/null || return $?
   [ "${STAGE_CLOSURE[$required]:-0}" = 1 ]
 }
@@ -133,7 +141,7 @@ check_stage() {
   local stage="$1" requirement threshold flag label result
   validate_stage_graph || return $?
   [ -z "$stage" ] && { echo "未指定阶段，仅报告执行过的检查"; return 0; }
-  validate_stage "$stage" || return $?
+  stage_known "$stage" || { echo "未知阶段: $stage" >&2; return 2; }
   for requirement in \
     'S03 CAN_SEMA 语义转储' \
     'S04 CAN_INITPLAN 初始化计划' \

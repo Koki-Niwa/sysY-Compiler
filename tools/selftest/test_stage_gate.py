@@ -133,6 +133,15 @@ check_stage "$STAGE"
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertNotIn('numeric fallback called', result.stderr)
 
+    def test_stage_query_walks_only_the_requested_closure(self):
+        result = subprocess.run(['bash', '-c', '''
+source "$GATE/stages.sh"
+validate_stage_graph(){ echo "full graph validation called" >&2; return 99; }
+stage_requires S09 S08
+'''], env=dict(os.environ, GATE=str(GATE)), capture_output=True, text=True)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertNotIn('full graph validation called', result.stderr)
+
     def test_s11b_and_s10b_require_toy(self):
         self.assertEqual(0, self.run_stage('S11', ['TOY_OK']).returncode)
         for stage in ('S11b', 'S10b'):

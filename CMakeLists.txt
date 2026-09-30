@@ -40,6 +40,7 @@ add_compile_options(-Werror)
 add_executable(compiler
   src/main/main.cpp
   src/main/EmitText.cpp
+  src/main/FlatPipeline.cpp
   src/support/Diagnostic.cpp
   src/support/SourceFile.cpp
   src/frontend/Lexer.cpp
@@ -66,7 +67,11 @@ add_executable(compiler
   # 显式列出文本包含片段便于导航；编译器 depfile 同样追踪这些 include。
   src/ir/FlatReaderInst.inc
   src/ir/FlatReaderFunc.inc
+  src/ir/DominatorTree.cpp
   src/ir/FlatVerifier.cpp
+  # ── S09：平面标量 alloca → SSA promotion ────────────────────────────────
+  src/opt/Mem2Reg.cpp
+  src/opt/Mem2RegAnalysis.cpp
   # ── S05：两层 IR 的第一层（结构化 IR）────────────────────────────────────
   src/structured/StructuredIR.cpp
   src/structured/StructuredDump.cpp

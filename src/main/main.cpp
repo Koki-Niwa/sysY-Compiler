@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "main/EmitText.h"
+#include "main/FlatPipeline.h"
 
 #include "frontend/Ast.h"
 #include "frontend/AstPrinter.h"
@@ -102,6 +103,7 @@ struct Options {
   bool fromAst = false;        // --from-ast：输入是 S-表达式（不是 SysY 源码）
   bool fromStructured = false;  // --from-structured：输入是结构化 IR 文本
   bool fromFlat = false;        // --from-flat：输入是平面 IR 文本（S06 轨 A）
+  bool mem2reg = false;         // --mem2reg：显式开启 S09 标量提升
   bool flatStats = false;       // --dump-flat-stats：把平面 IR 统计打到 stderr
   bool normalize = false;       // --normalize：跑 LoopNormalize + AllocaHoist（**默认关**）
   bool loopStats = false;       // --dump-loopnorm-stats：把规范化统计打到 stderr
@@ -171,6 +173,7 @@ bool parseCommandLine(int argc, char** argv, Options& opts) {
     if (a == "--from-structured") { opts.fromStructured = true; continue; }
     // ★ S06：--from-flat（输入是平面 IR 文本）与 --dump-flat-stats（统计走 stderr）
     if (a == "--from-flat")     { opts.fromFlat = true; continue; }
+    if (a == "--mem2reg")       { opts.mem2reg = true; continue; }
     if (a == "--dump-flat-stats") { opts.flatStats = true; continue; }
     // ★ S05b：循环规范化开关（**默认关**：不带它时 `--emit=structured-ir` 的
     //   输出必须与 S05 的样例对逐字节相同 —— 那是冻结契约）。
@@ -193,6 +196,9 @@ bool parseCommandLine(int argc, char** argv, Options& opts) {
                      positionals[1] + "' (expected exactly one)");
   }
   opts.input = positionals[0];
+
+  if (opts.mem2reg && opts.emit != EmitKind::FlatIr && opts.emit != EmitKind::LlvmIr)
+    throw UsageError("--mem2reg requires --emit=flat-ir or --emit=llvm-ir");
 
   if (!opts.haveOutput) throw UsageError("missing required option '-o <file>'");
   return true;
@@ -395,7 +401,7 @@ std::string renderFromStructured(const SourceFile& src, DiagnosticEngine& diags,
 //   …（此处原有 11 行说明，已并入 S06 报告与设计文档）
 // ============================================================================
 std::string renderFlatIr(const SourceFile& src, DiagnosticEngine& diags, bool fromAst,
-                         bool /*normalizeAlreadyImplied*/, bool flatStats,
+                         bool /*normalizeAlreadyImplied*/, bool flatStats, bool mem2reg,
                          std::unique_ptr<sysy::flat::Module>* moduleOut = nullptr) {
   std::unique_ptr<CompUnit> unit;
   if (fromAst) {
@@ -436,6 +442,7 @@ std::string renderFlatIr(const SourceFile& src, DiagnosticEngine& diags, bool fr
                        sysy::flat::formatViolations(fvs));
     }
   }
+  if (pipelineClean) sysy::mainstage::applyMem2Reg(*fmod, diags, mem2reg, flatStats);
   if (flatStats) {
     std::cerr << fmod->formatStats();
     std::cerr << "loopnorm rolled-back " << ls.rolledBack << " allocas-hoisted " << moved
@@ -448,37 +455,21 @@ std::string renderFlatIr(const SourceFile& src, DiagnosticEngine& diags, bool fr
   return sysy::flat::dumpModule(*fmod);
 }
 
-// ============================================================================
-// --from-flat 的真实实现（S06 轨 A：往返必须逐字节相同）
-//   输入是 `--emit=flat-ir` 的产物；不经过 Lexer/Parser。读回 → 再 dump，
-//   与原文逐字节相同（打印器与读取器互逆）。
-// ============================================================================
-std::string renderFromFlat(const SourceFile& src, DiagnosticEngine& diags, bool flatStats) {
-  // `parseFlatModule` **新建**一个模块（所有权交给这里的 unique_ptr）
-  std::unique_ptr<sysy::flat::Module> holder(sysy::flat::parseFlatModule(src.text(), diags));
-  if (holder == nullptr) return std::string();   // 诊断已经报出；产物照常写出（可定位）
-  sysy::flat::Module& fmod = *holder;
-  const std::vector<sysy::flat::Violation> fvs = sysy::flat::verifyFlatModule(fmod);
-  if (!fvs.empty()) {
-    diags.report(DiagLevel::Error, sysy::SourceLoc(0, 0), "E-FLAT-VERIFY",
-                 "读回的平面 IR 违反不变量：\n" + sysy::flat::formatViolations(fvs));
-  }
-  if (flatStats) std::cerr << fmod.formatStats();
-  return sysy::flat::dumpModule(fmod);
-}
-
 void ensureReadable(const SourceFile& src) {
   // 只做 I/O（读文件 + CRLF 规范化）。解析由 renderAst / renderTokens 各自负责。
   (void)src.text();
 }
 std::string renderLlvmIr(const SourceFile& src, DiagnosticEngine& diags,
-                         bool fromAst, bool fromFlat, bool normalize, bool flatStats) {
+                         bool fromAst, bool fromFlat, bool normalize, bool flatStats,
+                         bool mem2reg) {
   std::unique_ptr<sysy::flat::Module> module;
   if (fromFlat) {
     module.reset(sysy::flat::parseFlatModule(src.text(), diags));
-    if (module && flatStats) std::cerr << module->formatStats();
+    if (module && !diags.hasError())
+      sysy::mainstage::applyMem2Reg(*module, diags, mem2reg, flatStats);
+    if (module && flatStats && !diags.hasError()) std::cerr << module->formatStats();
   } else {
-    (void)renderFlatIr(src, diags, fromAst, normalize, flatStats, &module);
+    (void)renderFlatIr(src, diags, fromAst, normalize, flatStats, mem2reg, &module);
   }
   if (!module || diags.hasError()) return std::string();
   const std::vector<sysy::flat::Violation> violations =
@@ -559,13 +550,14 @@ int main(int argc, char** argv) {
         case EmitKind::FlatIr:
           // ★ S06 的真实产物：平面 IR（含 φ 与 critical-edge 拆分）
           artifact = opts.fromFlat
-                         ? renderFromFlat(src, diags, opts.flatStats)
+                         ? sysy::mainstage::renderFromFlat(src, diags, opts.flatStats,
+                                                           opts.mem2reg)
                          : renderFlatIr(src, diags, opts.fromAst, opts.normalize,
-                                        opts.flatStats);
+                                        opts.flatStats, opts.mem2reg);
           break;
         case EmitKind::LlvmIr:
           artifact = renderLlvmIr(src, diags, opts.fromAst, opts.fromFlat,
-                                  opts.normalize, opts.flatStats);
+                                  opts.normalize, opts.flatStats, opts.mem2reg);
           break;
         case EmitKind::Nothing:
           break;

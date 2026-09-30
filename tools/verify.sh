@@ -55,9 +55,9 @@ hdr "A. 构建（零警告是硬要求）"
 # 每组在同一 shell 中更新 CAN_* / PASS / FAIL / SKIP；顺序是显式契约。
 source "$GATE/stages.sh" || exit 2
 validate_stage "$STAGE" || exit 2
-CAN_IR=0; IR_VALID=0; CAN_SEMA=0; CAN_INITPLAN=0; CAN_SIR=0; CAN_NORM=0; CAN_FLAT=0
+CAN_IR=0; IR_VALID=0; CAN_SEMA=0; CAN_INITPLAN=0; CAN_SIR=0; CAN_NORM=0; CAN_FLAT=0; S08_OK=0; MEM2REG_OK=0; INTERP_OK=0; DIFF_OK=0
 E2E_X86=0; E2E_AARCH64=0; E2E_RISCV64=0; E2E_NO_STRUCT=0; TOY_OK=0
-for group in build architecture compliance llvm frontend initializers structured loops flat execution; do
+for group in build architecture compliance llvm frontend initializers structured loops flat flatverifier mem2reg execution interpreter; do
   if ! source "$GATE/$group.sh"; then
     c_bad "关卡模块加载/执行失败: $group"
     exit 1

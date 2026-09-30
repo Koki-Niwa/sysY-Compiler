@@ -3,7 +3,9 @@
 ## Actual dependency graph
 
 ```text
-main -> frontend, structured, ir, support
+main -> frontend, structured, ir, opt, support
+interpreter -> frontend, support
+opt -> ir, support
 structured core -> ir, support
 structured bridge -> frontend (only IRGenInternal.h and IRGenImpl.h)
 frontend -> support
@@ -16,15 +18,22 @@ intentional AST-to-IR bridge. Structured reader/verifier core must not acquire
 frontend types. Runtime declarations live in the neutral catalog
 `support/RuntimeLib.h`; the frontend adapts it to frontend types, while the
 structured reader/verifier query the neutral result kind directly. The catalog
-describes source-visible signatures, not the entire lowered backend ABI.
+also assigns each source-visible runtime signature one reference-execution
+behavior, so the interpreter does not duplicate runtime-name dispatch. These
+labels do not prove purity or describe the entire lowered backend ABI.
+The S10a reference interpreter is built by its isolated self-test, not linked
+into the compiler CLI. It consumes analyzed AST and depends on frontend/support
+contracts only; it must not call IR generation, either IR, LLVM, or target tools.
 
 ## Ownership and reading order
 
 | Area | Owns | Read first |
 |---|---|---|
 | `frontend/` | source syntax, types, diagnostics, runtime type adaptation | `Lexer`, `Parser`, `Sema` |
+| `interpreter/` | direct execution of Sema-annotated AST as a reference oracle; owns values, storage, control flow, and runtime I/O | `Interpreter.h`, `Interpreter.cpp` |
 | `structured/` | regions, loop/access structure, AST-to-IR bridge, structured verification | `StructuredIR`, `StructuredVerifier`, `IRGen`, `IRGenInternal.h` |
 | `ir/` | flat values, blocks, instructions, CFG/SSA data, verification, and LLVM text emission | `Module`, `Function`, `BasicBlock`, `Instruction`, verifier, `IREmitter` |
+| `opt/` | flat-IR transformations over verified modules | `Mem2Reg` |
 | `support/` | diagnostics, source files/locations, neutral catalogs | `Diagnostic`, `SourceFile`, `RuntimeLib` |
 | `main/` | command-line mode selection and artifact policy | `main.cpp`, emitter entry point |
 
@@ -58,7 +67,27 @@ Implemented today: frontend and structured/flat IR construction, structured
 verification, loop normalization, flattening, dumps, and the S07 target-neutral
 LLVM text emitter. `IREmitter` owns the consumer interface; `LLVMTextEmitter`
 owns the LLVM dialect mapping and rejects an unsupported module atomically.
-Mem2reg, broad optimization, and target backend consumption remain future work.
+
+S09 mem2reg requires a flat module whose CFG and use-def caches were rebuilt
+after prior structural edits and which passes `verifyFlatModule`. It may promote
+only entry-block scalar `i32` and `f32` allocas whose uses are direct matching
+loads and stores and whose loads are definitely initialized along all
+entry-reachable paths. Escaped or derived pointers, aggregates, unsupported
+types, unreachable uses, and uninitialized reads remain in memory form. The pass
+analyzes before mutation, sorts predecessor/value pairs for generated phis, and
+keeps tentative phis unowned until the candidate plan is complete. Failed plans
+discard those phis without interning constants; successful candidates remove
+only their alloca/load/store operations. The pass preserves block order and
+terminators, then rebuilds CFG and use-def caches after commits. Its per-candidate
+worklists use finite CFG data and linear temporary storage in blocks, accesses,
+and phi inputs; the stage gate supplies the process timeout and memory limits.
+Candidate declines do not roll back earlier successful candidates. The API can
+be disabled and can capture before/after dumps. The fresh S09 gate passed 51
+checks with 0 failures and 2 expected stage skips; the [dated report](../../docs/audit/S09-FRESH-2026-09-30.md)
+records corpus counts and limits. This validates interpreter-observed behavior,
+not target runtime performance.
+
+Broad optimization and target backend consumption remain future work.
 
 Future analyses are contracts, not empty framework classes. Each must state its
 input, output, preserved/invalidated analyses, resource budget, diagnostics,

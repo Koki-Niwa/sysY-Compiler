@@ -41,7 +41,8 @@ int32_t normDivInt(int32_t a, int32_t b) {
 }
 
 int32_t normRemInt(int32_t a, int32_t b) {
-  if (b == 0) return 0;
+  // S05 的跨目标实测定义 `% 0` 为保留被除数；与 IRGen/执行器一致。
+  if (b == 0) return a;
   if (a == INT32_MIN && b == -1) return 0;
   return a % b;
 }

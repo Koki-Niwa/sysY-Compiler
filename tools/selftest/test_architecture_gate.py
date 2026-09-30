@@ -29,6 +29,17 @@ class ArchitectureTests(unittest.TestCase):
             self.put('src/structured/' + bridge, '#include "frontend/Ast.h"\n')
         self.assertEqual([], check(self.root)[0])
 
+    def test_interpreter_may_read_ast_and_support_but_not_ir(self):
+        self.put('src/support/SourceLoc.h')
+        self.put('src/frontend/Ast.h', '#include "support/SourceLoc.h"\n')
+        self.put('src/interpreter/Interpreter.h',
+                 '#include "frontend/Ast.h"\n#include "support/SourceLoc.h"\n')
+        self.assertEqual([], check(self.root)[0])
+        self.put('src/interpreter/Interpreter.h', '#include "ir/Module.h"\n')
+        self.put('src/ir/Module.h')
+        self.assertTrue(any('禁止依赖方向 interpreter -> ir' in e
+                            for e in check(self.root)[0]))
+
     def test_similar_bridge_name_does_not_allow_reverse_dependency(self):
         self.put('src/frontend/Ast.h')
         self.put('src/structured/IRGenPretend.h', '#include "frontend/Ast.h"\n')

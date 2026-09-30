@@ -18,8 +18,11 @@
 | C6 | `structured.sh` | 冻结样例、结构化不变式/反证、独立 IRGen、用例 |
 | C7 | `loops.sh` | 规范化不变式、独立规范化、行为对照、最小用例 |
 | C8 | `flat.sh` | 冻结平面样例、清单身份/数量、坏 IR 反证、独立展平、行为对照、回边普查、平面用例 |
+| C8a | `flatverifier.sh` | S08 起通过公开 `verifyFlatModule` API 运行坏/合法 IR 矩阵，并核对旧 8 个坏例映射 |
+| C8b | `mem2reg.sh` | S09 起对提升后的 flat IR 重跑 structured/flat 可观察行为对照，锁定与 fresh S08 基线相同的覆盖和差异数 |
 | D/E | `execution.sh` | 三个 target、no-structured、自研降级器执行；新增逐文件 JSON 证据校验 |
-| F | `stages.sh` | 显式阶段顺序及累积能力要求，补 S07/S11/S11b 的必需证据 |
+| E2 | `interpreter.sh` | S10a AST 解释器固定/生成用例、资源限制、重放和负控 |
+| F | `stages.sh` | 显式阶段顺序及累积能力要求；S07/S10a/S11/S10b/S11b 均有必需证据位 |
 | 新 A2 | `architecture.sh` | 依赖方向/环、CLI 能力契约、三个判据反证套件 |
 
 原来由 `--quick` 跳过的独立 IRGen、独立规范化、规范化行为、独立展平和平面行为仍按原条件跳过。快速检查成功只输出 `QUICK/SMOKE PASS — NOT FULL ACCEPTANCE`。
@@ -28,6 +31,10 @@
 
 - LLVM 输出仅接受真实定义，或者退出码 2 加 `error[E-UNSUPPORTED-LLVM]` 的明确未实现诊断；其他失败不是缺能力。S07 起还必须有 llvm-as 成功证据。
 - S11 起三个 target 与 no-structured 的执行证据全部必需；缺 qemu 等会留下未完成证据位，阶段验收失败。
+- S10a 要求 AST 解释器自身的固定用例、生成器和负控证据；旧 `--stage S10` 名称仍作为 S10a 别名接受。
+- S08 要求公共 FlatVerifier 边界矩阵：至少 12 个不同无效 IR、6 个合法形状和原 8 个坏例映射。旧文本检查器报红不能替代 API 级拒绝证据。
+- S09 要求 fresh promoted-flat/structured behavior evidence；`--quick` 跳过该对照时 `MEM2REG_OK` remains unset and the requested S09 gate fails.
+- S10b 排在 S11 之后，要求 S11 的完整目标执行证据与独立 AST/目标差分证据；解释器本身不依赖 S11。
 - `check_execution.py` 校验运行器 `--json` 对应的 target、540 个清单身份、490 个必需通过、50 个指定 tensor 排除、逐条状态与汇总一致。运行器退出 0 不足以验收。
 - S11b 及以后额外要求自研降级器的同范围执行证据。
 - 产品 `.inc` 纳入 600 行上限；协调器与 `gate/*.sh` 的 600 行上限不能被棘轮覆盖。其他旧工具的棘轮不因此整体刷新。

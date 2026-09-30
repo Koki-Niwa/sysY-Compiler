@@ -250,6 +250,10 @@ class Instruction : public Value {
   BasicBlock* parent() const { return parent_; }
   void setParent(BasicBlock* b) { parent_ = b; }
 
+  // 形参的唯一函数归属。Function::addParam 首次登记时锁定 owner；之后
+  // 把同一形参塞进另一函数仍会留在两张表里，供 FlatVerifier 明确拒绝。
+  Function* paramOwner() const { return paramOwner_; }
+
   // ── 使用者链（use-def 的**反向**方向）────────────────────────────────
   //   "谁能用我"：从值找使用者。S17–S20 的每个 pass 都要它（改一条指令后
   //   要找到所有使用者）。
@@ -295,12 +299,18 @@ class Instruction : public Value {
   void setParamList(bool v) { paramList_ = v; }
 
  protected:
+  friend class Function;
+  void registerParamOwner(Function* f) {
+    if (paramOwner_ == nullptr) paramOwner_ = f;
+  }
+
   Opcode op_;
   SourceLoc loc_;
   std::vector<Value*> operands_;
   std::vector<BasicBlock*> succs_;
   std::vector<Instruction*> users_;
   BasicBlock* parent_ = nullptr;
+  Function* paramOwner_ = nullptr;
   IPred ipred_ = IPred::Eq;
   FPred fpred_ = FPred::Oeq;
   std::string callee_;

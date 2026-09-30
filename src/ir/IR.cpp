@@ -62,6 +62,7 @@ void BasicBlock::sortPreds() {
 // ============================================================================
 void Function::addParam(Instruction* p) {
   if (p == nullptr) return;
+  p->registerParamOwner(this);
   params_.push_back(p);
   if (BasicBlock* e = entry()) e->addParam(p);
 }

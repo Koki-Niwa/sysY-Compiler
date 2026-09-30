@@ -6,8 +6,9 @@ import subprocess
 import unittest
 
 GATE = Path(__file__).resolve().parents[1] / 'gate'
-FLAGS = ('CAN_SEMA CAN_INITPLAN CAN_SIR CAN_NORM CAN_FLAT CAN_IR IR_VALID '
-         'E2E_X86 E2E_AARCH64 E2E_RISCV64 E2E_NO_STRUCT TOY_OK').split()
+FLAGS = ('CAN_SEMA CAN_INITPLAN CAN_SIR CAN_NORM CAN_FLAT CAN_IR IR_VALID S08_OK MEM2REG_OK '
+         'INTERP_OK E2E_X86 E2E_AARCH64 E2E_RISCV64 E2E_NO_STRUCT '
+         'DIFF_OK TOY_OK').split()
 
 
 class StageTests(unittest.TestCase):
@@ -35,6 +36,37 @@ check_stage "$STAGE"
     def test_s11_requires_all_execution_paths(self):
         for missing in ('E2E_X86', 'E2E_AARCH64', 'E2E_RISCV64', 'E2E_NO_STRUCT'):
             self.assertEqual(1, self.run_stage('S11', [missing]).returncode)
+
+    def test_s10a_requires_interpreter_evidence_and_keeps_old_alias(self):
+        result = self.run_stage('S10a', ['INTERP_OK'])
+        self.assertEqual(1, result.returncode)
+        self.assertIn('INTERP_OK', result.stdout)
+        self.assertEqual(1, self.run_stage('S10', ['INTERP_OK']).returncode)
+        self.assertEqual(0, self.run_stage('S10').returncode)
+
+    def test_s08_requires_public_flat_verifier_matrix(self):
+        result = self.run_stage('S08', ['S08_OK'])
+        self.assertEqual(1, result.returncode)
+        self.assertIn('S08_OK', result.stdout)
+        self.assertEqual(0, self.run_stage('S08').returncode)
+
+    def test_s09_requires_mem2reg_behavior_evidence_only_from_s09(self):
+        self.assertEqual(0, self.run_stage('S08', ['MEM2REG_OK']).returncode)
+        result = self.run_stage('S09', ['MEM2REG_OK'])
+        self.assertEqual(1, result.returncode)
+        self.assertIn('MEM2REG_OK', result.stdout)
+        self.assertEqual(0, self.run_stage('S09').returncode)
+
+    def test_s10b_requires_s11_and_differential_evidence(self):
+        result = self.run_stage('S10b', ['DIFF_OK'])
+        self.assertEqual(1, result.returncode)
+        self.assertIn('DIFF_OK', result.stdout)
+        result = self.run_stage('S10b', ['INTERP_OK'])
+        self.assertEqual(1, result.returncode)
+        self.assertIn('INTERP_OK', result.stdout)
+        result = self.run_stage('S10b', ['E2E_AARCH64'])
+        self.assertEqual(1, result.returncode)
+        self.assertIn('E2E_AARCH64', result.stdout)
 
     def test_s11b_and_later_require_toy(self):
         self.assertEqual(0, self.run_stage('S11', ['TOY_OK']).returncode)

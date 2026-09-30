@@ -35,8 +35,9 @@ optimizations without claiming an immediate runtime gain.
 The supported dependency direction is:
 
 ```text
-main -> frontend, structured, ir, support
+main -> frontend, structured, ir, opt, support
 structured core -> ir, support
+opt -> ir, support
 frontend -> support
 ir -> support
 support -> nothing in the compiler

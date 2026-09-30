@@ -29,6 +29,7 @@ std::string helpText() {
       "                     SysY 源码（S05 起用于轨 A：往返必须逐字节相同）\n"
       "  --from-flat        输入是 --emit=flat-ir 的产物（S06 起用于轨 A）\n"
       "  --dump-flat-stats  把平面 IR 的统计（块/指令/φ）打到 stderr\n"
+      "  --mem2reg          显式提升安全的标量 alloca（flat-ir / llvm-ir）\n"
       "  -O0 / -O1          优化级别（-O1 目前只记录，S17 起生效）\n"
       "  --optimize         -O1 的别名（tools/run_tests.sh 使用长选项名）\n"
       "  -S                 接受但不解释（比赛调用形式: compiler a.sy -S -o a.s）\n"

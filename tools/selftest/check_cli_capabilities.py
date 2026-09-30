@@ -40,6 +40,17 @@ def check(compiler):
             result = subprocess.run([compiler, str(source), '--emit=' + kind, '-o', str(output)],
                                     capture_output=True, text=True, timeout=20)
             assert result.returncode == 0 and output.stat().st_size > 0, (kind, result.stderr)
+        for kind in ('flat-ir', 'llvm-ir'):
+            result = subprocess.run([compiler, str(source), '--emit=' + kind, '--mem2reg',
+                                     '-o', str(output)], capture_output=True, text=True,
+                                    timeout=20)
+            assert result.returncode == 0 and output.stat().st_size > 0, \
+                (kind + ' with mem2reg', result.stderr)
+        output.unlink(missing_ok=True)
+        result = subprocess.run([compiler, str(source), '--emit=structured-ir', '--mem2reg',
+                                 '-o', str(output)], capture_output=True, text=True, timeout=20)
+        assert result.returncode == 2 and '--mem2reg requires' in result.stderr
+        assert not output.exists(), 'invalid mem2reg mode created an artifact'
         source.write_text('''int main(){
   int a[2]; float b[2]; int x; float y;
   starttime(); x=getint(); x=x+getch(); x=x+getarray(a);

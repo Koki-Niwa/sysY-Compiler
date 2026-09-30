@@ -22,8 +22,8 @@
 //     最后按位转回 int32_t（实现定义但 clang 上是回绕；更是我们**唯一**的
 //     跨赛道一致性来源 —— 铁律 6）。
 //   * `float` 是 IEEE-754 单精度。
-//   * `x / 0`、`x % 0`、`INT_MIN / -1`：**归一化为 0**（守卫在 S05 插；
-//     S03 不报错、不警告）。这里必须与 S05 完全一致，否则"常量求值"与
+//   * `x / 0` → 0；`x % 0` → x；`INT_MIN / -1` → 0（S05 按目标实测
+//     保留余数运算的被除数；S03 不报错、不警告）。这里必须与 S05 完全一致，否则"常量求值"与
 //     "运行时求值"会给出两个答案。
 //   * float→int 越界是 UB（规范 §3 Implicit Type Conversions 1）：本文件里
 //     常量折叠出现的越界按饱和处理（与 S05 的归一化一致），**不报错**。
@@ -149,7 +149,7 @@ class ConstEvaluator {
 
 // ── 语义决策的可测试投影（S05 的 IRGen 必须与这里**逐位一致**）─────────────
 int32_t normDivInt(int32_t a, int32_t b);   // x/0 → 0；INT_MIN/-1 → 0
-int32_t normRemInt(int32_t a, int32_t b);   // x%0 → 0；INT_MIN%-1 → 0
+int32_t normRemInt(int32_t a, int32_t b);   // x%0 → x；INT_MIN%-1 → 0
 int32_t satFptosi(float v);                 // NaN → 0；越界 → 饱和
 
 }  // namespace sysy

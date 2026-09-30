@@ -9,7 +9,6 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
-#include <unordered_map>
 #include <unordered_set>
 
 namespace sysy {
@@ -36,107 +35,32 @@ bool isCallFamily(Opcode k) {
   return k == Opcode::Call || k == Opcode::LLVMMemCpy || k == Opcode::LLVMMemSet;
 }
 
+template <typename T>
+size_t pointerCount(const std::vector<T*>& values, const T* needle) {
+  return static_cast<size_t>(std::count(values.begin(), values.end(), needle));
+}
+
+// 【后置】定义和使用是否在同一个块中且定义严格先于使用。
+//   块级支配只回答"两个点在哪个块"；SSA 在同一块里还需要这个顺序条件。
+bool definedBefore(const Instruction* def, const Instruction* use) {
+  if (def == nullptr || use == nullptr || def == use || def->parent() == nullptr ||
+      def->parent() != use->parent()) {
+    return false;
+  }
+  bool sawDef = false;
+  for (Instruction* in : def->parent()->insts()) {
+    if (in == def) sawDef = true;
+    if (in == use) return sawDef;
+  }
+  return false;
+}
+
 std::string kindName(Opcode k) {
   if (k == Opcode::ConstantInt || k == Opcode::ConstantFP) return "常量";
   return opcodeName(k);
 }
 
 }  // namespace
-
-// ============================================================================
-// 支配树（Cooper-Harvey-Kennedy）
-// ============================================================================
-DominatorTree::DominatorTree(const Function& f) {
-  const size_t n = f.blockCount();
-  reach_.assign(n, 0);
-  post_.assign(n, -1);
-  idom_.assign(n, nullptr);
-  if (n == 0) return;
-
-  // ① 从入口块出发做**显式栈** DFS，得到后序编号
-  std::vector<int> order;            // 后序序列（块下标）
-  order.reserve(n);
-  std::vector<std::pair<BasicBlock*, size_t>> st;   // (块, 下一个后继下标)
-  std::vector<char> seen(n, 0);
-  st.emplace_back(f.entry(), 0);
-  seen[0] = 1;
-  while (!st.empty()) {
-    std::pair<BasicBlock*, size_t>& top = st.back();
-    BasicBlock* b = top.first;
-    Instruction* t = b->terminator();
-    const size_t nsucc = (t != nullptr) ? t->numSuccs() : 0;
-    bool advanced = false;
-    while (top.second < nsucc) {
-      BasicBlock* s = t->succ(top.second++);
-      if (s == nullptr || s->parent() != &f) continue;
-      const size_t si = s->index();
-      if (si >= n || seen[si]) continue;
-      seen[si] = 1;
-      st.emplace_back(s, 0);
-      advanced = true;
-      break;
-    }
-    if (advanced) continue;
-    order.push_back(static_cast<int>(b->index()));
-    st.pop_back();
-  }
-  for (size_t i = 0; i < order.size(); ++i) {
-    post_[static_cast<size_t>(order[i])] = static_cast<int>(i);
-  }
-  for (size_t i = 0; i < n; ++i) reach_[i] = seen[i];
-
-  // ② 逆后序（RPO）：后序的逆序
-  std::vector<BasicBlock*> rpo;
-  rpo.reserve(order.size());
-  for (size_t i = order.size(); i-- > 0;) rpo.push_back(f.at(static_cast<size_t>(order[i])));
-
-  // ③ 迭代求 idom 到不动点
-  auto intersect = [&](BasicBlock* a, BasicBlock* b) -> BasicBlock* {
-    while (a != b) {
-      while (post_[a->index()] < post_[b->index()]) a = idom_[a->index()];
-      while (post_[b->index()] < post_[a->index()]) b = idom_[b->index()];
-    }
-    return a;
-  };
-  idom_[f.entry()->index()] = f.entry();   // 哨兵：入口的 idom 是它自己
-  bool changed = true;
-  while (changed) {
-    changed = false;
-    for (BasicBlock* b : rpo) {
-      if (b == f.entry()) continue;
-      BasicBlock* newIdom = nullptr;
-      for (size_t i = 0; i < b->numPreds(); ++i) {
-        BasicBlock* p = b->pred(i);
-        if (p == nullptr || p->parent() != &f) continue;
-        if (idom_[p->index()] == nullptr) continue;       // 还没算出来
-        newIdom = (newIdom == nullptr) ? p : intersect(p, newIdom);
-      }
-      if (newIdom != nullptr && idom_[b->index()] != newIdom) {
-        idom_[b->index()] = newIdom;
-        changed = true;
-      }
-    }
-  }
-  // 入口块的 idom 对外是 nullptr（"没有支配者"）
-  idom_[f.entry()->index()] = nullptr;
-}
-
-bool DominatorTree::dominates(const BasicBlock* a, const BasicBlock* b) const {
-  if (a == nullptr || b == nullptr) return false;
-  if (a == b) return true;
-  const size_t bi = b->index();
-  if (bi >= reach_.size() || !reach_[bi]) return false;
-  const BasicBlock* cur = b;
-  // 沿 idom 链上溯（**迭代**；链长 ≤ 块数）
-  size_t guard = 0;
-  while (cur != nullptr && guard++ <= reach_.size()) {
-    if (cur == a) return true;
-    const size_t ci = cur->index();
-    if (ci >= idom_.size()) return false;
-    cur = idom_[ci];
-  }
-  return false;
-}
 
 // ============================================================================
 // 检查
@@ -308,13 +232,19 @@ std::vector<Violation> verifyFlatModule(const Module& m) {
           add("V4", fname, t->loc(), "分支目标不属于同一个函数");
         }
       }
-      if (t->op() == Opcode::Br && t->numSuccs() != 1 && t->numSuccs() != 2) {
-        add("V4", fname, t->loc(), "br 的后继个数只能是 1 或 2");
-      }
-      if (t->op() == Opcode::Br && t->numSuccs() == 2 && t->numOperands() != 1) {
-        add("V4", fname, t->loc(), "条件 br 必须恰好一个条件操作数");
+      if (t->op() == Opcode::Br) {
+        if (t->numSuccs() != 1 && t->numSuccs() != 2) {
+          add("V4", fname, t->loc(), "br 的后继个数只能是 1 或 2");
+        } else if (t->numSuccs() == 1 && t->numOperands() != 0) {
+          add("V4", fname, t->loc(), "无条件 br 不能带条件操作数");
+        } else if (t->numSuccs() == 2 && t->numOperands() != 1) {
+          add("V4", fname, t->loc(), "条件 br 必须恰好一个条件操作数");
+        }
       }
       if (t->op() == Opcode::Ret) {
+        if (t->numSuccs() != 0) {
+          add("V4", fname, t->loc(), "ret 不能有后继块");
+        }
         const bool voidFn = f->retType() == nullptr || f->retType()->isVoid();
         if (!voidFn && t->numOperands() != 1) {
           add("V4", fname, t->loc(), "非 void 函数的 ret 必须带一个返回值");
@@ -325,6 +255,9 @@ std::vector<Violation> verifyFlatModule(const Module& m) {
         } else if (voidFn && t->numOperands() != 0) {
           add("V4", fname, t->loc(), "void 函数的 ret 不能带返回值");
         }
+      } else if (t->op() == Opcode::Unreachable &&
+                 (t->numOperands() != 0 || t->numSuccs() != 0)) {
+        add("V4", fname, t->loc(), "unreachable 不能有操作数或后继块");
       }
     }
 
@@ -354,6 +287,7 @@ std::vector<Violation> verifyFlatModule(const Module& m) {
       BasicBlock* b = f->at(bi);
       for (size_t ii = 0; ii < b->size(); ++ii) {
         Instruction* in = b->at(ii);
+        std::unordered_set<const Instruction*> checkedDefinitions;
         for (size_t k = 0; k < in->numOperands(); ++k) {
           Value* v = in->operand(k);
           if (v == nullptr) {
@@ -370,16 +304,46 @@ std::vector<Violation> verifyFlatModule(const Module& m) {
           if (v->isInternedConstant()) continue;
           if (v->isInst()) {
             Instruction* d = static_cast<Instruction*>(v);
-            if (d->isParam()) continue;               // 形参：入口块开头，不是指令
+            if (!checkedDefinitions.insert(d).second) continue;
             if (d->isConstant()) continue;
-            if (d->parent() == nullptr) {
+            if (d->isParam()) {
+              bool belongsToFunction = false;
+              for (size_t pi = 0; pi < f->numParams(); ++pi) {
+                if (f->param(pi) == d) { belongsToFunction = true; break; }
+              }
+              if (!belongsToFunction) {
+                add("V1", fname, in->loc(), "操作数引用了未登记在当前函数中的形参");
+                continue;
+              }
+              if (d->paramOwner() != f) {
+                add("V1", fname, in->loc(), "形参归属的函数与当前函数不一致");
+                continue;
+              }
+              const std::vector<Instruction*>& us = d->users();
+              const size_t actualUses = pointerCount(in->operands(), static_cast<Value*>(d));
+              const size_t reverseUses = pointerCount(us, in);
+              if (actualUses != reverseUses) {
+                add("V1", fname, in->loc(),
+                    "形参的 use-def 使用次数不一致：操作数 " +
+                        std::to_string(actualUses) + "，反向边 " +
+                        std::to_string(reverseUses));
+              }
+              continue;
+            }
+            // 值必须来自当前函数。仅检查 parent != nullptr 会把另一函数的
+            // 指令误当成合法定义；常量指令是没有 parent 的合法值形态。
+            if (d->parent() == nullptr || d->parent()->parent() != f) {
               add("V1", fname, in->loc(), "操作数指向一条不属于任何块的指令");
+              continue;
             }
             // 反向边必须存在（**两个方向都查**）
             const std::vector<Instruction*>& us = d->users();
-            if (std::find(us.begin(), us.end(), in) == us.end()) {
+            const size_t actualUses = pointerCount(in->operands(), static_cast<Value*>(d));
+            const size_t reverseUses = pointerCount(us, in);
+            if (actualUses != reverseUses) {
               add("V1", fname, in->loc(),
-                  "反向 use-def 缺失：使用者没有登记在定义者的 users() 里");
+                  "use-def 使用次数不一致：操作数 " + std::to_string(actualUses) +
+                      "，反向边 " + std::to_string(reverseUses));
             }
           } else if (!v->isInternedConstant() && !v->isGlobalAddr() &&
                      !v->isBlockAddr()) {
@@ -393,16 +357,17 @@ std::vector<Violation> verifyFlatModule(const Module& m) {
       BasicBlock* b = f->at(bi);
       for (size_t ii = 0; ii < b->size(); ++ii) {
         Instruction* d = b->at(ii);
+        std::unordered_set<const Instruction*> checkedUsers;
         for (Instruction* u : d->users()) {
-          bool uses = false;
-          if (u != nullptr) {
-            for (size_t k = 0; k < u->numOperands(); ++k) {
-              if (u->operand(k) == static_cast<Value*>(d)) { uses = true; break; }
-            }
-          }
-          if (!uses) {
+          if (!checkedUsers.insert(u).second) continue;
+          const size_t reverseUses = pointerCount(d->users(), u);
+          const size_t actualUses = u == nullptr
+                                        ? 0
+                                        : pointerCount(u->operands(), static_cast<Value*>(d));
+          if (actualUses != reverseUses) {
             add("V1", fname, d->loc(),
-                "反向 use-def 过期：users() 里有一条并不使用它的指令");
+                "反向 use-def 使用次数不一致：操作数 " + std::to_string(actualUses) +
+                    "，users() 边 " + std::to_string(reverseUses));
           }
         }
       }
@@ -414,13 +379,39 @@ std::vector<Violation> verifyFlatModule(const Module& m) {
         add("V1", fname, SourceLoc(), "形参表里有空项");
         continue;
       }
-      for (Instruction* u : p->users()) {
-        bool uses = false;
-        for (size_t k = 0; u != nullptr && k < u->numOperands(); ++k) {
-          if (u->operand(k) == static_cast<Value*>(p)) { uses = true; break; }
+      if (!p->isParam()) {
+        add("V1", fname, p->loc(), "形参表中含有非形参指令");
+      }
+      if (p->paramOwner() != f) {
+        add("V1", fname, p->loc(), "形参归属的函数与登记它的函数不一致");
+      }
+      for (size_t prior = 0; prior < pi; ++prior) {
+        if (f->param(prior) == p) {
+          add("V1", fname, p->loc(), "形参表重复登记同一个形参");
+          break;
         }
-        if (!uses) {
-          add("V1", fname, SourceLoc(), "形参的 users() 里有并不使用它的指令");
+      }
+      std::unordered_set<const Instruction*> checkedUsers;
+      for (Instruction* u : p->users()) {
+        if (!checkedUsers.insert(u).second) continue;
+        const size_t reverseUses = pointerCount(p->users(), u);
+        const size_t actualUses = u == nullptr
+                                      ? 0
+                                      : pointerCount(u->operands(), static_cast<Value*>(p));
+        if (actualUses != reverseUses) {
+          add("V1", fname, SourceLoc(), "形参的 use-def 使用次数不一致");
+        }
+      }
+    }
+    if (f->entry() != nullptr) {
+      BasicBlock* entryBlock = f->entry();
+      if (entryBlock->numParams() != f->numParams()) {
+        add("V1", fname, SourceLoc(), "入口块形参表与函数形参表长度不同");
+      }
+      const size_t common = std::min(entryBlock->numParams(), f->numParams());
+      for (size_t pi = 0; pi < common; ++pi) {
+        if (entryBlock->param(pi) != f->param(pi)) {
+          add("V1", fname, SourceLoc(), "入口块形参与函数形参表顺序不一致");
         }
       }
     }
@@ -440,7 +431,13 @@ std::vector<Violation> verifyFlatModule(const Module& m) {
           Instruction* d = static_cast<Instruction*>(v);
           const BasicBlock* db = d->isParam() ? f->entry() : d->parent();
           if (db == nullptr) continue;      // V1 已经报过
-          if (!dt.dominates(db, b)) {
+          if (db == b) {
+            // 支配树对块是自反的，但同一块内的定义仍必须严格早于使用。
+            if (!d->isParam() && !definedBefore(d, in)) {
+              add("V2", fname, in->loc(),
+                  "同一块内的定义没有先于使用：L" + std::to_string(bi));
+            }
+          } else if (!dt.dominates(db, b)) {
             add("V2", fname, in->loc(),
                 "使用点不被定义支配：值定义在 L" + std::to_string(db->index()) +
                     "，使用在 L" + std::to_string(bi));
@@ -483,12 +480,22 @@ std::vector<Violation> verifyFlatModule(const Module& m) {
         for (size_t k = 0; k < phi->numSuccs(); ++k) {
           if (phi->succ(k) != nullptr) phiPreds.insert(phi->succ(k));
         }
-        for (size_t k = 0; k < b->numPreds(); ++k) realPreds.insert(b->pred(k));
+        for (size_t k = 0; k < b->numPreds(); ++k) {
+          BasicBlock* pred = b->pred(k);
+          realPreds.insert(pred);
+          if (pred == nullptr) {
+            add("V3", fname, phi->loc(), "块前驱表中含有空项");
+          }
+        }
         if (phiPreds != realPreds) {
           std::string d = "φ 的前驱 {";
-          for (const BasicBlock* pb : phiPreds) d += "L" + std::to_string(pb->index()) + " ";
+          for (const BasicBlock* pb : phiPreds) {
+            d += pb == nullptr ? "null " : "L" + std::to_string(pb->index()) + " ";
+          }
           d += "} vs 块前驱 {";
-          for (const BasicBlock* pb : realPreds) d += "L" + std::to_string(pb->index()) + " ";
+          for (const BasicBlock* pb : realPreds) {
+            d += pb == nullptr ? "null " : "L" + std::to_string(pb->index()) + " ";
+          }
           d += "}";
           add("V3", fname, phi->loc(), "φ 的入值块集合与块的前驱集合不同：" + d);
         }

@@ -5,8 +5,10 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from tools.selftest import exec_core
+from tools.selftest.flat_exec import one_file
 from tools.selftest.flat_exec_report import observable_same
 
 
@@ -53,6 +55,14 @@ class FlatExecGateTests(unittest.TestCase):
                                 capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('工具、编译或解析错误', result.stdout)
+
+    def test_mem2reg_mode_passes_explicit_opt_in_to_flat_compiler(self):
+        failure = subprocess.CompletedProcess([], 1, b'', b'compile failed')
+        with tempfile.TemporaryDirectory() as tmp, patch(
+                'tools.selftest.flat_exec.subprocess.run', return_value=failure) as run:
+            one_file('/fake/compiler', str(SOURCE), tmp, 1, mem2reg=True)
+        self.assertEqual(run.call_count, 2)
+        self.assertIn('--mem2reg', run.call_args_list[1].args[0])
 
     def test_success_without_output_cannot_reuse_stale_ir(self):
         result = subprocess.run([sys.executable, str(TOOL), '--compiler',

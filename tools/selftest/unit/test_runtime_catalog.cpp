@@ -18,14 +18,23 @@ int main() {
     const Type* result;
     std::vector<const Type*> params;
     bool uncallable = false;
+    runtime::Behavior behavior = runtime::Behavior::Unsupported;
   };
   // 独立的公开签名预期，验证适配后仍使用前端驻留类型，顺序不漂移。
   const std::vector<Expected> expected{
-      {"getint", i, {}}, {"getch", i, {}}, {"getarray", i, {ia}},
-      {"getfloat", f, {}}, {"getfarray", i, {fa}}, {"putint", v, {i}},
-      {"putch", v, {i}}, {"putarray", v, {i, ia}}, {"putfloat", v, {f}},
-      {"putfarray", v, {i, fa}}, {"putf", v, {}, true},
-      {"starttime", v, {}}, {"stoptime", v, {}}};
+      {"getint", i, {}, false, runtime::Behavior::ReadInt},
+      {"getch", i, {}, false, runtime::Behavior::ReadChar},
+      {"getarray", i, {ia}, false, runtime::Behavior::ReadIntArray},
+      {"getfloat", f, {}, false, runtime::Behavior::ReadFloat},
+      {"getfarray", i, {fa}, false, runtime::Behavior::ReadFloatArray},
+      {"putint", v, {i}, false, runtime::Behavior::WriteInt},
+      {"putch", v, {i}, false, runtime::Behavior::WriteChar},
+      {"putarray", v, {i, ia}, false, runtime::Behavior::WriteIntArray},
+      {"putfloat", v, {f}, false, runtime::Behavior::WriteFloat},
+      {"putfarray", v, {i, fa}, false, runtime::Behavior::WriteFloatArray},
+      {"putf", v, {}, true, runtime::Behavior::Unsupported},
+      {"starttime", v, {}, false, runtime::Behavior::NoOp},
+      {"stoptime", v, {}, false, runtime::Behavior::NoOp}};
   int failures = 0;
   auto check = [&failures](bool condition, const std::string& message) {
     if (!condition) { std::cerr << "FAIL: " << message << '\n'; ++failures; }
@@ -45,6 +54,8 @@ int main() {
     const auto* neutral = runtime::lookup(e.name);
     check(neutral && (neutral->result == runtime::Kind::Void) == isVoid(e.result),
           std::string(e.name) + " IR result arity");
+    check(neutral && neutral->behavior == e.behavior,
+          std::string(e.name) + " reference execution behavior");
   }
   for (const char* absent : {"unknown", "_sysy_starttime", "_sysy_stoptime"}) {
     check(runtime::lookup(absent) == nullptr && lookupRuntimeFunc(absent) == nullptr,

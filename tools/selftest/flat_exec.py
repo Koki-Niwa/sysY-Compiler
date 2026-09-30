@@ -5,7 +5,7 @@ flat_exec.py —— 轨 E：**平面 IR 与结构化 IR 行为等价**（S06 最
 
 用法（命令行固定契约，关卡照这个签名调用）：
     python3 flat_exec.py --compiler <路径> [--jobs N] [--dir 语料目录] [--limit N]
-                         [--min-files 400] [--seed N] [--verbose]
+                         [--min-files 400] [--seed N] [--mem2reg] [--verbose]
                          [--show-trace <file.sy>] [--dump-traces <file.sy>]
 
 判据
@@ -392,7 +392,7 @@ class FlatExec(C.Machine):
 
 
 # ── 单文件：跑两份 IR，比较轨迹 ──────────────────────────────────────────
-def one_file(compiler, sy, tmpdir, seed):
+def one_file(compiler, sy, tmpdir, seed, mem2reg=False):
     # ⚠️ 键必须用**相对路径**（两条赛道有 240 个同名文件；用 basename 会让并发
     #    worker 读写同一对临时文件 ⇒ 凭空造出假差异。S05b 的教训）
     key = os.path.relpath(sy, ROOT).replace('/', '__')
@@ -400,7 +400,9 @@ def one_file(compiler, sy, tmpdir, seed):
     flt = os.path.join(tmpdir, key + '.flat')
     r1 = subprocess.run([compiler, sy, '--emit=structured-ir', '--normalize', '-o', sir],
                         capture_output=True)
-    r2 = subprocess.run([compiler, sy, '--emit=flat-ir', '-o', flt], capture_output=True)
+    r2 = subprocess.run([compiler, sy, '--emit=flat-ir'] +
+                        (['--mem2reg'] if mem2reg else []) + ['-o', flt],
+                        capture_output=True)
     if r1.returncode != 0 or r2.returncode != 0:
         if r1.returncode != 0 and r2.returncode != 0:
             st = 'skip' if manifest.expected_reject(sy) else 'error'
@@ -451,6 +453,7 @@ def main():
     ap.add_argument('--limit', type=int, default=0)
     ap.add_argument('--min-files', type=int, default=400)
     ap.add_argument('--seed', type=int, default=1)
+    ap.add_argument('--mem2reg', action='store_true')
     ap.add_argument('--show-trace', default='')
     ap.add_argument('--dump-traces', default='')
     ap.add_argument('--verbose', action='store_true')
@@ -467,7 +470,7 @@ def main():
 
     if args.show_trace or args.dump_traces:
         sy = os.path.abspath(args.show_trace or args.dump_traces)
-        st, msg, a, b = one_file(compiler, sy, tmp, args.seed)
+        st, msg, a, b = one_file(compiler, sy, tmp, args.seed, args.mem2reg)
         print('状态: %s %s' % (st, msg))
         if a is not None:
             print('结构化 IR 轨迹: %s' % a)
@@ -493,7 +496,8 @@ def main():
         return 2
 
     with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as ex:
-        results = list(ex.map(lambda f: (f,) + one_file(compiler, f, tmp, args.seed), files))
+        results = list(ex.map(lambda f: (f,) + one_file(
+            compiler, f, tmp, args.seed, args.mem2reg), files))
 
     same, loop_only, diffs, skips = [], [], [], {}
     for f, st, msg, a, b in results:
@@ -511,7 +515,7 @@ def main():
                 key = '[%s] %s' % (st, msg)
             skips.setdefault(key, []).append(f)
 
-    print('== 轨 E：平面 IR 与结构化 IR 行为等价 ==')
+    print('== 轨 E：%s 与结构化 IR 行为等价 ==' % ('提升后平面 IR' if args.mem2reg else '平面 IR'))
     print('参与执行的文件数: %d' % len(files))
     print('两种形状完整轨迹相同: %d' % len(same))
     print('仅循环计数口径不同:   %d' % len(loop_only))

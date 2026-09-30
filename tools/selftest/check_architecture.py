@@ -10,6 +10,7 @@ import re
 
 ALLOWED = {
     'support': set(), 'frontend': {'support'}, 'ir': {'support'},
+    'interpreter': {'frontend', 'support'},
     'structured': {'ir', 'support'},
     'main': {'support', 'frontend', 'ir', 'structured', 'analysis', 'opt'},
     'analysis': {'support', 'ir', 'structured'},

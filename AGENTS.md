@@ -26,6 +26,9 @@ optimizations without claiming an immediate runtime gain.
 - Read [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md).
 - Read the relevant module contract in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 - For optimization work, read [`docs/PERFORMANCE-EXTENSIONS.md`](docs/PERFORMANCE-EXTENSIONS.md).
+- For backend, target-cost, RA, scheduling, or middle/backend feedback work,
+  also read [`docs/BACKEND-PERFORMANCE-PLAN.md`](docs/BACKEND-PERFORMANCE-PLAN.md);
+  RA/scheduler experiments use [`docs/RA-LAB.md`](docs/RA-LAB.md).
 - Check includes with `python3 tools/selftest/check_architecture.py --root .`.
   Run the complete current gate with `bash tools/verify.sh --stage S06`.
   `tools/gate/*.sh` are sourced modules, not standalone entry points.
@@ -74,3 +77,7 @@ and pass its portable local checks without those assets.
 Facts from source and audits are scoped by topic. They inform a decision only
 when they agree with the user's request and this file's rules; they never
 override either one.
+
+Milestone scheduling is unified in [`../docs/handoff/SESSION-PLAN.md`](../docs/handoff/SESSION-PLAN.md):
+B00–B20 are part of the implementation flow after S11b, not work deferred
+until after S28. Keep historical S IDs stable and follow the S/B wave dependencies.

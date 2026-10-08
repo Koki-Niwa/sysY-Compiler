@@ -2,11 +2,13 @@
 
 ## Primary outcome
 
-Produce correct, portable SysY2022 front and middle end output. Correctness and
-established language, ABI, and IR constraints are hard gates. The product
-objective after those gates is the highest practical generated-assembly
-runtime performance. The current product boundary is the target-independent
-LLVM IR subset consumed by a backend.
+Produce a correct, portable SysY2022 compiler whose self-built backend emits
+GAS assembly for the competition targets. Correctness and established language,
+ABI, IR, and competition constraints are hard gates. After those gates, the
+product objective is the highest practical generated-assembly runtime
+performance on ARMv8-A/Cortex-A53 and RV64GC/BOOM v3. Target-independent LLVM
+IR remains an oracle/debug/stable protocol boundary; it is not the final product
+boundary.
 
 Choose optimization work by measured runtime benefit on representative inputs.
 Record compile time, peak RSS, emitted IR/assembly size, and binary size as

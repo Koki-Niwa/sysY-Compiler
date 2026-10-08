@@ -21,19 +21,19 @@
     (While @line 5) {
       (Load %main.15 i32 %main.0 @line 5)
       (Load %main.16 i32 %main.5 @line 5)
-      (SubI %main.17 %main.16 %main.15 @line 5)
-      (Load %main.18 i32 %main.0 @line 5)
-      (Lt %main.19 %main.18 %main.17 @line 5)
+      (Load %main.17 i32 %main.0 @line 5)
+      (SubI %main.18 %main.16 %main.17 @line 5)
+      (Lt %main.19 %main.15 %main.18 @line 5)
       (Yield %main.19 @line 5)
     }
     {
-      (Load %main.20 i32 %main.0 @line 6)
-      (Load %main.21 i32 %main.10 @line 6)
-      (AddI %main.22 %main.21 %main.20 @line 6)
+      (Load %main.20 i32 %main.10 @line 6)
+      (Load %main.21 i32 %main.0 @line 6)
+      (AddI %main.22 %main.20 %main.21 @line 6)
       (Store i32 %main.22 %main.10 @line 6)
-      (Int %main.23 1 @line 7)
-      (Load %main.24 i32 %main.0 @line 7)
-      (AddI %main.25 %main.24 %main.23 @line 7)
+      (Load %main.23 i32 %main.0 @line 7)
+      (Int %main.24 1 @line 7)
+      (AddI %main.25 %main.23 %main.24 @line 7)
       (Store i32 %main.25 %main.0 @line 7)
       (Yield @line 5)
     }

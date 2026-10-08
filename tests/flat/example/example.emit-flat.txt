@@ -12,7 +12,7 @@ define i32 @main() {
   %3 = i32 0 @line 8
   %16 = i32 2 @line 11
   %18 = i32 1 @line 10
-  %9 = ptr[i32] @LIMIT
+  %10 = ptr[i32] @LIMIT
 L0:
   %1 = alloca i32 @line 8
   %2 = sext i32 %3 to i64 @line 8
@@ -22,14 +22,14 @@ L0:
   %6 = sext i32 %3 to i64 @line 9
   %7 = getelementptr i32, ptr[i32] %5, i64 %6 @line 9
   store i32 %3, ptr[i32] %7 @line 9
-  %8 = load i32, ptr[i32] %9 @line 10
-  %10 = load i32, ptr[i32] %1 @line 10
-  %11 = icmp slt i32 %10, %8 @line 10
+  %8 = load i32, ptr[i32] %1 @line 10
+  %9 = load i32, ptr[i32] %10 @line 10
+  %11 = icmp slt i32 %8, %9 @line 10
   %12 = load i32, ptr[i32] %1 @line 10
   br L1 @line 10
 L1:
   %0 = phi i32 [(%12 L0), (%17 L3)] @line 10
-  %13 = icmp slt i32 %0, %8 @line 10
+  %13 = icmp slt i32 %0, %9 @line 10
   br i1 %13, label L2, label L4 @line 10
 L2:
   %14 = load i32, ptr[i32] %1 @line 11
@@ -50,9 +50,9 @@ L5:
   store i32 %22, ptr[i32] %5 @line 12
   br L7 @line 11
 L6:
-  %23 = load i32, ptr[i32] %1 @line 14
-  %24 = load i32, ptr[i32] %5 @line 14
-  %25 = add i32 %24, %23 @line 14
+  %23 = load i32, ptr[i32] %5 @line 14
+  %24 = load i32, ptr[i32] %1 @line 14
+  %25 = add i32 %23, %24 @line 14
   store i32 %25, ptr[i32] %5 @line 14
   br L7 @line 11
 L7:

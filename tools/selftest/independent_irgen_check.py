@@ -40,7 +40,8 @@ from iic_sexp import (Node, sexpr, subs, one, stext, initval_exprs, parse_ty,   
                       ir_of, elem_of, is_scalar, n_leaf, sizeof_ir, wrap32,
                       f32, f32_bits, int_lit, parse_fval, fmt_float)
 # ★ `iic_shapes` 里的都是**只影响读取（形状）**的辅助（对象类型 / 差异归因）
-from iic_shapes import obj_of, print_bad                     # noqa: E402
+from iic_shapes import obj_of, print_bad
+from iic_initaddr import init_address                     # noqa: E402
 from iic_front import *                                      # noqa: F401,F403
 from iic_front import (Tok, tokenize, Annotator, parse_initplan, Act, Entry,   # noqa: F401
                        mk_local, BINOPS)
@@ -242,29 +243,18 @@ class Gen(object):
             else:
                 self.op('Return %s' % self.ci(0, fd.line)[0], fd.line)
         self.funcops.append(Op('Func "%s" :ret %s :param [%s]' % (self.fname, ir_of(ret), ', '.join(pirs)), fd.line, [self.root]))
-    # ---------- 初始化：完全按 InitPlan ----------
     def gen_actions(self, e, vty, ptr, line):
         for act in e.acts:
             if act.kind == 'Zero':
-                self.gen_zero(ptr, act.val, line)
+                self.gen_zero(ptr, vty, act.off, act.val, line)
             elif act.kind in ('StoreConst', 'StoreExpr'):
                 # 字节偏移拆成各维下标；每级 GEP 的元素类型已经决定步长。
-                # 再把下标乘以内层维数会重复缩放，并会跨过子数组边界。
-                gp, curty, leaf = ptr, vty, act.off // 4
-                for _ in range(max(1, len(vty[1]))):
-                    inner = elem_of(curty)
-                    stride = n_leaf(inner)
-                    index, leaf = divmod(leaf, stride)
-                    idx = self.sext(self.ci(index, line)[0], line)
-                    T = obj_of(inner)
-                    gp = self.val('GetElementPtr @ %s i64 0 %s %s'
-                                  % (T, gp, idx), line, 'ptr[%s]' % T, None)[0]
-                    curty = inner
+                gp = init_address(self, ptr, vty, act.off, line)
                 if act.kind == 'StoreConst':
                     v = (self.cf(parse_fval(act.val), line) if act.ty == ':float' else self.ci(int_lit(act.val), line))
                 else:
                     v = self.gen_expr(self.match_iv(act.expr))
-                self.op('Store %s %s %s' % (ir_of(elem_of(vty)), v[0], gp), line)
+                self.op('Store %s %s %s' % ('i32' if vty[0] == 'int' else 'f32', v[0], gp), line)
             else:                                         # MemcpyConst：常量池 + memcpy
                 if self._dry:
                     # ★ 常量池是**模块级**副作用（`<const.N>`+`%.N`），空跑里不能建：
@@ -275,16 +265,24 @@ class Gen(object):
                 pname = '<const.%d>' % (self.npool - 1); bits = ['%d=%d' % (4 * j, f32_bits(parse_fval(s)) if leaf == 'f32' else wrap32(int_lit(s))) for j, s in enumerate(vals)]
                 pa = '[%d x %s]' % (len(vals), leaf); self.mod.ops.append(Op('GlobalVar "%s" :type %s :init "data" {%s}' % (pname, pa, ', '.join(bits)), line))
                 pr = '%%.%d' % self.modn; self.modn += 1
-                self.mod.ops.append(Op('GetGlobal "%s" %s :type ptr[%s]' % (pname, pr, pa), line)); b1 = self.bitcast('ptr[i32]', pr, line)
-                b2 = self.bitcast('ptr[i32]', ptr, line); sl = self.sext(self.ci(len(vals) * 4, line)[0], line)
+                self.mod.ops.append(Op('GetGlobal "%s" %s :type ptr[%s]' % (pname, pr, pa), line))
+                dst = init_address(self, ptr, vty, act.off, line)
+                b1 = self.bitcast('ptr[i32]', pr, line)
+                b2 = self.bitcast('ptr[i32]', dst, line); sl = self.sext(self.ci(len(vals) * 4, line)[0], line)
                 self.op('Call "llvm.memcpy" %s %s %s %s' % (b2, b1, sl, self.ci(1, line)[0]), line)
-    def gen_zero(self, ptr, size, line):
+    def gen_zero(self, ptr, vty, offset, size, line):
+        dst = init_address(self, ptr, vty, offset, line)
         if size > ZERO_MAX:
-            b = self.bitcast('ptr[i32]', ptr, line); sl = self.sext(self.ci(size, line)[0], line)
+            b = self.bitcast('ptr[i32]', dst, line); sl = self.sext(self.ci(size, line)[0], line)
             self.op('Call "llvm.memset" %s %s %s %s' % (b, self.ci(0, line)[0], sl, self.ci(1, line)[0]), line); return
-        for i in range(size // 4):        # 元素类型恒为 i32；byte offset 不参与定位
-            gp = self.val('GetElementPtr @ i32 i64 0 %s %s' % (ptr, self.sext(self.ci(i, line)[0], line)), line, 'ptr[i32]', None)[0]
-            self.op('Store i32 %s %s' % (self.ci(0, line)[0], gp), line)
+        leaf = 'i32' if vty[0] == 'int' else 'f32'
+        for i in range(size // 4):
+            gp = dst if i == 0 else self.val(
+                'GetElementPtr @ %s i64 0 %s %s' %
+                (leaf, dst, self.sext(self.ci(i, line)[0], line)),
+                line, 'ptr[%s]' % leaf, None)[0]
+            zero = self.ci(0, line) if leaf == 'i32' else self.cf(0.0, line)
+            self.op('Store %s %s %s' % (leaf, zero[0], gp), line)
     def match_iv(self, pexpr):
         """InitPlan 的表达式没有行号：按文本对回已标注行号的 Sema 表达式节点。"""
         want = stext(pexpr)
@@ -501,6 +499,9 @@ class Gen(object):
                 return self.val('Load @ %s %s' % (ir_of(rty), addr), e.line, ir_of(rty), rty)
             ty, ptr = self.lookup(e[1])
             if not is_scalar(ty):
+                if ty[1][0] is None:
+                    ptr = self.val('Load @ %s %s' % (ir_of(ty), ptr),
+                                   e.line, ir_of(ty), ty)[0]
                 return (ptr, ir_of(ty), ty)
             return self.val('Load @ %s %s' % (ir_of(ty), ptr), e.line, ir_of(ty), ty)
         if h == 'Cast':
@@ -528,7 +529,7 @@ class Gen(object):
             return self.gen_logic(e, op)
         if op in ('/', '%'):
             return self.gen_divmod(e, op)
-        rhs = self.gen_expr(k[1]); lhs = self.gen_expr(k[0])
+        lhs = self.gen_expr(k[0]); rhs = self.gen_expr(k[1])
         if op in CMP:
             return self.val('%s @ %s %s' % (CMP[op], lhs[0], rhs[0]),
                             e.line, 'i32', ('int', ()))
@@ -556,16 +557,13 @@ class Gen(object):
         return self.val('Load @ i32 %s' % t, e.line, 'i32', ('int', ()))
     def gen_divmod(self, e, op):
         """`/`、`%` 的归一化守卫：x/0→0、x%0→x、INT_MIN/-1→0。
-        求值顺序照真实输出：`/` 左→右（float 除法也走这条），`%` 右→左。
+        普通算术采用项目确定性 lhs→rhs 策略；这不是 C/SysY 语言强制顺序。
         """
         k, line = subs(e), e.line
         if op == '/' and self.ty_of(k[0]) == 'f32':
             a, b = self.gen_expr(k[0]), self.gen_expr(k[1])
             return self.val('DivF @ %s %s' % (a[0], b[0]), line, 'f32', ('float', ()))
-        if op == '/':
-            a, b = self.gen_expr(k[0]), self.gen_expr(k[1])
-        else:
-            b, a = self.gen_expr(k[1]), self.gen_expr(k[0])
+        a, b = self.gen_expr(k[0]), self.gen_expr(k[1])
         isz = self.val('Eq @ %s %s' % (b[0], self.ci(0, line)[0]), line, 'i32', None)[0]
         ma = self.val('Eq @ %s %s' % (a[0], self.ci(INT_MIN, line)[0]), line, 'i32', None)[0]
         mb = self.val('Eq @ %s %s' % (b[0], self.ci(-1, line)[0]), line, 'i32', None)[0]
@@ -595,7 +593,9 @@ class Gen(object):
     def gen_call(self, e):
         name, line = e[1], e.line
         if name in ('starttime', 'stoptime'):
-            self.op('Call "_sysy%s" %s' % (name, self.ci(line, line)[0]), line)
+            self.op('Call "%s" %s' % ({'starttime': '_sysy_starttime',
+                                          'stoptime': '_sysy_stoptime'}[name],
+                                         self.ci(line, line)[0]), line)
             return None
         vals = [self.gen_expr(a)[0] for a in subs(e)]
         if name in self.runtime:

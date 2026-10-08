@@ -96,9 +96,8 @@ struct Options {
   std::string output;          // -o 必填
   EmitKind emit = EmitKind::LlvmIr;
   bool haveOutput = false;
-  int optLevel = 0;            // -O1 → 1（S00 只记录）
+  int optLevel = 0;            // 默认 O0；仅 -O1/--optimize 启用优化
   bool structured = true;      // S05 起：结构化 IR 层开关（默认开）
-  bool optimize = false;       // --optimize：与 -O1 等价的别名（run_tests.sh 用它）
   bool toyBackend = false;     // --toy-backend：S11b 起表示"用自研降级器"；当前只接受
   bool fromAst = false;        // --from-ast：输入是 S-表达式（不是 SysY 源码）
   bool fromStructured = false;  // --from-structured：输入是结构化 IR 文本
@@ -164,7 +163,7 @@ bool parseCommandLine(int argc, char** argv, Options& opts) {
     if (a == "--structured")    { opts.structured = true;  continue; }
     if (a == "--no-structured") { opts.structured = false; continue; }
     // --optimize 是 -O1 的别名（tools/run_tests.sh 用长选项名）。
-    if (a == "--optimize")      { opts.optLevel = 1; opts.optimize = true; continue; }
+    if (a == "--optimize")      { opts.optLevel = 1; continue; }
     // --toy-backend 由 tools/run_tests.sh 传入，用于让链路走【自研降级器】而非 clang。
     // 那是【测试链路】的选择，不是编译器的行为；编译器只需接受它（同 -S 的处理方式）。
     if (a == "--toy-backend")   { opts.toyBackend = true; continue; }
@@ -557,7 +556,8 @@ int main(int argc, char** argv) {
           break;
         case EmitKind::LlvmIr:
           artifact = renderLlvmIr(src, diags, opts.fromAst, opts.fromFlat,
-                                  opts.normalize, opts.flatStats, opts.mem2reg);
+                                  opts.normalize, opts.flatStats,
+                                  opts.mem2reg || opts.optLevel >= 1);
           break;
         case EmitKind::Nothing:
           break;

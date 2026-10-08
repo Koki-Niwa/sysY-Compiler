@@ -46,6 +46,20 @@ def check(compiler):
                                     timeout=20)
             assert result.returncode == 0 and output.stat().st_size > 0, \
                 (kind + ' with mem2reg', result.stderr)
+        # LLVM emission defaults to O0; optimization flags explicitly promote
+        # scalar slots.  Keep flat-ir's independent opt-in contract unchanged.
+        source.write_text('int main(){int x; x=1; return x;}\n')
+        for flags, promoted in (([], False), (['-O0'], False),
+                                (['-O1'], True), (['--optimize'], True),
+                                (['--mem2reg'], True)):
+            llvm = work / ('mode_' + str(len(flags)) + '_' +
+                           (flags[0].lstrip('-') if flags else 'default') + '.ll')
+            result = subprocess.run(
+                [compiler, str(source), '--emit=llvm-ir', '--dump-flat-stats',
+                 *flags, '-o', str(llvm)], capture_output=True, text=True, timeout=20)
+            assert result.returncode == 0, (flags, result.stderr)
+            assert ('mem2reg promoted ' in result.stderr) == promoted, (flags, result.stderr)
+            assert ('alloca ' not in llvm.read_text()) == promoted, (flags, llvm.read_text())
         output.unlink(missing_ok=True)
         result = subprocess.run([compiler, str(source), '--emit=structured-ir', '--mem2reg',
                                  '-o', str(output)], capture_output=True, text=True, timeout=20)

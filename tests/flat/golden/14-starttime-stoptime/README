@@ -1,1 +1,1 @@
-钉住运行时调用带行号：starttime/stoptime 落成 Call "_sysystarttime"/"_sysystoptime"，调用点行号作为常量实参。
+钉住运行时调用带行号：starttime/stoptime 落成 Call "_sysy_starttime"/"_sysy_stoptime"，调用点行号作为常量实参。

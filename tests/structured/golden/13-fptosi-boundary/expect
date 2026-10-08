@@ -153,9 +153,9 @@
     }
     (Load %main.74 i32 %main.65 @line 7)
     (Store i32 %main.74 %main.58 @line 7)
-    (Int %main.75 2147483647 @line 8)
-    (Load %main.76 i32 %main.5 @line 8)
-    (Ne %main.77 %main.76 %main.75 @line 8)
+    (Load %main.75 i32 %main.5 @line 8)
+    (Int %main.76 2147483647 @line 8)
+    (Ne %main.77 %main.75 %main.76 @line 8)
     (If %main.77 @line 8) {
       (Int %main.78 1 @line 8)
       (Return %main.78 @line 8)
@@ -163,9 +163,9 @@
     {
       (Yield @line 8)
     }
-    (Int %main.79 2147483520 @line 9)
-    (Load %main.80 i32 %main.30 @line 9)
-    (Ne %main.81 %main.80 %main.79 @line 9)
+    (Load %main.79 i32 %main.30 @line 9)
+    (Int %main.80 2147483520 @line 9)
+    (Ne %main.81 %main.79 %main.80 @line 9)
     (If %main.81 @line 9) {
       (Int %main.82 2 @line 9)
       (Return %main.82 @line 9)
@@ -173,13 +173,13 @@
     {
       (Yield @line 9)
     }
-    (Int %main.83 1 @line 10)
+    (Load %main.83 i32 %main.55 @line 10)
     (Int %main.84 2147483647 @line 10)
     (Int %main.85 0 @line 10)
     (SubI %main.86 %main.85 %main.84 @line 10)
-    (SubI %main.87 %main.86 %main.83 @line 10)
-    (Load %main.88 i32 %main.55 @line 10)
-    (Ne %main.89 %main.88 %main.87 @line 10)
+    (Int %main.87 1 @line 10)
+    (SubI %main.88 %main.86 %main.87 @line 10)
+    (Ne %main.89 %main.83 %main.88 @line 10)
     (If %main.89 @line 10) {
       (Int %main.90 3 @line 10)
       (Return %main.90 @line 10)

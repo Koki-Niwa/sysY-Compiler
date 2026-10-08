@@ -16,19 +16,19 @@
     (Int %run.11 0 @line 3)
     (Store i32 %run.11 %run.10 @line 3)
     (While @line 4) {
-      (Call "getint" %run.12 @line 4)
-      (Load %run.13 i32 %run.2 @line 4)
-      (Lt %run.14 %run.13 %run.12 @line 4)
+      (Load %run.12 i32 %run.2 @line 4)
+      (Call "getint" %run.13 @line 4)
+      (Lt %run.14 %run.12 %run.13 @line 4)
       (Yield %run.14 @line 4)
     }
     {
-      (Load %run.15 i32 %run.2 @line 5)
-      (Load %run.16 i32 %run.7 @line 5)
-      (AddI %run.17 %run.16 %run.15 @line 5)
+      (Load %run.15 i32 %run.7 @line 5)
+      (Load %run.16 i32 %run.2 @line 5)
+      (AddI %run.17 %run.15 %run.16 @line 5)
       (Store i32 %run.17 %run.7 @line 5)
-      (Int %run.18 1 @line 6)
-      (Load %run.19 i32 %run.2 @line 6)
-      (AddI %run.20 %run.19 %run.18 @line 6)
+      (Load %run.18 i32 %run.2 @line 6)
+      (Int %run.19 1 @line 6)
+      (AddI %run.20 %run.18 %run.19 @line 6)
       (Store i32 %run.20 %run.2 @line 6)
       (Yield @line 4)
     }

@@ -14,6 +14,8 @@
 
 #include <cstring>
 
+#include "support/RuntimeABI.h"
+
 namespace sysy {
 namespace sir {
 
@@ -159,7 +161,7 @@ Value Gen::genLValAddr(const LVal& lv, int depth) {
   if (s == nullptr) return cInt(0, lv.loc);   // Sema 已报 E-UNDEF：给确定值，不崩
 
   const sysy::Type* objTy = s->objType;
-  const Value base = s->slot;
+  const Value base = s->pointerSlot ? load(toIrType(objTy), s->slot, lv.loc) : s->slot;
   // 无下标 ⇒ 整个对象（或整个子数组）：直接返回它的地址。
   if (lv.indices.empty()) return base;
   // ★ 数组形参**与局部数组共用这一条路径**：`s->objType` 对形参已经退化成
@@ -193,26 +195,8 @@ Value Gen::genIndexChain(const sysy::Type* startObjTy, const LVal& lv, int depth
       continue;
     }
     const sysy::Type* elemSemTy = curTy->elem;   // 取一次下标之后的"对象"
-    // ★★ 数组形参（第一维 `[]`）：槽里装的是**一根指针**，不是数组本身 ★★
-    //   `int a[]` 的 `a` 在 IR 里是 `alloca ptr[i32]`（S05 的决定：形参也
-    //   一律在内存里），所以 `a[i]` 必须**先把那根指针 load 出来**再索引。
-    //   第一版直接在槽的地址上按 `i32` 索引 ⇒ 读到的是**指针本身**而不是
-    //   它指向的数组。实测（完整最小程序）：
-    //       int g[3]={7,8,9};
-    //       int first(int a[]){return a[0]*100+a[1]*10+a[2];}
-    //       int main(){int b[3]={1,2,3}; return first(g)+first(b);}
-    //     gcc 是 **912**，改前**结构化与平面都是 0**。
-    //   ⚠️ 这一段以前是"展平器里的一条纠正"（见 FlattenLower 的假指针 GEP），
-    //      那条纠正只治平面侧、**治不了结构化侧的求值**（`0` 就是它留下的）。
-    //      治源头之后两侧同时正确，展平器那条纠正就成了兜底。
-    //   ⚠️ 逐维退化：每过一维，`curTy` 变成 `elemSemTy`；只有**第一维**
-    //      是 `kUnknownDim`（Sema 只允许第一维空），所以只需处理一次。
-    if (curTy->len == kUnknownDim) {
-      const Type* slotPtrTy = toIrType(curTy);          // ptr[元素类型]
-      p = load(slotPtrTy, p, lv.loc);
-      curTy = elemSemTy;
-      // 退化后的"当前对象"就是元素类型本身 ⇒ 落到下面用它的对象类型索引
-    }
+    // 数组形参的实参指针已经由 genLValAddr 从 pointerSlot 取出；此处只负责
+    // 每次下标剥掉一维。局部、全局和形参数组因此共用同一条 GEP 路径。
     // ⚠️ 这里要的是"指向**下一个对象**的指针" ⇒ 元素类型必须用
     //   `toIrObjType`（对象类型），不能用 `toIrType` —— 后者对数组会再包一层
     //   指针，于是 `int[2][1][3]` 的 `c[i]` 变成 `ptr[ptr[...]]`、元素类型
@@ -300,43 +284,47 @@ Value Gen::genBinary(const Binary& b, int depth) {
   const bool f = isFloat(b.lhs->type) || isFloat(b.rhs->type);
   const Type* ty = f ? f32() : i32();
   const SourceLoc loc = b.loc;
+  // `genExpr` can emit calls, stores, and other observable effects.  C++ does
+  // not specify a left-to-right order for function-call arguments, so passing
+  // both recursive calls directly to bin()/genCmp() can reverse SysY source
+  // order.  Short-circuit operators own their conditional evaluation below;
+  // every other binary operator evaluates its operands here, in source order.
+  if (b.op == TokKind::AmpAmp || b.op == TokKind::PipePipe) {
+    return genLogical(b, depth);
+  }
+  Value lhs = genExpr(b.lhs.get(), depth);
+  Value rhs = genExpr(b.rhs.get(), depth);
   switch (b.op) {
+    case TokKind::Plus:
+      return bin(f ? OpKind::AddF : OpKind::AddI, ty, lhs, rhs, loc);
+    case TokKind::Minus:
+      return bin(f ? OpKind::SubF : OpKind::SubI, ty, lhs, rhs, loc);
+    case TokKind::Star:
+      return bin(f ? OpKind::MulF : OpKind::MulI, ty, lhs, rhs, loc);
+    case TokKind::Slash:
+      return f ? bin(OpKind::DivF, f32(), lhs, rhs, loc) : genNormDiv(lhs, rhs, loc);
+    case TokKind::Percent:
+      // `%` 只对 int 合法（Sema 已报 E-MOD-FLOAT）；float 情形保守按 int 降级。
+      return genNormRem(lhs, rhs, loc);
+    case TokKind::Less:
+      return genCmp(OpKind::Lt, lhs, rhs, f, loc);
+    case TokKind::Greater:
+      return genCmp(OpKind::Gt, lhs, rhs, f, loc);
+    case TokKind::LessEq:
+      return genCmp(OpKind::Le, lhs, rhs, f, loc);
+    case TokKind::GreaterEq:
+      return genCmp(OpKind::Ge, lhs, rhs, f, loc);
+    case TokKind::EqEq:
+      return genCmp(OpKind::Eq, lhs, rhs, f, loc);
+    case TokKind::NotEq:
+      return genCmp(OpKind::Ne, lhs, rhs, f, loc);
     case TokKind::AmpAmp:
     case TokKind::PipePipe:
-      return genLogical(b, depth);
-    case TokKind::Plus:
-      return bin(f ? OpKind::AddF : OpKind::AddI, ty, genExpr(b.lhs.get(), depth),
-                 genExpr(b.rhs.get(), depth), loc);
-    case TokKind::Minus:
-      return bin(f ? OpKind::SubF : OpKind::SubI, ty, genExpr(b.lhs.get(), depth),
-                 genExpr(b.rhs.get(), depth), loc);
-    case TokKind::Star:
-      return bin(f ? OpKind::MulF : OpKind::MulI, ty, genExpr(b.lhs.get(), depth),
-                 genExpr(b.rhs.get(), depth), loc);
-    case TokKind::Slash: {
-      Value a = genExpr(b.lhs.get(), depth);
-      Value c = genExpr(b.rhs.get(), depth);
-      return f ? bin(OpKind::DivF, f32(), a, c, loc) : genNormDiv(a, c, loc);
-    }
-    case TokKind::Percent: {
-      // `%` 只对 int 合法（Sema 已报 E-MOD-FLOAT）；float 情形保守按 int 降级。
-      return genNormRem(genExpr(b.lhs.get(), depth), genExpr(b.rhs.get(), depth), loc);
-    }
-    case TokKind::Less:
-      return genCmp(OpKind::Lt, genExpr(b.lhs.get(), depth), genExpr(b.rhs.get(), depth), f, loc);
-    case TokKind::Greater:
-      return genCmp(OpKind::Gt, genExpr(b.lhs.get(), depth), genExpr(b.rhs.get(), depth), f, loc);
-    case TokKind::LessEq:
-      return genCmp(OpKind::Le, genExpr(b.lhs.get(), depth), genExpr(b.rhs.get(), depth), f, loc);
-    case TokKind::GreaterEq:
-      return genCmp(OpKind::Ge, genExpr(b.lhs.get(), depth), genExpr(b.rhs.get(), depth), f, loc);
-    case TokKind::EqEq:
-      return genCmp(OpKind::Eq, genExpr(b.lhs.get(), depth), genExpr(b.rhs.get(), depth), f, loc);
-    case TokKind::NotEq:
-      return genCmp(OpKind::Ne, genExpr(b.lhs.get(), depth), genExpr(b.rhs.get(), depth), f, loc);
+      break;
     default:
-      return cInt(0, loc);
+      break;
   }
+  return cInt(0, loc);
 }
 
 // 比较：结果一律 i32。**浮点的谓词是有序/无序版本**（S07 的映射表）：
@@ -502,19 +490,18 @@ Value Gen::genCall(const Call& c, int depth) {
   std::vector<Value> args;
   args.reserve(c.args.size());
   for (const auto& a : c.args) args.push_back(genExpr(a.get(), depth));
-  // ★ prompt §五.8：`starttime()` / `stoptime()` 是**运行时名字表里的零参 void
-  //   函数**，降级成 `_sysy_starttime(<调用点行号>)`。行号取 `Call::loc`（D11）。
-  //   ⚠️ 判据是**名字表查询**（`lookupRuntimeFunc`），不是"按名字写 if"（铁律 2）：
-  //      规则是通用的 —— "运行时名字表里存在 `_sysy<name>` 且该调用零实参" ⇒
-  //      补一个行号实参。
+  // Source lookup and target ABI lookup are separate catalogs.  A source
+  // builtin is lowered only when both its source signature and an explicit
+  // ABI mapping agree; the ABI-only target name is never looked up as source.
   if (const FuncSig* sig = lookupRuntimeFunc(c.callee)) {
-    if (sig->ret != nullptr && isVoid(sig->ret) && args.empty()) {
-      const std::string rt = "_sysy" + c.callee;
-      if (lookupRuntimeFunc(rt) == nullptr) {
-        std::vector<Value> withLine(args);
-        withLine.push_back(cInt(static_cast<int32_t>(c.loc.line), c.loc));
-        return callTo(rt, withLine, voidTy(), c.loc);
+    const runtime::AbiMapping* mapping = runtime::lookupAbi(c.callee);
+    if (sig->ret != nullptr && isVoid(sig->ret) && mapping != nullptr &&
+        args.empty()) {
+      std::vector<Value> loweredArgs(args);
+      if (mapping->appendCallLine) {
+        loweredArgs.push_back(cInt(static_cast<int32_t>(c.loc.line), c.loc));
       }
+      return callTo(std::string(mapping->targetName), loweredArgs, voidTy(), c.loc);
     }
   }
   return callTo(c.callee, args, toIrType(c.type), c.loc);

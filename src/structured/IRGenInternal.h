@@ -61,9 +61,11 @@ struct GlobalRef {
 };
 
 struct Sym {
-  Value slot = nullptr;                // Alloca 结果 / 指针值 / GetGlobal 结果
+  Value slot = nullptr;                // Alloca 结果或 GetGlobal 结果
   const sysy::Type* objType = nullptr; // **Sema 的**对象类型（数组形参已退化）
-  bool byValuePtr = false;             // true ⇒ slot 本身就是指针（数组形参）
+  // 数组形参仍按“变量在内存”存进 alloca；使用时要先从 slot 取出实参指针。
+  // 局部/全局对象的 slot 已经是对象地址，无需这层 load。
+  bool pointerSlot = false;
 };
 
 // ── 局部初始化计划的下标：**每个名字一个"按出现顺序的队列"** ──────────────
@@ -201,7 +203,7 @@ class Gen {
   void genFunction(const FuncDef& f);
 
   // ── 初始化降级 ────────────────────────────────────────────────────────
-  void emitZero(Value dst, int64_t bytes, SourceLoc loc);
+  void emitZero(Value dst, int64_t bytes, const Type* elemTy, SourceLoc loc);
   void emitMemset(Value dst, int64_t bytes, SourceLoc loc);
   void emitMemcpyConst(Value dst, const std::vector<ConstValue>& vals, SourceLoc loc);
 

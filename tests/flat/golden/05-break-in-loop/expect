@@ -13,28 +13,28 @@
     (Int %main.9 0 @line 4)
     (Store i32 %main.9 %main.8 @line 4)
     (While @line 5) {
-      (Int %main.10 100 @line 5)
-      (Load %main.11 i32 %main.0 @line 5)
-      (Lt %main.12 %main.11 %main.10 @line 5)
+      (Load %main.10 i32 %main.0 @line 5)
+      (Int %main.11 100 @line 5)
+      (Lt %main.12 %main.10 %main.11 @line 5)
       (Yield %main.12 @line 5)
     }
     {
-      (Load %main.13 i32 %main.5 @line 6)
-      (Load %main.14 i32 %main.0 @line 6)
-      (AddI %main.15 %main.14 %main.13 @line 6)
+      (Load %main.13 i32 %main.0 @line 6)
+      (Load %main.14 i32 %main.5 @line 6)
+      (AddI %main.15 %main.13 %main.14 @line 6)
       (Store i32 %main.15 %main.0 @line 6)
-      (Int %main.16 20 @line 7)
-      (Load %main.17 i32 %main.0 @line 7)
-      (Gt %main.18 %main.17 %main.16 @line 7)
+      (Load %main.16 i32 %main.0 @line 7)
+      (Int %main.17 20 @line 7)
+      (Gt %main.18 %main.16 %main.17 @line 7)
       (If %main.18 @line 7) {
         (Break @line 8)
       }
       {
         (Yield @line 7)
       }
-      (Int %main.19 3 @line 10)
-      (Load %main.20 i32 %main.5 @line 10)
-      (AddI %main.21 %main.20 %main.19 @line 10)
+      (Load %main.19 i32 %main.5 @line 10)
+      (Int %main.20 3 @line 10)
+      (AddI %main.21 %main.19 %main.20 @line 10)
       (Store i32 %main.21 %main.5 @line 10)
       (Yield @line 5)
     }

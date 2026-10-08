@@ -243,7 +243,10 @@ void Gen::genVarDef(const VarDef& v) {
   size_t liIdx = 0;
   if (localIdx_.take(funcName_ + "/" + v.name, liIdx)) {
     const sysy::InitPlan::LocalInit& li = plan_.locals[liIdx];
-    const sysy::Type* elemSem = li.type.isArray() ? li.type.elem : &li.type;
+    // InitPlan offsets and values are expressed in units of the innermost
+    // scalar.  Peeling only one array dimension turns a multidimensional
+    // element into a pointer type and produces ill-typed scalar stores.
+    const sysy::Type* elemSem = elementType(&li.type);
     const Type* elemTy = toIrType(elemSem);
     // ★ 哨兵：**用"形状相等"判错配，而不是用 offset 范围**。
     //   ⚠️ 这里踩过一次：第一版查"每个动作的 offset 是否落在**本对象**范围内"，
@@ -322,9 +325,11 @@ Value Gen::initAddr(const Type* objTy, int64_t off, Value base, SourceLoc loc) {
 void Gen::genAction(const InitAction& a, Value slot, const Type* elemTy,
                     const Type* objTy, SourceLoc loc) {
   switch (a.kind) {
-    case InitActionKind::Zero:
-      emitZero(slot, static_cast<int64_t>(a.bytes), loc);
+    case InitActionKind::Zero: {
+      Value dst = initAddr(objTy, a.offset, slot, loc);
+      emitZero(dst, static_cast<int64_t>(a.bytes), elemTy, loc);
       return;
+    }
     case InitActionKind::StoreConst: {
       Value p = initAddr(objTy, a.offset, slot, loc);
       Value v = a.value.isFloat ? cFlt(a.value.bits(), loc) : cInt(a.value.i, loc);
@@ -339,21 +344,28 @@ void Gen::genAction(const InitAction& a, Value slot, const Type* elemTy,
       store(elemTy, v, p, loc);
       return;
     }
-    case InitActionKind::MemcpyConst:
-      emitMemcpyConst(slot, a.values, loc);
+    case InitActionKind::MemcpyConst: {
+      Value dst = initAddr(objTy, a.offset, slot, loc);
+      emitMemcpyConst(dst, a.values, loc);
       return;
+    }
   }
 }
 
 // `Zero n`：小段逐元素 store，大段 `llvm.memset`（prompt §五.11）。
 //   ★ 判据是**字节数**（通用结构判据），不是"这是哪个用例"。
-void Gen::emitZero(Value dst, int64_t bytes, SourceLoc loc) {
+void Gen::emitZero(Value dst, int64_t bytes, const Type* elemTy, SourceLoc loc) {
   if (bytes <= 0) return;
   if (bytes <= kZeroInlineBytes) {
-    const int64_t n = bytes / 4;
+    const int64_t elemBytes = flat::typeByteSize(elemTy);
+    const int64_t n = elemBytes > 0 ? bytes / elemBytes : 0;
     for (int64_t i = 0; i < n; ++i) {
-      Value p = gep(i32(), dst, sextI64(cInt(static_cast<int32_t>(i), loc), loc), loc);
-      store(i32(), cInt(0, loc), p, loc);
+      Value p = dst;
+      if (i != 0) {
+        p = gep(elemTy, dst, sextI64(cInt(static_cast<int32_t>(i), loc), loc), loc);
+      }
+      Value zero = elemTy->isFloat() ? cFlt(0u, loc) : cInt(0, loc);
+      store(elemTy, zero, p, loc);
     }
     return;
   }
@@ -490,7 +502,7 @@ void Gen::genFunction(const FuncDef& f) {
   //   ★ 这里只是把"引用形式"放进符号表，**不**发射任何 Op 到函数体里：
   //     未被函数引用的全局不应该在函数里出现伪指令。
   for (const auto& gr : globals_) {
-    syms_.emplace_back(gr.first, Sym{gr.second.slot, gr.second.objType, true});
+    syms_.emplace_back(gr.first, Sym{gr.second.slot, gr.second.objType, false});
   }
 
   // ── 形参：先 `GetArgOp`，再存进内存 ─────────────────────────────────────
@@ -508,7 +520,8 @@ void Gen::genFunction(const FuncDef& f) {
     body->push(ga);
     Value slot = emitAlloca(pty, p.loc);   // funcEntry_ == body ⇒ 写进入口
     store(pty, argv, slot, p.loc);
-    syms_.emplace_back(p.name, Sym{slot, p.semType, false});
+    syms_.emplace_back(p.name, Sym{slot, p.semType,
+                                  p.semType != nullptr && p.semType->isArray()});
   }
 
   // ── 函数体 ──────────────────────────────────────────────────────────────

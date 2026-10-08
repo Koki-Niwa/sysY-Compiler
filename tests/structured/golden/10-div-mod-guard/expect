@@ -37,21 +37,21 @@
     (GetArg %g.2 1 i32 @line 2)
     (Alloca %g.3 i32 @line 2)
     (Store i32 %g.2 %g.3 @line 2)
-    (Load %g.4 i32 %g.3 @line 2)
-    (Load %g.5 i32 %g.1 @line 2)
+    (Load %g.4 i32 %g.1 @line 2)
+    (Load %g.5 i32 %g.3 @line 2)
     (Int %g.6 0 @line 2)
-    (Eq %g.7 %g.4 %g.6 @line 2)
+    (Eq %g.7 %g.5 %g.6 @line 2)
     (Int %g.8 -2147483648 @line 2)
-    (Eq %g.9 %g.5 %g.8 @line 2)
+    (Eq %g.9 %g.4 %g.8 @line 2)
     (Int %g.10 -1 @line 2)
-    (Eq %g.11 %g.4 %g.10 @line 2)
+    (Eq %g.11 %g.5 %g.10 @line 2)
     (MulI %g.12 %g.9 %g.11 @line 2)
     (AddI %g.13 %g.7 %g.12 @line 2)
     (Alloca %g.14 i32 @line 2)
     (Alloca %g.15 i32 @line 2)
     (If %g.13 @line 2) {
       (If %g.7 @line 2) {
-        (Store i32 %g.5 %g.15 @line 2)
+        (Store i32 %g.4 %g.15 @line 2)
         (Yield @line 2)
       }
       {
@@ -64,7 +64,7 @@
       (Yield @line 2)
     }
     {
-      (ModI %g.18 %g.5 %g.4 @line 2)
+      (ModI %g.18 %g.4 %g.5 @line 2)
       (Store i32 %g.18 %g.14 @line 2)
       (Yield @line 2)
     }
@@ -86,11 +86,11 @@
     (Store i32 %main.9 %main.8 @line 5)
     (Load %main.10 i32 %main.0 @line 6)
     (Load %main.11 i32 %main.5 @line 6)
-    (Call "g" %main.12 %main.10 %main.11 @line 6)
+    (Call "f" %main.12 %main.10 %main.11 @line 6)
     (Load %main.13 i32 %main.0 @line 6)
     (Load %main.14 i32 %main.5 @line 6)
-    (Call "f" %main.15 %main.13 %main.14 @line 6)
-    (AddI %main.16 %main.15 %main.12 @line 6)
+    (Call "g" %main.15 %main.13 %main.14 @line 6)
+    (AddI %main.16 %main.12 %main.15 @line 6)
     (Return %main.16 @line 6)
   }
 }

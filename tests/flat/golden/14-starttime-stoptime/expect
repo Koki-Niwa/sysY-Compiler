@@ -15,19 +15,19 @@
     (GetElementPtr %work.10 i32 i64 0 %work.7 %work.9 @line 4)
     (Int %work.11 0 @line 4)
     (Store i32 %work.11 %work.10 @line 4)
-    (Load %work.12 i32 %work.1 @line 5)
-    (Load %work.13 i32 %work.7 @line 5)
-    (Lt %work.14 %work.13 %work.12 @line 5)
+    (Load %work.12 i32 %work.7 @line 5)
+    (Load %work.13 i32 %work.1 @line 5)
+    (Lt %work.14 %work.12 %work.13 @line 5)
     (Load %work.15 i32 %work.7 @line 5)
     (Int %work.16 1 @line 5)
-    (For "%work.13" %work.7 %work.15 %work.12 %work.16 @line 5) {
-      (Load %work.17 i32 %work.7 @line 6)
-      (Load %work.18 i32 %work.2 @line 6)
-      (AddI %work.19 %work.18 %work.17 @line 6)
+    (For "%work.12" %work.7 %work.15 %work.13 %work.16 @line 5) {
+      (Load %work.17 i32 %work.2 @line 6)
+      (Load %work.18 i32 %work.7 @line 6)
+      (AddI %work.19 %work.17 %work.18 @line 6)
       (Store i32 %work.19 %work.2 @line 6)
-      (Int %work.20 1 @line 7)
-      (Load %work.21 i32 %work.7 @line 7)
-      (AddI %work.22 %work.21 %work.20 @line 7)
+      (Load %work.20 i32 %work.7 @line 7)
+      (Int %work.21 1 @line 7)
+      (AddI %work.22 %work.20 %work.21 @line 7)
       (Yield @line 5)
     }
     (Load %work.23 i32 %work.2 @line 9)
@@ -35,7 +35,7 @@
   }
   (Func "main" :ret i32 :param [] @line 12) {
     (Int %main.0 13 @line 13)
-    (Call "_sysystarttime" %main.0 @line 13)
+    (Call "_sysy_starttime" %main.0 @line 13)
     (Alloca %main.1 i32 @line 14)
     (Int %main.2 0 @line 14)
     (Sext %main.3 %main.2 @line 14)
@@ -44,7 +44,7 @@
     (Call "work" %main.6 %main.5 @line 14)
     (Store i32 %main.6 %main.4 @line 14)
     (Int %main.7 15 @line 15)
-    (Call "_sysystoptime" %main.7 @line 15)
+    (Call "_sysy_stoptime" %main.7 @line 15)
     (Load %main.8 i32 %main.1 @line 16)
     (Return %main.8 @line 16)
   }

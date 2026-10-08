@@ -81,9 +81,9 @@
     {
       (Yield @line 6)
     }
-    (Load %main.46 i32 %main.23 @line 7)
-    (Load %main.47 i32 %main.10 @line 7)
-    (AddI %main.48 %main.47 %main.46 @line 7)
+    (Load %main.46 i32 %main.10 @line 7)
+    (Load %main.47 i32 %main.23 @line 7)
+    (AddI %main.48 %main.46 %main.47 @line 7)
     (Return %main.48 @line 7)
   }
 }

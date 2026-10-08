@@ -1,0 +1,10 @@
+int counter;
+
+int bump() {
+  counter = counter + 1;
+  return counter;
+}
+
+int main() {
+  return bump() * 10 + bump();
+}

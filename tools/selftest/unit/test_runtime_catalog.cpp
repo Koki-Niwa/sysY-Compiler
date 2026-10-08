@@ -1,4 +1,5 @@
 #include "frontend/RuntimeLib.h"
+#include "support/RuntimeABI.h"
 #include "support/RuntimeLib.h"
 
 #include <iostream>
@@ -61,6 +62,15 @@ int main() {
     check(runtime::lookup(absent) == nullptr && lookupRuntimeFunc(absent) == nullptr,
           std::string(absent) + " is not a source-visible runtime function");
   }
+  const auto* start = runtime::lookupAbi("starttime");
+  const auto* stop = runtime::lookupAbi("stoptime");
+  check(start && start->targetName == "_sysy_starttime" && start->appendCallLine,
+        "starttime target ABI mapping");
+  check(stop && stop->targetName == "_sysy_stoptime" && stop->appendCallLine,
+        "stoptime target ABI mapping");
+  check(runtime::lookupAbi("getint") == nullptr, "ordinary runtime has no ABI remapping");
+  check(runtime::lookupAbi("_sysy_starttime") == nullptr,
+        "target-only ABI symbol not accepted as source name");
   std::cout << "Runtime catalog: 13 signatures; failures=" << failures << '\n';
   return failures == 0 ? 0 : 1;
 }

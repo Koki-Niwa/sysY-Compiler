@@ -153,11 +153,11 @@
     }
     (Load %main.74 i32 %main.65 @line 7)
     (Store i32 %main.74 %main.58 @line 7)
-    (Load %main.75 i32 %main.55 @line 8)
+    (Load %main.75 i32 %main.5 @line 8)
     (Load %main.76 i32 %main.30 @line 8)
-    (Load %main.77 i32 %main.5 @line 8)
-    (AddI %main.78 %main.77 %main.76 @line 8)
-    (AddI %main.79 %main.78 %main.75 @line 8)
+    (AddI %main.77 %main.75 %main.76 @line 8)
+    (Load %main.78 i32 %main.55 @line 8)
+    (AddI %main.79 %main.77 %main.78 @line 8)
     (Return %main.79 @line 8)
   }
 }

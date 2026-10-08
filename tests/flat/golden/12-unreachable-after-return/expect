@@ -16,15 +16,15 @@
     (Int %f.11 0 @line 4)
     (Store i32 %f.11 %f.10 @line 4)
     (While @line 5) {
-      (Load %f.12 i32 %f.1 @line 5)
-      (Load %f.13 i32 %f.2 @line 5)
-      (Lt %f.14 %f.13 %f.12 @line 5)
+      (Load %f.12 i32 %f.2 @line 5)
+      (Load %f.13 i32 %f.1 @line 5)
+      (Lt %f.14 %f.12 %f.13 @line 5)
       (Yield %f.14 @line 5)
     }
     {
-      (Int %f.15 2 @line 6)
-      (Load %f.16 i32 %f.2 @line 6)
-      (Eq %f.17 %f.16 %f.15 @line 6)
+      (Load %f.15 i32 %f.2 @line 6)
+      (Int %f.16 2 @line 6)
+      (Eq %f.17 %f.15 %f.16 @line 6)
       (If %f.17 @line 6) {
         (Load %f.18 i32 %f.7 @line 7)
         (Return %f.18 @line 7)
@@ -32,22 +32,22 @@
       {
         (Yield @line 6)
       }
-      (Int %f.19 4 @line 10)
-      (Load %f.20 i32 %f.2 @line 10)
-      (Eq %f.21 %f.20 %f.19 @line 10)
+      (Load %f.19 i32 %f.2 @line 10)
+      (Int %f.20 4 @line 10)
+      (Eq %f.21 %f.19 %f.20 @line 10)
       (If %f.21 @line 10) {
         (Break @line 11)
       }
       {
         (Yield @line 10)
       }
-      (Load %f.22 i32 %f.2 @line 14)
-      (Load %f.23 i32 %f.7 @line 14)
-      (AddI %f.24 %f.23 %f.22 @line 14)
+      (Load %f.22 i32 %f.7 @line 14)
+      (Load %f.23 i32 %f.2 @line 14)
+      (AddI %f.24 %f.22 %f.23 @line 14)
       (Store i32 %f.24 %f.7 @line 14)
-      (Int %f.25 1 @line 15)
-      (Load %f.26 i32 %f.2 @line 15)
-      (AddI %f.27 %f.26 %f.25 @line 15)
+      (Load %f.25 i32 %f.2 @line 15)
+      (Int %f.26 1 @line 15)
+      (AddI %f.27 %f.25 %f.26 @line 15)
       (Store i32 %f.27 %f.2 @line 15)
       (Yield @line 5)
     }

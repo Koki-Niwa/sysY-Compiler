@@ -49,7 +49,10 @@ sys.path.insert(0, HERE)
 #   RecursionError。这里把上限抬高，并让真正的解析在**大栈线程**里跑
 #   （只抬上限而不换栈，深链会真的把 C 栈打穿 ⇒ 段错误）。
 sys.setrecursionlimit(300000)
+# Configure once before any worker threads exist. stack_size is process-global;
+# changing it inside concurrent workers races with other thread creation.
 _STACK_SZ = 256 * 1024 * 1024
+threading.stack_size(_STACK_SZ)
 
 
 def run_with_big_stack(fn, *args, **kwargs):
@@ -62,13 +65,9 @@ def run_with_big_stack(fn, *args, **kwargs):
         except BaseException as e:            # noqa: BLE001
             box['e'] = e
 
-    old = threading.stack_size(_STACK_SZ)
-    try:
-        t = threading.Thread(target=target)
-        t.start()
-        t.join()
-    finally:
-        threading.stack_size(old)
+    t = threading.Thread(target=target)
+    t.start()
+    t.join()
     if 'e' in box:
         raise box['e']
     return box.get('r')

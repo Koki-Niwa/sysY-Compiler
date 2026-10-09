@@ -7,7 +7,7 @@ import sys
 
 # Only src/opt and (future) src/analysis: readers and builders are different.
 RAW = re.compile(
-    r"->\s*(?:setOperand|clearOperands|addSucc|setSucc|clearSuccs|"
+    r"(?:->|\.)\s*(?:setOperand|clearOperands|addSucc|setSucc|clearSuccs|"
     r"addInst|insertInst|removeInst|replaceAllUsesWith)\s*\("
     r"|\b(?:rebuildCFG|rebuildUseDef)\s*\("
 )

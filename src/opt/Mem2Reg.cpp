@@ -120,7 +120,7 @@ SSAPlan constructSSA(Module& module, IRMutator& mutator, const CandidatePlan& pl
               reach.reachable[pred->index()]) {
             incoming = blockOut[pred->index()];
           }
-          requireMutation(mutator.setOperand(phis[index], i, incoming) != MutationResult::Rejected);
+          requireMutation(mutator.rewriteOperand(phis[index], i, incoming) != MutationResult::Rejected);
         }
       } else {
         bool hasReachablePred = false;
@@ -201,7 +201,7 @@ SSAPlan constructSSA(Module& module, IRMutator& mutator, const CandidatePlan& pl
       if (phi->operand(i) == nullptr &&
           (pred == nullptr || pred->parent() != &function ||
            !reach.reachable[pred->index()])) {
-        requireMutation(mutator.setOperand(phi, i, getZero()) != MutationResult::Rejected);
+        requireMutation(mutator.rewriteOperand(phi, i, getZero()) != MutationResult::Rejected);
       }
     }
   }
@@ -232,7 +232,7 @@ SSAPlan constructSSA(Module& module, IRMutator& mutator, const CandidatePlan& pl
     for (size_t i = 0; i < phi->numOperands(); ++i) {
       Value* replacement = canonicalValue(phi->operand(i), result.foldedPhis);
       if (replacement != nullptr)
-        requireMutation(mutator.setOperand(phi, i, replacement) != MutationResult::Rejected);
+        requireMutation(mutator.rewriteOperand(phi, i, replacement) != MutationResult::Rejected);
     }
   }
   for (Instruction* instruction : plan.loads) {
@@ -265,14 +265,14 @@ void replaceUses(Module& module, IRMutator& mutator, const SSAPlan& ssa) {
             Instruction* asInstruction = static_cast<Instruction*>(operand);
             const auto loadIt = ssa.loadValues.find(asInstruction);
             if (loadIt != ssa.loadValues.end()) {
-              requireMutation(mutator.setOperand(instruction, i, loadIt->second) != MutationResult::Rejected);
+              requireMutation(mutator.rewriteOperand(instruction, i, loadIt->second) != MutationResult::Rejected);
               continue;
             }
             const auto phiIt = ssa.foldedPhis.find(asInstruction);
             if (phiIt != ssa.foldedPhis.end()) {
               Value* replacement = canonicalValue(phiIt->second, ssa.foldedPhis);
               if (replacement != nullptr)
-                requireMutation(mutator.setOperand(instruction, i, replacement) != MutationResult::Rejected);
+                requireMutation(mutator.rewriteOperand(instruction, i, replacement) != MutationResult::Rejected);
             }
           }
         }

@@ -15,8 +15,8 @@ class IRMutator {
   Module& module() const { return module_; }
   const MutationSummary& summary() const { return summary_; }
 
-  MutationResult setOperand(Instruction* user, size_t index, Value* replacement);
-  MutationResult replaceAllUsesWith(Value* oldValue, Value* replacement);
+  MutationResult rewriteOperand(Instruction* user, size_t index, Value* replacement);
+  MutationResult replaceUses(Value* oldValue, Value* replacement);
   MutationResult insertInstruction(BasicBlock* block, size_t index, Instruction* inst);
   MutationResult eraseInstruction(Instruction* inst);
   MutationResult replaceAndErase(Instruction* oldInst, Value* replacement);

@@ -18,7 +18,7 @@ void check(bool ok, const char* name) {
   if (!ok) ++failures;
 }
 bool rauw(IRMutator& mut, Value* from, Value* to) {
-  return mut.replaceAllUsesWith(from, to) != MutationResult::Rejected;
+  return mut.replaceUses(from, to) != MutationResult::Rejected;
 }
 bool edge(const Value* v, const Instruction* u, size_t index) {
   size_t n=0;

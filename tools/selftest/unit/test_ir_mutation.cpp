@@ -44,17 +44,17 @@ void operandsAndLifecycle() {
   IRMutator mut(m);
   check(m.revision().any==0 && f->revision().any==0 && !mut.summary().changed(),
         "builder keeps initial revision at zero");
-  check(mut.setOperand(x,0,two)==MutationResult::Applied &&
+  check(mut.rewriteOperand(x,0,two)==MutationResult::Applied &&
         m.revision().dataFlow==1 && m.revision().cfg==0 &&
         use(two,x,0) && !use(one,x,0),
         "setOperand precise edge and DataFlow revision");
   auto rev=m.revision().any;
-  check(mut.setOperand(x,0,two)==MutationResult::NoChange &&
-        mut.setOperand(x,0,wide)==MutationResult::Rejected &&
-        mut.replaceAllUsesWith(one,one)==MutationResult::NoChange &&
+  check(mut.rewriteOperand(x,0,two)==MutationResult::NoChange &&
+        mut.rewriteOperand(x,0,wide)==MutationResult::Rejected &&
+        mut.replaceUses(one,one)==MutationResult::NoChange &&
         m.revision().any==rev && use(two,x,0),
         "NoChange and type reject atomic revision");
-  check(mut.replaceAllUsesWith(x,one)==MutationResult::Applied &&
+  check(mut.replaceUses(x,one)==MutationResult::Applied &&
         !x->hasUses() && use(one,y,0) && use(one,y,1),
         "repeated-operand RAUW exact indices");
   check(mut.eraseInstruction(y)==MutationResult::Rejected && m.isLiveInstruction(y) &&
@@ -93,12 +93,12 @@ void crossFunctionAndScratch() {
   Instruction* r2=add(m,y,createRet(a,{}));
   IRMutator mut(m);
   Instruction* scratch=createBin(Opcode::Add,a,a,{});
-  check(mut.setOperand(scratch,1,b)==MutationResult::Applied &&
+  check(mut.rewriteOperand(scratch,1,b)==MutationResult::Applied &&
         m.revision().any==0 && !mut.summary().changed(),
         "detached scratch edit has no revision");
   check(mut.discardDetached({scratch})==MutationResult::Applied &&
         m.revision().any==0, "discard detached scratch without live revision");
-  check(mut.replaceAllUsesWith(a,b)==MutationResult::Applied &&
+  check(mut.replaceUses(a,b)==MutationResult::Applied &&
         m.revision().any==1 && f->revision().any==1 &&
         g->revision().any==1 && use(b,r1,0) && use(b,r2,0) &&
         mut.summary().affectedFunctions.size()==2,
@@ -123,13 +123,13 @@ void categories() {
   Instruction* call=add(m,b,createCall("putint",nullptr,{one},{}));
   add(m,b,createRet(load,{}));
   IRMutator mut(m);
-  check(mut.setOperand(store,0,two)==MutationResult::Applied &&
+  check(mut.rewriteOperand(store,0,two)==MutationResult::Applied &&
         m.revision().dataFlow==1 && m.revision().memory==1 &&
         m.revision().calls==0,"store edit DataFlow+Memory");
-  check(mut.setOperand(call,0,two)==MutationResult::Applied &&
+  check(mut.rewriteOperand(call,0,two)==MutationResult::Applied &&
         m.revision().dataFlow==2 && m.revision().memory==2 &&
         m.revision().calls==1, "call argument edit DataFlow+Calls+Memory");
-  check(mut.setOperand(load,0,slot)==MutationResult::NoChange &&
+  check(mut.rewriteOperand(load,0,slot)==MutationResult::NoChange &&
         m.revision().any==2,"unchanged pointer operand no bump");
   m.rebuildCFG();
   valid(m,"memory/call mutation verifier");
@@ -159,11 +159,11 @@ void insertionAndPhi() {
         cfg.rewritePhiValue(phi,a,m.getIntConst(typePool().i64(),2))==
           MutationResult::Rejected && m.revision().any==rev,
         "phi NoChange and wrong type rejected");
-  check(mut.setOperand(ret,0,phi)==MutationResult::Applied,
+  check(mut.rewriteOperand(ret,0,phi)==MutationResult::Applied,
         "phi result referenced by return");
   valid(m,"insert/rewrite phi verifier without rebuild");
   check(cfg.erasePhi(phi)==MutationResult::Rejected,"used phi cannot be erased");
-  check(mut.setOperand(ret,0,two)==MutationResult::Applied &&
+  check(mut.rewriteOperand(ret,0,two)==MutationResult::Applied &&
         cfg.erasePhi(phi)==MutationResult::Applied && m.isTombstone(phi),
         "erase unused phi via CFGEditor");
   valid(m,"erase phi verifier");

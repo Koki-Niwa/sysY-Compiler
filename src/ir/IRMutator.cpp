@@ -98,7 +98,7 @@ void IRMutator::commit(MutationKind kinds, const std::vector<Function*>& functio
   ++summary_.operations;
   summary_.kinds |= kinds;
 }
-MutationResult IRMutator::setOperand(Instruction* user, size_t index,
+MutationResult IRMutator::rewriteOperand(Instruction* user, size_t index,
                                      Value* replacement) {
   if (user == nullptr || user->lifecycle() == InstructionLifecycle::Tombstone ||
       (user->lifecycle() == InstructionLifecycle::Live && !isLive(user)) ||
@@ -111,7 +111,7 @@ MutationResult IRMutator::setOperand(Instruction* user, size_t index,
     commit(kindsFor(user->op()), {user->parent()->parent()});
   return MutationResult::Applied;
 }
-MutationResult IRMutator::replaceAllUsesWith(Value* oldValue, Value* replacement) {
+MutationResult IRMutator::replaceUses(Value* oldValue, Value* replacement) {
   if (oldValue == nullptr || replacement == nullptr ||
       (oldValue->isInst() &&
        static_cast<Instruction*>(oldValue)->lifecycle() == InstructionLifecycle::Tombstone) ||

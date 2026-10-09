@@ -86,7 +86,7 @@ MutationResult CFGEditor::rewritePhiValue(Instruction* phi, BasicBlock* pred,
   const auto it = std::find(preds.begin(), preds.end(), pred);
   if (it == preds.end() || value == nullptr || value->type() != phi->type())
     return MutationResult::Rejected;
-  return mutator_.setOperand(phi, static_cast<size_t>(it - preds.begin()), value);
+  return mutator_.rewriteOperand(phi, static_cast<size_t>(it - preds.begin()), value);
 }
 
 MutationResult CFGEditor::insertPhi(BasicBlock* block, Instruction* phi) {

@@ -3,6 +3,7 @@
 from pathlib import Path
 import os
 import subprocess
+import tempfile
 import unittest
 
 GATE = Path(__file__).resolve().parents[1] / 'gate'
@@ -162,6 +163,32 @@ stage_requires S09 S08
                 self.assertIn('NOT FULL ACCEPTANCE', result.stdout)
             else:
                 self.assertEqual(1, result.returncode)
+
+    def test_verify_workspaces_are_filesystem_unique_and_isolated(self):
+        tools = GATE.parent
+        verify = (tools / 'verify.sh').read_text()
+        self.assertNotIn('verify_$$', verify)
+        self.assertIn('source "$TOOLS/verify_workspace.sh"', verify)
+        helper = tools / 'verify_workspace.sh'
+        self.assertIn('mktemp -d', helper.read_text())
+        with tempfile.TemporaryDirectory() as tmp:
+            env = dict(os.environ, TMPDIR=tmp)
+            script = f'''source "{helper}"
+create_verify_workspace || exit
+first="$VERIFY_WORK"
+create_verify_workspace || exit
+second="$VERIFY_WORK"
+test "$first" != "$second" || exit 3
+rm -rf -- "$first"
+test -d "$second" || exit 4
+printf '%s\\n%s\\n' "$first" "$second"
+'''
+            result = subprocess.run(['bash', '-c', script], env=env, capture_output=True,
+                                    text=True, check=True)
+            first, second = result.stdout.splitlines()
+            self.assertEqual(1, len(list(Path(tmp).iterdir())))
+            self.assertFalse(Path(first).exists())
+            self.assertTrue(Path(second).is_dir())
 
 
 if __name__ == '__main__':

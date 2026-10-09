@@ -75,6 +75,7 @@ def evidence(args, TARGETS):
             "target_config": config
         },
         "measurement": {"peak_rss": "unavailable",
+                        "case_timeout_seconds": args.timeout,
                         "warmup_count": args.warmup, "repeat_count": args.repeat,
                         "statistic": "median", "spread_kind": "mad",
                         "sample_quality": "correctness/diagnostic single-sample" if args.repeat == 1 else "repeated diagnostic",

@@ -21,15 +21,15 @@ COMPILER="$ROOT/compiler/build/compiler"
 TESTS="$ROOT/tests"
 RUNTIME="$ROOT/runtime"
 LLVM_BIN="${LLVM_BIN:-/usr/lib/llvm-18/bin}"
-WORK="${TMPDIR:-/tmp}/verify_$$"
-STAGE=""
+source "$TOOLS/verify_workspace.sh"
+create_verify_workspace || exit 2
+WORK="$VERIFY_WORK"; STAGE=""
 QUICK=0        # --quick：日常档，跳过五条耗时交叉验证轨（**交付前必须跑全量**）
 FAIL=0
 PASS=0
 SKIP=0
 
-mkdir -p "$WORK"
-trap 'rm -rf "$WORK"' EXIT
+trap 'rm -rf -- "$WORK"' EXIT
 
 while [ $# -gt 0 ]; do
   case "$1" in

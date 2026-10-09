@@ -44,6 +44,13 @@ boundary and extend execution JSON with revision/toolchain/manifest identity.
 S11b must later route lowering through the toy backend rather than still using
 LLVM `llc`.
 
+S11 correctness runners use a target-specific per-case timeout: x86 native is
+60 seconds, while AArch64 and RV64 QEMU are 300 seconds. The timeout is recorded
+as `measurement.case_timeout_seconds` in each execution report; this is a
+correctness hang limit, not a performance threshold or target-runtime claim.
+`verify.sh` obtains its private workspace with `mktemp -d` under `TMPDIR` (or
+`/tmp`) so concurrent PID namespaces cannot collide.
+
 After S11b, F00–F05 are mandatory before S12: complete Flat Value/Use,
 IRMutator/CFGEditor + live/revision tracking, revision-aware AnalysisManager,
 FlatPassManager/instrumentation, Mem2Reg migration, and CompilationSession/CMake

@@ -214,6 +214,43 @@ printf 'RESULT %s\n' "$FAIL"
         self.assertIn('阶段 S07 不要求 S11', result.stdout)
         self.assertIn('RESULT 0', result.stdout)
 
+    def test_target_timeout_is_runner_only_and_no_structured_is_preserved(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tools = root / 'tools'
+            bindir = root / 'bin'
+            tools.mkdir(); bindir.mkdir()
+            runner_args = root / 'runner.args'
+            checker_args = root / 'checker.args'
+            runner = tools / 'run_tests.sh'
+            runner.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$@" >"$RUNNER_ARGS"\n')
+            runner.chmod(0o755)
+            shim = bindir / 'python3'
+            shim.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$@" >"$CHECKER_ARGS"\nexit 0\n')
+            shim.chmod(0o755)
+            env = dict(os.environ, PATH=str(bindir) + os.pathsep + os.environ['PATH'],
+                       RUNNER_ARGS=str(runner_args), CHECKER_ARGS=str(checker_args))
+            for target, timeout, flag in (('x86', '60', 'E2E_X86'),
+                                          ('aarch64', '300', 'E2E_AARCH64'),
+                                          ('riscv64', '300', 'E2E_RISCV64')):
+                call = f'''FAIL=0; TOOLS="{tools}"; GATE="{GATE}"; TESTS="{root}"
+WORK="{root}"; COMPILER="{root}/compiler"
+hdr() {{ :; }}; c_ok() {{ :; }}; c_bad() {{ exit 9; }}
+source "$GATE/execution.sh"
+run_execution {flag} {target} {target}{' --no-structured' if target == 'x86' else ''}
+'''
+                result = subprocess.run(['bash', '-c', call], env=env, capture_output=True,
+                                        text=True, timeout=20)
+                self.assertEqual(0, result.returncode, result.stderr + result.stdout)
+                runner_values = runner_args.read_text().splitlines()
+                checker_values = checker_args.read_text().splitlines()
+                self.assertIn('--timeout', runner_values)
+                self.assertEqual(timeout, runner_values[runner_values.index('--timeout') + 1])
+                self.assertNotIn('--timeout', checker_values)
+                if target == 'x86':
+                    self.assertIn('--no-structured', runner_values)
+                    self.assertIn('--no-structured', checker_values)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

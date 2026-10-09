@@ -60,9 +60,9 @@ void BasicBlock::sortPreds() {
 // ============================================================================
 // Function
 // ============================================================================
-void Function::addParam(Instruction* p) {
+void Function::addParam(Argument* p) {
   if (p == nullptr) return;
-  p->registerParamOwner(this);
+  p->registerOwner(this, params_.size());
   params_.push_back(p);
   if (BasicBlock* e = entry()) e->addParam(p);
 }
@@ -118,6 +118,19 @@ Instruction* Module::createInst(Opcode op, const Type* ty, SourceLoc loc) {
   return new Instruction(op, ty, loc);
 }
 
+Argument* Module::createArgument(const Type* ty, SourceLoc loc) {
+  Argument* arg = new Argument(ty, loc);
+  args_.push_back(arg);
+  return arg;
+}
+
+BlockAddr* Module::createBlockAddr(const Type* ty, BasicBlock* block) {
+  BlockAddr* value = new BlockAddr(ty);
+  value->block = block;
+  blockAddrs_.push_back(value);
+  return value;
+}
+
 BasicBlock* Module::createBlock(Function* fn, const std::string& name) {
   BasicBlock* b = new BasicBlock(fn, 0);
   blocks_.push_back(b);
@@ -162,24 +175,28 @@ GlobalVariable* Module::findGlobal(const std::string& name) const {
   return nullptr;
 }
 
-// ── 常量：**按位模式去重**（浮点比位，不比 `==`）───────────────────────────
+// Canonical scalar constants: type pointer and raw bits, including NaN payloads.
 Constant* Module::getIntConst(const Type* ty, int64_t v) {
-  const std::string key = typeText(ty) + ":" + std::to_string(v);
-  const auto it = intConsts_.find(key);
-  if (it != intConsts_.end()) return it->second;
-  Constant* c = new Constant(ty, v);
+  if (ty == nullptr || (ty->kind != TypeKind::I32 && ty->kind != TypeKind::I64))
+    return nullptr;
+  const uint64_t bits = ty->kind == TypeKind::I32
+      ? static_cast<uint32_t>(v) : static_cast<uint64_t>(v);
+  const ConstantKey key{ty, bits};
+  auto it = constants_.find(key);
+  if (it != constants_.end()) return it->second;
+  Constant* c = new Constant(ty, bits);
   consts_.push_back(c);
-  intConsts_[key] = c;
+  constants_.emplace(key, c);
   return c;
 }
 
 Constant* Module::getFloatConst(uint32_t bits) {
-  const auto it = floatConsts_.find(bits);
-  if (it != floatConsts_.end()) return it->second;
-  Constant* c = new Constant(typePool().f32());
-  c->setFBits(bits);
+  const ConstantKey key{typePool().f32(), bits};
+  auto it = constants_.find(key);
+  if (it != constants_.end()) return it->second;
+  Constant* c = new Constant(key.type, bits);
   consts_.push_back(c);
-  floatConsts_[bits] = c;
+  constants_.emplace(key, c);
   return c;
 }
 
@@ -210,14 +227,21 @@ void Module::rebuildCFG() {
 }
 
 void Module::rebuildUseDef() {
-  for (Instruction* i : insts_) i->clearUsers();
-  // ⚠️ 本函数**只遍历 `insts_`** ⇒ 漏登记的指令在这里不存在。每个"造指令"的
-  //   地方都必须调 `ownInst`（`Module::ownInst` 是幂等的，见它的说明）。
-  for (Instruction* i : insts_) {
-    for (size_t k = 0; k < i->numOperands(); ++k) {
-      Value* v = i->operand(k);
-      if (v == nullptr) continue;
-      if (v->isInst()) static_cast<Instruction*>(v)->addUser(i);
+  // Repair/debug fallback. All operand primitives already maintain these edges.
+  std::unordered_set<Value*> values;
+  for (Instruction* inst : insts_) {
+    values.insert(inst);
+    for (Value* value : inst->operands()) if (value != nullptr) values.insert(value);
+  }
+  for (Argument* arg : args_) values.insert(arg);
+  for (Constant* constant : consts_) values.insert(constant);
+  for (GlobalAddr* addr : globalAddrs_) values.insert(addr);
+  for (BlockAddr* addr : blockAddrs_) values.insert(addr);
+  // Operand-reachable foreign BlockAddr values are also visited.
+  for (Value* value : values) value->clearUses();
+  for (Instruction* inst : insts_) {
+    for (size_t index = 0; index < inst->numOperands(); ++index) {
+      if (Value* value = inst->operand(index)) value->addUse(inst, index);
     }
   }
 }
@@ -262,16 +286,13 @@ std::string Module::formatStats() const {
 void Module::clear() {
   // ⚠️ 这里对**每一条指令只 delete 一次**是硬前提：重复登记 = 二次 delete
   //   （实测段错误）。所以"谁造谁登记"必须唯一 —— 见 `Module::ownInst` 的说明。
-  // ⚠️ 每条指令只能进 `insts_` **一次**（重复登记 = 二次 delete = 段错误）。
-  //   最隐蔽的一种重复来源：`emit(createBin(Sub, kInt(0, loc), a, loc))` ——
-  //   `kInt` 造的常量**先**被登记（它是操作数），随后整个 `sub` 也被登记，
-  //   而 `sub` 的构造又把那个常量塞进自己的 `insts_` 引用链……真正会炸的是
-  //   "同一个对象既当操作数被 `emit`、又当结果被 `emit`"。
-  //   ⇒ 纪律：**`emit()` 只能用于"其结果要被使用"的那一条指令，
-  //     操作数位置的东西一律不许再 `emit`**（它们由使用者带着登记）。
+  // F00: ownInst owns actual Instructions; canonical Constants and Arguments
+  // have independent Module ownership and are never stored in insts_.
   // ⚠️ 先**摘出**块（`removeInst` 会把 `parent` 置 nullptr），再 delete：
   //   否则块里留着悬垂指针，块析构时 `clearInsts()` 会去写已经释放的对象
   //   （ASAN 实测：`Module::clear()` 里 heap-use-after-free）。
+  // Detach every edge before freeing any potential operand Value.
+  for (Instruction* i : insts_) if (i != nullptr) i->clearOperands();
   for (Instruction* i : insts_) {
     if (i == nullptr) continue;
     if (BasicBlock* b = i->parent()) b->removeInst(i);
@@ -286,11 +307,14 @@ void Module::clear() {
   globals_.clear();
   for (Constant* c : consts_) delete c;
   consts_.clear();
+  for (Argument* a : args_) delete a;
+  args_.clear();
   for (GlobalAddr* a : globalAddrs_) delete a;
   globalAddrs_.clear();
+  for (BlockAddr* a : blockAddrs_) delete a;
+  blockAddrs_.clear();
   ownedSet_.clear();
-  intConsts_.clear();
-  floatConsts_.clear();
+  constants_.clear();
   addrOf_.clear();
 }
 

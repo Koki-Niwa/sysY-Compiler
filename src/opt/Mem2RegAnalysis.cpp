@@ -29,7 +29,8 @@ bool analyzeUses(const CandidatePlan& seed, CandidatePlan& plan,
   Instruction* allocaInst = plan.allocaInst;
   if (allocaInst == nullptr || plan.function == nullptr) return false;
   std::unordered_set<Instruction*> seen;
-  for (Instruction* user : allocaInst->users()) {
+  for (const Use& use : allocaInst->uses()) {
+    Instruction* user = use.user;
     if (user == nullptr || !seen.insert(user).second) continue;
     if (user->parent() == nullptr || user->parent()->parent() != plan.function) {
       reason = Mem2RegSkipReason::EscapedOrDerivedUse;

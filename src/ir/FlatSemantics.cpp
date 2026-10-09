@@ -42,16 +42,6 @@ bool validateFlatInstruction(const Instruction& i, std::string& error) {
   }
 
   switch (i.op()) {
-    case Opcode::Nop:
-      return fail(i, "parameter placeholder is not an instruction", error);
-    case Opcode::ConstantInt:
-      return (result == i32 || result == i64) && i.numOperands() == 0
-                 ? true
-                 : fail(i, "integer constant must have i32 or i64 type", error);
-    case Opcode::ConstantFP:
-      return result == f32 && i.numOperands() == 0
-                 ? true
-                 : fail(i, "floating constant must have f32 type", error);
     case Opcode::Ret:
       return voidResult(i) && i.numOperands() <= 1 && i.numSuccs() == 0
                  ? true

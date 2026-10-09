@@ -47,15 +47,24 @@ class Function {
   void setLoc(SourceLoc l) { loc_ = l; }
 
   // ── 参数 ──────────────────────────────────────────────────────────────
-  const std::vector<Instruction*>& params() const { return params_; }
+  const std::vector<Argument*>& params() const { return params_; }
   size_t numParams() const { return params_.size(); }
-  Instruction* param(size_t i) const { return i < params_.size() ? params_[i] : nullptr; }
+  Argument* param(size_t i) const { return i < params_.size() ? params_[i] : nullptr; }
   // 【前置】p != nullptr。入口块必须已存在（参数挂在入口块开头）。
   // 【后置】p 追加为最后一个形参，同时挂在入口块的 params 表里。
-  void addParam(Instruction* p);
+  void addParam(Argument* p);
   const Type* paramType(size_t i) const {
-    Instruction* p = param(i);
+    Argument* p = param(i);
     return p != nullptr ? p->type() : nullptr;
+  }
+
+  // Dump presentation is per function; the canonical Constant has no SourceLoc.
+  void rememberConstantLoc(const Constant* c, SourceLoc loc) {
+    if (c != nullptr) constantLocs_.emplace(c, loc);
+  }
+  SourceLoc constantLoc(const Constant* c) const {
+    auto it = constantLocs_.find(c);
+    return it == constantLocs_.end() ? SourceLoc() : it->second;
   }
 
   // ── 基本块 ────────────────────────────────────────────────────────────
@@ -94,9 +103,10 @@ class Function {
   std::string name_;
   const Type* retTy_;
   SourceLoc loc_;
-  std::vector<Instruction*> params_;
+  std::vector<Argument*> params_;
   std::vector<BasicBlock*> blocks_;
   std::unordered_map<std::string, Value*> defs_;
+  std::unordered_map<const Constant*, SourceLoc> constantLocs_;
 };
 
 }  // namespace flat

@@ -261,7 +261,6 @@ class FlatBuilder {
   //   被反复定义十几次，既让 dump 膨胀、又让 `%N` 编号整体错位。
   //   池的**键里带函数名**：常量指令是"属于某个函数"的（dump 把定义行印在
   //   函数里），跨函数共用一个常量会让它出现在错误的函数中。
-  std::unordered_map<std::string, Instruction*> constPool_;
   // 已登记的全部指令（`ownInst` 幂等的依据）
   std::unordered_set<Instruction*> owned_;
   // 常量池里的键值类型是 `Instruction*`（常量是**指令形态**）
@@ -269,7 +268,7 @@ class FlatBuilder {
   //   否则同一根全局指针在不同位置拿到不同编号 ⇒ dump 不稳定）。
   std::unordered_map<std::string, Value*> globalPool_;
   std::unordered_map<sir::Value, Value*> vals_;
-  std::unordered_map<sir::Value, Instruction*> params_;
+  std::unordered_map<sir::Value, Value*> params_;
   // 当前循环里出现的 `break`：出口块 + 那一刻的环境（供出口块的 φ 合并）
   std::vector<std::pair<BasicBlock*, Env>> breaks_;
   // 当前循环里出现的 `continue`：回边源块 + 那一刻的环境 + **目标循环头**。

@@ -54,7 +54,7 @@ struct Numbering {
   std::unordered_map<const Value*, uint32_t> names;
   uint32_t next = 0;
   // 常量定义（按发号顺序）—— 用于在函数开头补打印它们的定义行。
-  std::vector<const Instruction*> consts;
+  std::vector<const Constant*> consts;
   // 全局地址的定义（按发号顺序）—— 同上（`%N = ptr[T] @g`）
   std::vector<const GlobalAddr*> globals;
 };
@@ -71,13 +71,8 @@ std::string nameFor(Numbering& n, const Value* v) {
   if (it != n.names.end()) return "%" + std::to_string(it->second);
   const uint32_t id = n.next++;
   n.names[v] = id;
-  // ★ 常量是**指令形态**（`Opcode::ConstantInt`/`ConstantFP`），不是
-  //   `ValueKind::Constant` —— 后者是另一套（模块级 interned 常量）。
-  //   第一版这里写成 `v->isConstant()`（值形态判定）⇒ 常量永远不进
-  //   `n.consts`，dump 打成 `%?`（实测就是这个症状）。
-  if (v->isInst()) {
-    const auto* inst = static_cast<const Instruction*>(v);
-    if (inst->isConstant()) n.consts.push_back(inst);
+  if (v->isConstant()) {
+    n.consts.push_back(static_cast<const Constant*>(v));
   } else if (v->isGlobalAddr()) {
     n.globals.push_back(static_cast<const GlobalAddr*>(v));
   }
@@ -135,16 +130,6 @@ void printInst(std::string& out, const Numbering& n, const Instruction* i) {
   }
   const size_t nops = i->numOperands();
   switch (i->op()) {
-    // ── 常量（`%7 = i32 5` / `%8 = f32 0x1p+0`）─────────────────────────
-    case Opcode::ConstantInt:
-      out += typeText(i->type());
-      out += ' ';
-      out += std::to_string(i->intBits());
-      return;
-    case Opcode::ConstantFP:
-      out += "f32 ";
-      appendHexFloat(out, i->floatBits());
-      return;
     // ── 内存 ──────────────────────────────────────────────────────────
     case Opcode::Alloca:
       out += "alloca ";
@@ -281,9 +266,7 @@ void numberFunction(const Function& f, Numbering& n) {
       for (size_t k = 0; k < inst->numOperands(); ++k) {
         const Value* v = inst->operand(k);
         // 常量的定义在这里补号（**首次被引用时**，见文件头）
-        if (v != nullptr && (v->isGlobalAddr() ||
-                             (v->isInst() &&
-                              static_cast<const Instruction*>(v)->isConstant()))) {
+        if (v != nullptr && (v->isGlobalAddr() || v->isConstant())) {
           nameFor(n, v);
         }
       }
@@ -335,15 +318,15 @@ void appendFunction(std::string& out, const Function& f) {
 
   // 常量定义行：插在第一条指令之前、按编号升序（见文件头）。
   if (!n.consts.empty()) {
-    std::vector<const Instruction*> cs = n.consts;
-    for (const Instruction* c : cs) {
+    for (const Constant* c : n.consts) {
       out.append(kIndent, ' ');
       out += nameOf(n, c);
       out += " = ";
-      std::string body;
-      printInst(body, n, c);
-      out += body;
-      appendLine(out, c->loc().line);
+      out += typeText(c->type());
+      out += ' ';
+      if (c->isFloat()) appendHexFloat(out, c->fbits());
+      else out += std::to_string(c->intVal());
+      appendLine(out, f.constantLoc(c).line);
       out += '\n';
     }
   }

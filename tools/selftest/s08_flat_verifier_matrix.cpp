@@ -1,7 +1,4 @@
-// S08：通过公开 FlatVerifier 边界检查手工构造的平面 IR。
-//
-// 这个文件只负责造 fixture、调用 verifyFlatModule、记录首个生产诊断。
-// CFG、支配、use-def、phi 和 opcode 规则全部由生产检查器执行。
+// S08 FlatVerifier matrix: fixtures, production diagnostics and negative controls.
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -133,7 +130,7 @@ std::unique_ptr<Module> validEntryAlloca() {
 std::unique_ptr<Module> validParamUse() {
   std::unique_ptr<Module> m(new Module());
   Function* f = fn(*m, "param");
-  Instruction* p = own(*m, createParam(typePool().i32(), L));
+  Argument* p = m->createArgument(typePool().i32(), L);
   f->addParam(p);
   add(f->entry(), own(*m, createRet(p, L)));
   finish(*m);
@@ -169,8 +166,8 @@ std::unique_ptr<Module> badMissingUseDef() {
   Instruction* addi = own(*m, createBin(Opcode::Add, cconst(*m, 1), cconst(*m, 2), L));
   add(f->entry(), addi);
   add(f->entry(), own(*m, createRet(addi, L)));
-  // Deliberately omit rebuildUseDef: the public verifier must inspect both directions.
-  m->rebuildCFG();
+  finish(*m);
+  const_cast<std::vector<Use>&>(addi->uses()).clear();
   return m;
 }
 
@@ -184,7 +181,8 @@ std::unique_ptr<Module> badStaleUseDef() {
   Instruction* ret = own(*m, createRet(addi, L));
   add(f->entry(), ret);
   finish(*m);
-  def->addUser(ret);  // ret uses addi, so this reverse edge is stale.
+  // Deliberately insert a stale edge only inside this selftest fixture.
+  const_cast<std::vector<Use>&>(def->uses()).push_back(Use{ret, 0});
   return m;
 }
 
@@ -197,7 +195,9 @@ std::unique_ptr<Module> badDuplicateUseDef() {
   add(f->entry(), use);
   add(f->entry(), own(*m, createRet(use, L)));
   finish(*m);
-  def->removeUser(use);  // leave one reverse edge for two operand occurrences.
+  auto& edges = const_cast<std::vector<Use>&>(def->uses());
+  for (auto it = edges.begin(); it != edges.end(); ++it)
+    if (it->user == use && it->operandIndex == 1) { edges.erase(it); break; }
   return m;
 }
 
@@ -247,18 +247,18 @@ std::unique_ptr<Module> badNotDominatedUse() {
 std::unique_ptr<Module> badParamMissingReverseUse() {
   std::unique_ptr<Module> m(new Module());
   Function* f = fn(*m, "bad_param_use_def");
-  Instruction* p = own(*m, createParam(typePool().i32(), L));
+  Argument* p = m->createArgument(typePool().i32(), L);
   f->addParam(p);
   add(f->entry(), own(*m, createRet(p, L)));
-  // Deliberately leave the parameter's reverse use list empty.
-  m->rebuildCFG();
+  finish(*m);
+  const_cast<std::vector<Use>&>(p->uses()).clear();
   return m;
 }
 
 std::unique_ptr<Module> badUnregisteredParamUse() {
   std::unique_ptr<Module> m(new Module());
   Function* f = fn(*m, "bad_unregistered_param");
-  Instruction* p = own(*m, createParam(typePool().i32(), L));
+  Argument* p = m->createArgument(typePool().i32(), L);
   add(f->entry(), own(*m, createRet(p, L)));
   finish(*m);
   return m;
@@ -268,7 +268,7 @@ std::unique_ptr<Module> badCrossFunctionParamOwner() {
   std::unique_ptr<Module> m(new Module());
   Function* owner = fn(*m, "param_owner");
   Function* borrower = fn(*m, "param_borrower");
-  Instruction* p = own(*m, createParam(typePool().i32(), L));
+  Argument* p = m->createArgument(typePool().i32(), L);
   owner->addParam(p);
   borrower->addParam(p);  // first owner remains fixed; this second registration is invalid.
   add(owner->entry(), own(*m, createRet(cconst(*m, 0), L)));
@@ -641,7 +641,7 @@ int runPhiSelfDiagnosticCase() {
 int runCrossModuleParamCase() {
   std::unique_ptr<Module> source(new Module());
   Function* sourceFunction = fn(*source, "foreign_param_owner");
-  Instruction* p = own(*source, createParam(typePool().i32(), L));
+  Argument* p = source->createArgument(typePool().i32(), L);
   sourceFunction->addParam(p);
   add(sourceFunction->entry(), own(*source, createRet(cconst(*source, 0), L)));
   finish(*source);

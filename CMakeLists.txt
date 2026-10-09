@@ -60,6 +60,7 @@ add_executable(compiler
   # ── S06：平面 IR 的容器（类型 / 值 / 指令 / 块 / 函数 / 模块 + dump + 读回）
   src/ir/Type.cpp
   src/ir/Instruction.cpp
+  src/ir/Value.cpp
   src/ir/IR.cpp
   src/ir/FlatDump.cpp
   src/ir/FlatReader.cpp

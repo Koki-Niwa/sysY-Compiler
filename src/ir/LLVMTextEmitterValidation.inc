@@ -62,7 +62,7 @@ bool preflight(const Module& module, std::string& error) {
     if (!f->retType()->isVoid() && !f->retType()->isInt() && !f->retType()->isFloat()) {
       error = "function return type is outside the supported ABI subset"; return false;
     }
-    for (Instruction* p : f->params()) if (p == nullptr || p->type() == nullptr || !validType(p->type(), error) ||
+    for (Argument* p : f->params()) if (p == nullptr || p->type() == nullptr || !validType(p->type(), error) ||
           (!p->type()->isInt() && !p->type()->isFloat() && !p->type()->isPtr())) {
         error = "function parameter type is outside the supported ABI subset"; return false;
     }
@@ -73,7 +73,7 @@ bool preflight(const Module& module, std::string& error) {
         error = "function contains a null or mis-indexed basic block"; return false;
       }
       for (Instruction* inst : b->insts()) {
-        if (inst == nullptr || inst->parent() != b || inst->isConstant()) {
+        if (inst == nullptr || inst->parent() != b) {
           error = "function contains a null, constant, or unsupported instruction"; return false;
         }
         if (inst->type() != nullptr && !validType(inst->type(), error)) return false;
@@ -90,11 +90,16 @@ bool preflight(const Module& module, std::string& error) {
               return false;
             }
           }
+          if (v->isArgument()) {
+            const Argument* arg = static_cast<const Argument*>(v);
+            if (arg->owner() != f || arg->index() >= f->numParams() ||
+                f->param(arg->index()) != arg) {
+              error = "argument operand belongs to another function"; return false;
+            }
+          }
           if (v->isInst()) {
             Instruction* iv = static_cast<Instruction*>(v);
-            bool localParam = false;
-            for (Instruction* p : f->params()) if (p == iv) localParam = true;
-            if ((!iv->isConstant() && iv->parent() == nullptr && !localParam) ||
+            if ((iv->parent() == nullptr) ||
                 (iv->parent() != nullptr && iv->parent()->parent() != f)) {
               error = "instruction operand belongs to another function"; return false;
             }

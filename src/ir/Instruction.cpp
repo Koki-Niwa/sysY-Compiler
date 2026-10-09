@@ -12,19 +12,37 @@
 
 namespace sysy {
 namespace flat {
+
+Instruction::~Instruction() { clearOperands(); }
+
+void Instruction::addOperand(Value* value) {
+  const size_t index = operands_.size();
+  operands_.push_back(value);
+  if (value != nullptr) value->addUse(this, index);
+}
+
+void Instruction::setOperand(size_t index, Value* value) {
+  if (index >= operands_.size() || operands_[index] == value) return;
+  if (Value* old = operands_[index]) old->removeUse(this, index);
+  operands_[index] = value;
+  if (value != nullptr) value->addUse(this, index);
+}
+
+void Instruction::clearOperands() {
+  for (size_t index = 0; index < operands_.size(); ++index) {
+    if (Value* value = operands_[index]) value->removeUse(this, index);
+  }
+  operands_.clear();
+}
 namespace {
 
 // opcode ↔ 文本拼写。**唯一实现**（与 S05 的 `kKindNames` 同一手法）。
-// ⚠️ `Nop` **故意没有拼法**（它是形参占位，不是 iset.txt 里的指令）：
-//    查它会拿到 "?"，而 dump 永远不会打印它。
+// Instruction opcodes exclude arguments and constants.
 struct OpName {
   Opcode op;
   const char* name;
 };
 const OpName kOpNames[] = {
-    {Opcode::Nop, "?"},
-    {Opcode::ConstantInt, "i32"},
-    {Opcode::ConstantFP, "f32"},
     {Opcode::Ret, "ret"},
     {Opcode::Br, "br"},
     {Opcode::Unreachable, "unreachable"},
@@ -63,10 +81,7 @@ const OpName kOpNames[] = {
     {Opcode::Phi, "phi"},
     {Opcode::Select, "select"},
 };constexpr size_t kNumOpNames = sizeof(kOpNames) / sizeof(kOpNames[0]);
-// 表里有 5 个"容器内部"的条目（Nop + 两个常量 + 两个 intrinsic），
-//   它们**不计入** iset.txt 的 35 个 opcode —— 见 Instruction.h 的说明。
-//   kCount 的值 = 表层条目数 - 5（把 35 个真 opcode 数一遍：见 check_flat.py 的
-//   独立手写清单，那里是权威）。
+// Opcode spelling table covers exactly the instruction opcode set.
 static_assert(kNumOpNames == static_cast<size_t>(Opcode::kCount),
               "kOpNames 必须与 Opcode 一一对应（表里含 5 个容器内部条目）");
 
@@ -88,7 +103,6 @@ const char* opcodeName(Opcode k) {
 
 bool opcodeFromName(const std::string& name, Opcode& out) {
   for (const OpName& e : kOpNames) {
-    if (e.op == Opcode::Nop) continue;   // 占位：不接受读回
     if (name == e.name) { out = e.op; return true; }
   }
   return false;
@@ -173,10 +187,6 @@ IPred invertIPred(IPred p) {
 // ============================================================================
 // 判别
 // ============================================================================
-bool Instruction::isConstant() const {
-  return op_ == Opcode::ConstantInt || op_ == Opcode::ConstantFP;
-}
-
 bool Instruction::isBinOp() const {
   switch (op_) {
     case Opcode::Add: case Opcode::Sub: case Opcode::Mul:
@@ -311,10 +321,6 @@ Instruction* createSelect(Value* c, Value* a, Value* b, SourceLoc loc) {
   i->addOperand(a);
   i->addOperand(b);
   return i;
-}
-
-Instruction* createParam(const Type* ty, SourceLoc loc) {
-  return new Instruction(Opcode::Nop, ty, loc);
 }
 
 }  // namespace flat

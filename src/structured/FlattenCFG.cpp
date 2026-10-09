@@ -238,37 +238,22 @@ void FlatBuilder::bind(sir::Value v, Value* fv) {
   if (v != nullptr && fv != nullptr) vals_[v] = fv;
 }
 
-// 【后置】造一个**未登记**的整型常量。
-//   ⚠️ 常量也是指令，而"登记"只能做一次：这里**不登记**，
-//   由调用方决定（当操作数用 ⇒ 由 `emit` 的那条指令带上；自己单独出现在
-//   某个块里 ⇒ 调用方显式 `ownInst`）。第一版在这里顺手登记，
-//   而调用方又 `emit(createBin(…, kInt(…)))` ⇒ 同一条常量进 `insts_` 两次
-//   ⇒ 析构时二次 delete（实测：全量扫描里 39 个文件段错误）。
-Value* FlatBuilder::constInt(int64_t v, const Type* ty, SourceLoc loc) {
-  // 池化（键 = 类型文本 + 值）：同一份 IR 里同值常量**只定义一次**
-  const std::string key = f_->name() + ":i:" + typeText(ty) + ":" + std::to_string(v);
-  const auto it = constPool_.find(key);
-  if (it != constPool_.end()) return it->second;
-  Instruction* c = m_.createInst(Opcode::ConstantInt, ty, loc);
-  c->setIntBits(v);
-  constPool_[key] = c;
+// Constant SourceLoc is presentation metadata local to the function.
+Value* FlatBuilder::constInt(int64_t value, const Type* type, SourceLoc loc) {
+  Constant* c = m_.getIntConst(type, value);
+  if (f_ != nullptr) f_->rememberConstantLoc(c, loc);
   return c;
 }
-Value* FlatBuilder::kInt(int32_t v, SourceLoc loc) {
-  return constInt(v, typePool().i32(), loc);
+Value* FlatBuilder::kInt(int32_t value, SourceLoc loc) {
+  return constInt(value, typePool().i32(), loc);
 }
-Value* FlatBuilder::kI64(int64_t v, SourceLoc loc) {
-  return constInt(v, typePool().i64(), loc);
+Value* FlatBuilder::kI64(int64_t value, SourceLoc loc) {
+  return constInt(value, typePool().i64(), loc);
 }
 Value* FlatBuilder::kFlt(uint32_t bits, SourceLoc loc) {
-  // 池化：浮点常数按**位模式**去重（`-0.0` 与 `+0.0` 位模式不同 ⇒ 不合并）
-  const std::string key = f_->name() + ":f:" + std::to_string(bits);
-  const auto it = constPool_.find(key);
-  if (it != constPool_.end()) return it->second;
-  Instruction* c = m_.createInst(Opcode::ConstantFP, typePool().f32(), loc);
-  c->setFloatBits(bits);
-  constPool_[key] = c;
-  return c;   // 未登记（见 constInt 的说明）
+  Constant* c = m_.getFloatConst(bits);
+  if (f_ != nullptr) f_->rememberConstantLoc(c, loc);
+  return c;
 }
 
 const Type* FlatBuilder::slotType(Value* slot) const {
@@ -277,36 +262,21 @@ const Type* FlatBuilder::slotType(Value* slot) const {
 }
 
 Value* FlatBuilder::zeroOfSlot(Value* slot, SourceLoc loc) {
-  const Type* t = slotType(slot);
-  Instruction* c = nullptr;
-  if (t != nullptr && t->isFloat()) {
-    c = static_cast<Instruction*>(kFlt(0u, loc));
-  } else {
-    c = static_cast<Instruction*>(constInt(0, t != nullptr ? t : typePool().i32(), loc));
-  }
-  ownInst(c);   // φ 的入值可能只在这里出现一次 ⇒ 由本函数负责登记
-  return c;
+  const Type* type = slotType(slot);
+  return type != nullptr && type->isFloat() ? kFlt(0u, loc)
+      : constInt(0, type != nullptr ? type : typePool().i32(), loc);
 }
 
 Value* FlatBuilder::retValueFor(Value* v, SourceLoc loc) {
   const Type* want = f_ != nullptr ? f_->retType() : nullptr;
   if (v == nullptr || want == nullptr) return v;
   if (v->type() == want) return v;
-  // 只认"字面量 0"（整型 / 浮点两种形态）
-  bool isZero = false;
-  if (v->isInst()) {
-    Instruction* c = static_cast<Instruction*>(v);
-    if (c->op() == Opcode::ConstantFP) {
-      isZero = (c->floatBits() == 0u);
-    } else if (c->op() == Opcode::ConstantInt) {
-      isZero = (c->intBits() == 0);
-    }
-  }
+  // Only a canonical literal zero may be recast to the function return type.
+  if (!v->isConstant()) return v;
+  const Constant* c = static_cast<const Constant*>(v);
+  const bool isZero = c->isFloat() ? c->fbits() == 0u : c->intVal() == 0;
   if (!isZero || want->isPtr()) return v;
-  Instruction* z = static_cast<Instruction*>(want->isFloat() ? kFlt(0u, loc)
-                                                             : constInt(0, want, loc));
-  ownInst(z);                      // 可能只在这里出现一次 ⇒ 由本函数登记
-  return z;
+  return want->isFloat() ? kFlt(0u, loc) : constInt(0, want, loc);
 }
 
 BasicBlock* const FlatBuilder::kDeadExit =
@@ -445,7 +415,7 @@ Function* FlatBuilder::run(const Op* fn) {
   //   ⚠️ 但 `vals_` **不能**在这里清：里面同时装着**模块级**的绑定
   //   （`GetGlobal` 的地址值，见 `lowerModuleRegion`），清掉它会让第二个
   //   函数里的 `store … @g` 找不到操作数（实测："Store 的操作数/类型缺失"）。
-  //   ⇒ 分两类：**模块级**的（`vals_`/`constPool_`/`globalPool_`）保留；
+  //   ⇒ Module-level value mappings remain; canonical constants belong to Module.
   //     **函数级**的（块表/环境/被读槽/计数器）每个函数重置。
   //     用 `started_` 区分"第一个函数"与"后续函数"，避免误清模块级状态。
   if (started_) {
@@ -485,8 +455,7 @@ Function* FlatBuilder::run(const Op* fn) {
       giveUp("GetArg 的下标不连续（" + std::to_string(idx) + "），无法展平", op->loc);
       break;
     }
-    Instruction* p = createParam(pty, op->loc);
-    ownInst(p);
+    Argument* p = m_.createArgument(pty, op->loc);
     f_->addParam(p);
     if (op->result(0) != nullptr) params_[op->result(0)] = p;
   }

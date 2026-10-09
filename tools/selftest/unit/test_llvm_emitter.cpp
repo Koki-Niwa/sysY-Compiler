@@ -18,9 +18,7 @@ void testEmissionAndDeterminism() {
   Module module;
   Function* main = module.createFunction("main", typePool().i32());
   BasicBlock* entry = module.createBlock(main, "entry");
-  Instruction* one = module.createInst(Opcode::ConstantInt, typePool().i32(), {});
-  one->setIntBits(1);
-  module.ownInst(one);
+  Constant* one = module.getIntConst(typePool().i32(), 1);
   entry->addInst(createRet(one, {}));
   module.rebuildCFG();
   module.rebuildUseDef();

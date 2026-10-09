@@ -113,9 +113,11 @@ not target runtime performance.
 Broad optimization and target backend consumption remain future work.
 
 Before S12/S17 work expands, the Flat IR foundation must be upgraded in the
-F00–F05 slices recorded in `../docs/handoff/SESSION-PLAN.md`. The current
-`operands + Instruction::users + rebuildUseDef/rebuildCFG` model remains a
-construction/debug mechanism, not the long-term mutation contract.
+F00–F05 slices recorded in `../docs/handoff/SESSION-PLAN.md`. F00 establishes exact operand/use relationships: every Value kind owns indexed
+Use occurrences, operand primitives update reverse edges incrementally, and
+Arguments and canonical scalar Constants are no longer Instructions.
+F00 does not yet establish live/owned mutation semantics. `rebuildUseDef()` is
+a builder/debug repair fallback, not a normal operand mutation path.
 
 The planned Flat optimization invariants are:
 
@@ -134,9 +136,9 @@ The planned Flat optimization invariants are:
   optimization passes;
 - `replaceAllUsesWith`, conditional replacement, safe erase and phi incoming
   edits are first-class operations with bidirectional verifier checks;
-- Argument becomes a real `Value`, not a Nop instruction; scalar constants
-  converge on canonical `(type,bits)` values even if stable dump syntax keeps
-  its historical textual form.
+- Argument is a real `Value`, not an Instruction; scalar constants use canonical
+  `(type,bits)` identity while Flat dump preserves historical syntax and per-function
+  source-location presentation.
 
 Future analyses are contracts, not empty framework classes. F02/F03 establish
 the minimal revision-aware `AnalysisManager` and `FlatPassManager` before S12.

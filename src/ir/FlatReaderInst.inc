@@ -27,7 +27,7 @@ void Reader::parseInstLine(Module& m, Function& f, BasicBlock* bb, const std::st
     k = 2;
   }
   const std::string opName = tok[k];
-  Opcode op = Opcode::Nop;
+  Opcode op = Opcode::Ret;
   if (!opcodeFromName(opName, op)) {
     err(lineNo, "未知 opcode：`" + opName + "`（不在 iset.txt 里）");
     return;
@@ -410,14 +410,8 @@ void Reader::parseInstLine(Module& m, Function& f, BasicBlock* bb, const std::st
     }
   }
   if (inst == nullptr) return;
-  // ★★ **两个登记点缺一不可**（这里曾经漏了第一个）★★
-  //   * `m.ownInst(inst)` —— 进**模块的指令表**（`Module::insts_`）。
-  //     `rebuildUseDef()` 是**遍历那张表**来重建反向边的 ⇒ 漏登记的指令
-  //     在反向 use-def 里**根本不存在**，`users()` 恒空：
-  //     症状是 FlatVerifier 报"反向 use-def 缺失"，而两个方向的**真实**数据
-  //     其实一致（`00_main.sy` 那样的短函数只失败在"读回的产物"上）。
-  //     这与"改了源码行为仍旧"是**同一类**：不是判据错，是**表没同步**。
-  //   * `bb->addInst(inst)` —— 进基本块的指令序列（dump/遍历用）。
+  // 两处登记独立：ownInst 维护 Module ownership（供 repair 枚举）；
+  // addInst 维护块内指令序列。操作数的反向 Uses 已由 primitive 建立。
   m.ownInst(inst);
   bb->addInst(inst);
   if (hasResult) values_[mapId(resultId)] = inst;

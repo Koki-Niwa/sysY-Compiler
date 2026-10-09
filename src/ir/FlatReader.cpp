@@ -166,8 +166,7 @@ class Reader {
         err(start + 1, "参数无法解析：" + tok[k] + " " + tok[k + 1]);
         return start + 1;
       }
-      Instruction* p = createParam(pt, SourceLoc());
-      m.ownInst(p);
+      Argument* p = m.createArgument(pt, SourceLoc());
       f->addParam(p);
       values_[mapId(id)] = p;
       paramIds.push_back(id);
@@ -311,7 +310,7 @@ class Reader {
   // ── 定义区的两种行（由 `parseFunction` 按前缀分派，互不干扰）──────────
 //   …（原有 2 行说明）
   //      分成两个函数之后，分派是**调用点**的事，不再依赖函数内的控制流。
-  void parseConstantLine(Module& m, Function& /*f*/, const std::string& ln, size_t lineNo) {
+  void parseConstantLine(Module& m, Function& f, const std::string& ln, size_t lineNo) {
     const size_t eq = ln.find(" = ");
     uint32_t id = 0;
     if (!detail::parseValueRef(ln.substr(0, eq), id)) { err(lineNo, "常量行缺少结果名"); return; }
@@ -326,23 +325,23 @@ class Reader {
       err(lineNo, "常量类型无法解析：" + tok[0]);
       return;
     }
-    Instruction* c = m.createInst(ty->isFloat() ? Opcode::ConstantFP : Opcode::ConstantInt,
-                                  ty, loc);
-    m.ownInst(c);
+    Constant* c = nullptr;
     if (ty->isFloat()) {
-      if (tok[1] == "nan") {
-        c->setFloatBits(0x7fc00000u);
-      } else {
+      uint32_t bits = 0;
+      if (tok[1] == "nan") bits = 0x7fc00000u;
+      else {
         const float fv = static_cast<float>(std::strtod(tok[1].c_str(), nullptr));
-        uint32_t bits = 0;
         std::memcpy(&bits, &fv, sizeof(bits));
-        c->setFloatBits(bits);
       }
+      c = m.getFloatConst(bits);
     } else {
-      int64_t v = 0;
-      if (!detail::parseI64(tok[1], v)) { err(lineNo, "常量值无法解析：" + tok[1]); return; }
-      c->setIntBits(v);
+      int64_t value = 0;
+      if (!detail::parseI64(tok[1], value)) {
+        err(lineNo, "常量值无法解析：" + tok[1]); return;
+      }
+      c = m.getIntConst(ty, value);
     }
+    f.rememberConstantLoc(c, loc);
     values_[mapId(id)] = c;
   }
 

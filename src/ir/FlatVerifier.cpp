@@ -15,8 +15,7 @@ namespace flat {
 namespace {
 
 bool isRealOpcode(Opcode op) {
-  return op != Opcode::Nop && op != Opcode::ConstantInt && op != Opcode::ConstantFP &&
-         op != Opcode::kCount;
+  return op != Opcode::kCount;
 }
 
 template <typename T>
@@ -38,7 +37,6 @@ bool definedBefore(const Instruction* def, const Instruction* use) {
 }
 
 std::string kindName(Opcode op) {
-  if (op == Opcode::ConstantInt || op == Opcode::ConstantFP) return "常量";
   return opcodeName(op);
 }
 
@@ -288,105 +286,81 @@ std::vector<Violation> verifyFlatModule(const Module& m) {
       }
     }
 
-    // V1: use-def consistency in both directions.
+    // V1: each operand occurrence has exactly one Use{user,index}, and
+    // every reverse edge points back to the same live operand slot.
+    std::unordered_set<const Value*> observedValues;
     for (size_t bi = 0; bi < f->blockCount(); ++bi) {
       BasicBlock* block = f->at(bi);
       for (Instruction* instruction : block->insts()) {
-        std::unordered_set<const Instruction*> checkedDefinitions;
-        for (Value* value : instruction->operands()) {
+        observedValues.insert(instruction);
+        for (size_t index = 0; index < instruction->numOperands(); ++index) {
+          Value* value = instruction->operand(index);
           if (value == nullptr) {
-            add("V1", fname, instruction->loc(),
-                std::string("操作数为空：") + opcodeName(instruction->op()));
+            add("V1", fname, instruction->loc(), "操作数为空");
             continue;
           }
-          if (value->isInternedConstant()) continue;
+          observedValues.insert(value);
+          const size_t matches = static_cast<size_t>(std::count_if(
+              value->uses().begin(), value->uses().end(), [=](const Use& use) {
+                return use.user == instruction && use.operandIndex == index;
+              }));
+          if (matches != 1) {
+            add("V1", fname, instruction->loc(), "精确反向 use-def 缺失或重复");
+          }
           if (value->isInst()) {
-            Instruction* definition = static_cast<Instruction*>(value);
-            if (!checkedDefinitions.insert(definition).second) continue;
-            if (definition->isConstant()) continue;
-            if (definition->isParam()) {
-              bool registered = false;
-              for (Instruction* parameter : f->params()) {
-                if (parameter == definition) { registered = true; break; }
-              }
-              if (!registered) {
-                add("V1", fname, instruction->loc(), "操作数引用了未登记在当前函数中的形参");
-                continue;
-              }
-              if (definition->paramOwner() != f) {
-                add("V1", fname, instruction->loc(), "形参归属的函数与当前函数不一致");
-                continue;
-              }
-            } else if (definition->parent() == nullptr || definition->parent()->parent() != f) {
-              add("V1", fname, instruction->loc(), "操作数指向一条不属于当前函数的指令");
-              continue;
-            }
-            const size_t actualUses = pointerCount(instruction->operands(), static_cast<Value*>(definition));
-            const size_t reverseUses = pointerCount(definition->users(), instruction);
-            if (actualUses != reverseUses) {
-              add("V1", fname, instruction->loc(),
-                  "use-def 使用次数不一致：操作数 " + std::to_string(actualUses) +
-                      "，反向边 " + std::to_string(reverseUses));
+            const auto* definition = static_cast<const Instruction*>(value);
+            if (definition->parent() == nullptr || definition->parent()->parent() != f)
+              add("V1", fname, instruction->loc(), "操作数引用了当前函数以外的指令");
+          } else if (value->isArgument()) {
+            const auto* argument = static_cast<const Argument*>(value);
+            if (argument->owner() != f || argument->index() >= f->numParams() ||
+                f->param(argument->index()) != argument) {
+              add("V1", fname, instruction->loc(), "操作数引用未登记或错误归属的形参");
             }
           } else if (value->isGlobalAddr()) {
             const auto* address = static_cast<const GlobalAddr*>(value);
             GlobalVariable* global = address->global();
             if (global == nullptr || moduleGlobals.count(global) == 0 ||
                 global->objType() == nullptr || address->type() != global->addrType()) {
-              add("V1", fname, instruction->loc(),
-                  "全局地址为空、属于其他模块或地址类型与全局对象不一致");
+              add("V1", fname, instruction->loc(), "全局地址为空、外来或地址类型错误");
             }
-          } else if (!value->isBlockAddr()) {
+          } else if (!value->isConstant() && !value->isBlockAddr()) {
             add("V1", fname, instruction->loc(), "操作数不是可用的值形态");
           }
         }
       }
     }
-    for (size_t bi = 0; bi < f->blockCount(); ++bi) {
-      for (Instruction* definition : f->at(bi)->insts()) {
-        std::unordered_set<const Instruction*> checkedUsers;
-        for (Instruction* user : definition->users()) {
-          if (!checkedUsers.insert(user).second) continue;
-          const size_t reverseUses = pointerCount(definition->users(), user);
-          const size_t actualUses = user == nullptr
-                                        ? 0
-                                        : pointerCount(user->operands(), static_cast<Value*>(definition));
-          if (actualUses != reverseUses) {
-            add("V1", fname, definition->loc(),
-                "反向 use-def 使用次数不一致：操作数 " + std::to_string(actualUses) +
-                    "，users() 边 " + std::to_string(reverseUses));
-          }
-        }
-      }
-    }
     for (size_t pi = 0; pi < f->numParams(); ++pi) {
-      Instruction* parameter = f->param(pi);
-      if (parameter == nullptr) {
+      Argument* arg = f->param(pi);
+      if (arg == nullptr) {
         add("V1", fname, SourceLoc(), "形参表里有空项");
         continue;
       }
-      if (!parameter->isParam()) add("V1", fname, parameter->loc(), "形参表中含有非形参指令");
-      if (parameter->paramOwner() != f) {
-        add("V1", fname, parameter->loc(), "形参归属的函数与登记它的函数不一致");
-      }
-      if (pointerCount(f->params(), parameter) != 1) {
-        add("V1", fname, parameter->loc(), "形参表重复登记同一个形参");
-      }
-      for (Instruction* user : parameter->users()) {
-        const size_t actualUses = user == nullptr
-                                      ? 0
-                                      : pointerCount(user->operands(), static_cast<Value*>(parameter));
-        if (actualUses != pointerCount(parameter->users(), user)) {
-          add("V1", fname, parameter->loc(), "形参的 use-def 使用次数不一致");
-        }
-      }
+      observedValues.insert(arg);
+      if (arg->owner() != f || arg->index() != pi)
+        add("V1", fname, arg->loc(), "形参归属或索引错误");
+      if (pointerCount(f->params(), arg) != 1)
+        add("V1", fname, arg->loc(), "形参表重复登记同一个形参");
     }
     if (entry->numParams() != f->numParams()) {
       add("V1", fname, SourceLoc(), "入口块形参表与函数形参表长度不同");
     } else {
       for (size_t pi = 0; pi < f->numParams(); ++pi) {
-        if (entry->param(pi) != f->param(pi)) {
+        if (entry->param(pi) != f->param(pi))
           add("V1", fname, SourceLoc(), "入口块形参与函数形参表顺序不一致");
+      }
+    }
+    // An unused-but-owned canonical value can still hold a stale reverse edge.
+    // Include the complete module value inventory, not only operand-reachable values.
+    observedValues.insert(m.arguments().begin(), m.arguments().end());
+    observedValues.insert(m.constants().begin(), m.constants().end());
+    observedValues.insert(m.globalAddresses().begin(), m.globalAddresses().end());
+    observedValues.insert(m.blockAddresses().begin(), m.blockAddresses().end());
+    for (const Value* value : observedValues) {
+      for (const Use& use : value->uses()) {
+        if (use.user == nullptr || use.operandIndex >= use.user->numOperands() ||
+            use.user->operand(use.operandIndex) != value) {
+          add("V1", fname, SourceLoc(), "反向 Use 指向无效 user 或 operand index");
         }
       }
     }
@@ -401,10 +375,10 @@ std::vector<Violation> verifyFlatModule(const Module& m) {
         for (Value* value : instruction->operands()) {
           if (value == nullptr || !value->isInst()) continue;
           Instruction* definition = static_cast<Instruction*>(value);
-          const BasicBlock* definitionBlock = definition->isParam() ? f->entry() : definition->parent();
+          const BasicBlock* definitionBlock = definition->parent();
           if (definitionBlock == nullptr) continue;
           if (definitionBlock == block) {
-            if (!definition->isParam() && !definedBefore(definition, instruction)) {
+            if (!definedBefore(definition, instruction)) {
               add("V2", fname, instruction->loc(), "同一块内的定义没有先于使用");
             }
           } else if (!dominators.dominates(definitionBlock, block)) {
@@ -451,7 +425,7 @@ std::vector<Violation> verifyFlatModule(const Module& m) {
           if (value == static_cast<Value*>(phi)) ++selfReferences;
           if (value == nullptr || predecessor == nullptr || !value->isInst()) continue;
           Instruction* definition = static_cast<Instruction*>(value);
-          const BasicBlock* definitionBlock = definition->isParam() ? f->entry() : definition->parent();
+          const BasicBlock* definitionBlock = definition->parent();
           if (definitionBlock != nullptr && !dominators.dominates(definitionBlock, predecessor)) {
             add("V3", fname, phi->loc(), "φ 的入值不支配对应的前驱块");
           }

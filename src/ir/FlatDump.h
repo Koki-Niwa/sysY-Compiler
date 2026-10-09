@@ -42,7 +42,7 @@
 namespace sysy {
 namespace flat {
 
-// 【前置】m 的 use-def / preds 已重建（`rebuildCFG()` + `rebuildUseDef()`）。
+// 【前置】m 的 operand/use 由 primitive 精确维护；若需 CFG 请先 rebuildCFG()。
 // 【后置】返回整个模块的文本 dump（**纯函数**：同一 m 多次调用逐字节相同）。
 std::string dumpModule(const Module& m);
 

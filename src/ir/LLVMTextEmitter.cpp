@@ -89,12 +89,12 @@ struct FunctionNames {
   mutable uint32_t nextTemp = 0;
 
   void number(const Function& function) {
-    for (Instruction* param : function.params()) {
+    for (Argument* param : function.params()) {
       names[param] = "%v" + std::to_string(nextValue++);
     }
     for (BasicBlock* block : function.blocks()) {
       for (Instruction* inst : block->insts()) {
-        if (inst->hasResult() && !inst->isConstant()) {
+        if (inst->hasResult()) {
           names[inst] = "%v" + std::to_string(nextValue++);
         }
       }
@@ -108,15 +108,12 @@ struct FunctionNames {
       return address->global() == nullptr ? "<null-global>" : symbolRef(address->global()->name());
     }
     if (value->isBlockAddr()) return "<block-address>";
-    if (value->isInternedConstant()) {
+    if (value->isConstant()) {
       const auto* constant = static_cast<const Constant*>(value);
       return value->type() != nullptr && value->type()->kind == TypeKind::F32
           ? floatLiteral(constant->fbits())
           : integerLiteral(value->type(), constant->intVal());
     }
-    const auto* inst = static_cast<const Instruction*>(value);
-    if (inst->op() == Opcode::ConstantInt) return integerLiteral(inst->type(), inst->intBits());
-    if (inst->op() == Opcode::ConstantFP) return floatLiteral(inst->floatBits());
     const auto it = names.find(value);
     return it == names.end() ? "<unnamed-value>" : it->second;
   }
@@ -124,7 +121,7 @@ struct FunctionNames {
   std::string temp() const { return "%t" + std::to_string(nextTemp++); }
 };
 bool hasResult(const Instruction& inst) {
-  return inst.hasResult() && !inst.isConstant();
+  return inst.hasResult();
 }
 void appendTypedValue(std::string& out, const Value* value, const FunctionNames& names) {
   out += llvmType(value == nullptr ? nullptr : value->type());
@@ -139,18 +136,11 @@ bool expectOperands(const Instruction& inst, size_t count, std::string& error) {
 }
 bool integerConstant(const Value* value, int64_t& result) {
   if (value == nullptr) return false;
-  if (value->isInternedConstant()) {
+  if (value->isConstant()) {
     const auto* constant = static_cast<const Constant*>(value);
     if (constant->type() == nullptr || constant->type()->kind == TypeKind::F32) return false;
     result = constant->intVal();
     return true;
-  }
-  if (value->isInst()) {
-    const auto* inst = static_cast<const Instruction*>(value);
-    if (inst->op() == Opcode::ConstantInt) {
-      result = inst->intBits();
-      return true;
-    }
   }
   return false;
 }
@@ -166,8 +156,6 @@ bool conditionValue(std::string& out, const Value* condition,
 bool appendInstruction(std::string& out, const Instruction& inst,
                        const FunctionNames& names, std::string& error) {
   const Opcode op = inst.op();
-  if (op == Opcode::Nop) { error = "parameter placeholder found in a block"; return false; }
-  if (inst.isConstant()) return true;
   for (Value* operand : inst.operands()) {
     if (operand == nullptr || operand->type() == nullptr || operand->isBlockAddr() ||
         (operand->isGlobalAddr() && static_cast<const GlobalAddr*>(operand)->global() == nullptr)) {
@@ -305,8 +293,7 @@ bool appendInstruction(std::string& out, const Instruction& inst,
           return false;
         }
         std::string byteValue = names.value(inst.operand(1));
-        if (inst.operand(1)->isInst() &&
-            !static_cast<const Instruction*>(inst.operand(1))->isConstant()) {
+        if (inst.operand(1)->isInst()) {
           byteValue = names.temp();
           out += "  " + byteValue + " = trunc i32 " + names.value(inst.operand(1)) + " to i8\n";
         } else {
@@ -363,8 +350,6 @@ bool appendInstruction(std::string& out, const Instruction& inst,
       if (!expectOperands(inst, 1, error)) return false;
       line += "fneg float "; line += names.value(inst.operand(0));
       break;
-    case Opcode::ConstantInt: case Opcode::ConstantFP: case Opcode::Nop:
-      return true;
     default:
       error = "unsupported flat opcode: " + std::string(opcodeName(op));
       return false;
@@ -513,7 +498,7 @@ bool collectDeclarations(const Module& module, std::unordered_map<std::string, D
     if (!validSymbol(fn->name())) { error = "invalid function declaration name"; return false; }
     Declaration candidate;
     candidate.result = fn->retType();
-    for (Instruction* param : fn->params()) candidate.params.push_back(llvmType(param->type()));
+    for (Argument* param : fn->params()) candidate.params.push_back(llvmType(param->type()));
     auto existing = decls.find(fn->name());
     if (existing == decls.end()) decls.emplace(fn->name(), candidate);
     else if (!sameDeclaration(existing->second, candidate)) {

@@ -13,17 +13,11 @@
 //   * `Value*` / `BasicBlock*` 在 Module 生命期内**永不失效** —— 这是
 //     平面层所有 pass 能安全持有指针的前提（与 S05 的 Arena 同一条理由）。
 //
-// ── ★ use-def 的维护点（**一条必须写下来的约定**）─────────────────────────
-//   `operands()` 是"用 → 定"的方向（指令自己存）；反向的 `users()` 存在
-//   `Value` 里。两者必须**同时**维护，否则 S17–S20 的每个 pass 都会读到
-//   过期的使用者列表（这是最阴的一类 bug：静态检查全绿，优化结果错）。
-//   本层的做法是**两个受控的维护点**：
-//     ① `Module::rebuildUseDef()` —— 从零重建全部反向边（构造完、读回完、
-//        以及任何"成批改动"之后调用；O(指令数)，代价可接受）；
-//     ② `BasicBlock::addInst()` 之类的**增量**接口**不自动**改反向边
-//        （为了不让"插入一条指令"变成 O(使用者数) 的隐式工作），
-//        调用方在成批改动结束后调 ①。
-//   `unit/test_flat.cpp` 有一条断言钉死"两个方向一致"（prompt §三.3）。
+// ── F00 operand/use ─────────────────────────────────────────────────────
+//   Instruction 的 operands() 与任意 Value 的 uses() 双向精确对应。
+//   operand primitive 增量维护每一个 operandIndex 的 Use，不依赖 block 插入。
+//   BasicBlock::addInst 只维护成员关系，不做隐式全 module 重建。
+//   Module::rebuildUseDef 仅用于 reader/builder/debug repair fallback。
 // ============================================================================
 #ifndef SYSY_IR_BASICBLOCK_H
 #define SYSY_IR_BASICBLOCK_H
@@ -84,12 +78,12 @@ class BasicBlock {
 
   // ── 参数（只对入口块有意义）────────────────────────────────────────────
   //   形参在平面层也是 `Value`，属于入口块**开头**；它们**不是指令**
-  //   （`isParam()`），所以不进 `insts_`（否则"每条指令恰好一个终结符"
+  //   （`Argument : Value`），所以不进 `insts_`（否则"每条指令恰好一个终结符"
   //   的判据会被它们污染）。
-  const std::vector<Instruction*>& params() const { return params_; }
+  const std::vector<Argument*>& params() const { return params_; }
   size_t numParams() const { return params_.size(); }
-  Instruction* param(size_t i) const { return i < params_.size() ? params_[i] : nullptr; }
-  void addParam(Instruction* p) { params_.push_back(p); }
+  Argument* param(size_t i) const { return i < params_.size() ? params_[i] : nullptr; }
+  void addParam(Argument* p) { params_.push_back(p); }
 
   // ── 终结符 ────────────────────────────────────────────────────────────
   // 【后置】最后一条指令**若**是终结符则返回它，否则 nullptr。
@@ -113,7 +107,7 @@ class BasicBlock {
   uint32_t index_;
   std::string name_;
   std::vector<Instruction*> insts_;
-  std::vector<Instruction*> params_;
+  std::vector<Argument*> params_;
   std::vector<BasicBlock*> preds_;
 };
 

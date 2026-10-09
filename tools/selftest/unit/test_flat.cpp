@@ -38,7 +38,6 @@ using sysy::flat::createBr;
 using sysy::flat::createCondBr;
 using sysy::flat::createICmp;
 using sysy::flat::createLoad;
-using sysy::flat::createParam;
 using sysy::flat::createPhi;
 using sysy::flat::createRet;
 using sysy::flat::createStore;
@@ -51,13 +50,10 @@ using sysy::flat::Module;
 using sysy::flat::Opcode;
 using sysy::flat::typePool;
 using sysy::flat::Value;
-// 【后置】造一条"常量指令"（平面 dump 里的常量是**指令形态**：
-//   `Opcode::ConstantInt`/`ConstantFP`，见 ir/Instruction.h 的说明）。
-//   `Module::getIntConst` 返回的是另一套（模块级 interned 的 `Constant`）。
-Instruction* kInt(Module& m, int32_t v, sysy::SourceLoc loc) {
-  Instruction* c = m.createInst(Opcode::ConstantInt, typePool().i32(), loc);
-  c->setIntBits(v);
-  m.ownInst(c);
+// Canonical constant with per-function textual presentation location.
+Value* kInt(Module& m, int32_t v, sysy::SourceLoc loc) {
+  auto* c = m.getIntConst(typePool().i32(), v);
+  if (m.numFunctions() != 0) m.function(m.numFunctions() - 1)->rememberConstantLoc(c, loc);
   return c;
 }
 
@@ -106,10 +102,8 @@ void testDiamond() {
   br->setSucc(0, l1);
   br->setSucc(1, l2);
   // 两个分支各给一个值
-  Instruction* a = kInt(m, 11, L);
-  Instruction* b = kInt(m, 22, L);
-  m.ownInst(a);
-  m.ownInst(b);
+  Value* a = kInt(m, 11, L);
+  Value* b = kInt(m, 22, L);
   Instruction* br1 = createBr(join, sysy::SourceLoc(1, 1));
   m.ownInst(br1);
   l1->addInst(br1);
@@ -134,13 +128,13 @@ void testDiamond() {
   // ⑦ use-def 双向一致
   expect(usedBy(phi, ret), "use-def：ret 的操作数是 φ");
   bool found = false;
-  for (Instruction* u : phi->users()) {
-    if (u == ret) found = true;
+  for (const sysy::flat::Use& u : phi->uses()) {
+    if (u.user == ret) found = true;
   }
-  expect(found, "use-def：反向边 users() 里有 ret");
+  expect(found, "use-def：精确 Uses 中有 ret");
   bool foundC = false;
-  for (Instruction* u : c->users()) {
-    if (u == br) foundC = true;
+  for (const sysy::flat::Use& u : c->uses()) {
+    if (u.user == br) foundC = true;
   }
   expect(foundC, "use-def：条件的反向边指向 br");
   // 检查器必须全绿
@@ -180,10 +174,8 @@ void testNestedPhi() {
   BasicBlock* e2 = m.createBlock(f);
   b1->setSucc(0, t2);
   b1->setSucc(1, e2);
-  Instruction* va = kInt(m, 7, L);
-  Instruction* vb = kInt(m, 8, L);
-  m.ownInst(va);
-  m.ownInst(vb);
+  Value* va = kInt(m, 7, L);
+  Value* vb = kInt(m, 8, L);
   Instruction* r1 = createRet(va, L);
   m.ownInst(r1);
   t2->addInst(r1);
@@ -222,8 +214,8 @@ void testNestedPhi() {
   expect(iphi->numOperands() == 2 && ophi->numOperands() == 2, "嵌套 if：两层 φ 各 2 个入值");
   // use-def：内层 φ 的使用者是外层 φ（**跨层**的反向边）
   bool cross = false;
-  for (Instruction* u : iphi->users()) {
-    if (u == ophi) cross = true;
+  for (const sysy::flat::Use& u : iphi->uses()) {
+    if (u.user == ophi) cross = true;
   }
   expect(cross, "use-def：内层 φ 的反向边指向外层 φ");
 }
@@ -240,8 +232,7 @@ void testLoopPhi() {
   BasicBlock* head = m.createBlock(f);
   BasicBlock* body = m.createBlock(f);
   BasicBlock* exit = m.createBlock(f);
-  Instruction* init = kInt(m, 0, L);
-  m.ownInst(init);
+  Value* init = kInt(m, 0, L);
   Instruction* bpre = createBr(head, L);
   m.ownInst(bpre);
   pre->addInst(bpre);
@@ -512,8 +503,7 @@ void testDumpPurityAndRoundTrip() {
   Function* f = m.createFunction("rt", typePool().i32());
   BasicBlock* e = m.createBlock(f);
   const sysy::SourceLoc L(7, 3);
-  Instruction* p0 = createParam(typePool().i32(), L);
-  m.ownInst(p0);
+  sysy::flat::Argument* p0 = m.createArgument(typePool().i32(), L);
   f->addParam(p0);
   Instruction* alloca = sysy::flat::createAlloca(typePool().i32(), L);
   m.ownInst(alloca);

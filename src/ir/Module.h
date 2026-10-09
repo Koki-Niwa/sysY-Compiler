@@ -11,14 +11,13 @@
 //     **永不失效** —— 平面层所有 pass 都能安全持有裸指针（D9 的"纯数据结构"
 //     就是这个意思：容器不藏所有权游戏）。
 //
-// ── 两个显式的重建点（**不要绕过它们**）──────────────────────────────────
-//   ① `rebuildUseDef()`：从零重建全部反向边（`Value::users()`）；
-//   ② `rebuildCFG()`：重建每个块的前驱表（`BasicBlock::preds()`）并按块号升序。
-//   构造完、读回完、以及任何"成批改动"之后都要调这两个
-//   （顺序：先 CFG 后 use-def；两者互不依赖，但固定顺序能让 dump 稳定）。
-//   增量接口（`addInst`/`setOperand`）**故意不自动**维护它们：让"插入一条
-//   指令"变成隐式的 O(全域) 工作会让平面层的 pass 慢得莫名其妙，
-//   而"什么时候重建"是**调用方的显式决定**。
+// ── F00 更新：精确增量 operand/use 关系 ─────────────────────────────────
+//   `Instruction::addOperand/setOperand/clearOperands` 局部维护 Value::uses()。
+//   `rebuildUseDef()` 仅作为 builder/debug repair fallback，从 owned 指令
+//   的 operands 重建全部 Value kind 的精确 Use{user, operandIndex}。
+//   `rebuildCFG()` 独立重建前驱表；两者不建立 F01 owned/live 语义。
+//   F00 establishes exact operand/use relationships.
+//   It does not yet establish live/owned mutation semantics.
 //
 // 【冻结】S06 结束后 `ir/` 的全部类接口**只增不改**（SESSION-PLAN §5）。
 // ============================================================================
@@ -26,6 +25,7 @@
 #define SYSY_IR_MODULE_H
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -112,6 +112,9 @@ class Module {
   // ── 工厂（全部由 Module 持有）─────────────────────────────────────────
   // 【后置】一条新指令（未挂到任何块上）。
   Instruction* createInst(Opcode op, const Type* ty, SourceLoc loc);
+  // Module owns Arguments independently from its instruction registry.
+  Argument* createArgument(const Type* ty, SourceLoc loc);
+  BlockAddr* createBlockAddr(const Type* ty, BasicBlock* block);
   // 【后置】把已经由 `createInst`/工厂造出来的指令**登记为本模块所有**
   //         （`clear()` 会释放它）。用途：工厂 + 单独挂块的调用风格。
   //         ⚠️ 同一条指令只登记一次（重复登记会在析构时二次 delete）。
@@ -138,6 +141,11 @@ class Module {
 
   // ── 函数 / 全局表 ─────────────────────────────────────────────────────
   const std::vector<Function*>& functions() const { return funcs_; }
+  // Read-only ownership inventory for verifier/debug reverse-edge audits.
+  const std::vector<Argument*>& arguments() const { return args_; }
+  const std::vector<Constant*>& constants() const { return consts_; }
+  const std::vector<GlobalAddr*>& globalAddresses() const { return globalAddrs_; }
+  const std::vector<BlockAddr*>& blockAddresses() const { return blockAddrs_; }
   Function* function(size_t i) const { return i < funcs_.size() ? funcs_[i] : nullptr; }
   Function* findFunction(const std::string& name) const;
   size_t numFunctions() const { return funcs_.size(); }
@@ -156,8 +164,8 @@ class Module {
   // ── 两个重建点 ────────────────────────────────────────────────────────
   // 【后置】每个块的 `preds()` = 全函数扫描得到的真实前驱，按块号升序。
   void rebuildCFG();
-  // 【后置】每个 `Value` 的 `users()` 与全部指令的 `operands()` 一致
-  //         （**双向**）。构造完 / 读回完 / 成批改动后必须调用。
+  // Repair/debug fallback: operand primitives normally maintain exact Use edges.
+  // Rebuild every Value kind without introducing live/owned separation.
   void rebuildUseDef();
 
   // ── 统计（轨 C：块/指令/φ 数分布；`--dump-flat-stats` 用它）──────────
@@ -174,7 +182,7 @@ class Module {
   //   契约，多一行就破坏逐字节比对；与 S05b 的 `--dump-loopnorm-stats` 同理）。
   std::string formatStats() const;
 
-  // 【后置】自增的值编号（dump 用；保证"同一个值拿到同一个编号"）。
+  // 【后置】遗留 builder 局部顺序 tag；FlatDump 编号只依赖函数结构。
   uint64_t nextValueId() { return nextId_++; }
 
  private:
@@ -184,10 +192,24 @@ class Module {
   std::vector<Function*> funcs_;
   std::vector<GlobalVariable*> globals_;
   std::vector<Constant*> consts_;
+  std::vector<Argument*> args_;
   std::vector<GlobalAddr*> globalAddrs_;
+  std::vector<BlockAddr*> blockAddrs_;
   std::unordered_set<Instruction*> ownedSet_;               // ownInst 的幂等依据
-  std::unordered_map<std::string, Constant*> intConsts_;    // "i32:5" → 常量
-  std::unordered_map<uint32_t, Constant*> floatConsts_;     // 位模式 → 常量
+  struct ConstantKey {
+    const Type* type;
+    uint64_t bits;
+    bool operator==(const ConstantKey& other) const {
+      return type == other.type && bits == other.bits;
+    }
+  };
+  struct ConstantHash {
+    size_t operator()(const ConstantKey& key) const {
+      return std::hash<const Type*>{}(key.type) ^
+             (std::hash<uint64_t>{}(key.bits) << 1);
+    }
+  };
+  std::unordered_map<ConstantKey, Constant*, ConstantHash> constants_;
   std::unordered_map<GlobalVariable*, GlobalAddr*> addrOf_;  // 全局 → 地址值
   uint64_t nextId_ = 1;
 };

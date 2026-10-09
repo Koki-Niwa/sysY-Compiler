@@ -92,6 +92,15 @@ add_executable(compiler
   src/structured/FlattenLoops.cpp
 )
 
+add_executable(toy_backend
+  tools/toy_backend/main.cpp
+  tools/toy_backend/ToyIR.cpp
+  tools/toy_backend/ToyParser.cpp
+  tools/toy_backend/X86Lowering.cpp
+  tools/toy_backend/X86Ops.cpp
+)
+set_target_properties(toy_backend PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+
 target_include_directories(compiler PRIVATE src)
 
 # 版本字符串（--version 用）

@@ -228,7 +228,7 @@ def evaluate(case, args, workdir, llvm_bin):
         "link_seconds": None, "run_seconds": None, "llvm_ir_bytes": None,
         "asm_bytes": None, "executable_bytes": None,
         "source_sha256": None, "stdin_sha256": None, "expected_sha256": None,
-        "compile_invocations": [],
+        "compile_invocations": [], "lower_invocation": None,
         "run_protocol": {"warmup_count": args.warmup, "repeat_count": args.repeat},
         "run_samples_seconds": [], "run_median_seconds": None,
         "run_spread": {"kind": "mad", "seconds": None},
@@ -264,8 +264,6 @@ def evaluate(case, args, workdir, llvm_bin):
                    else "--emit=llvm-ir", "-o", "case.flat" if args.no_structured else "case.ll"]
             if args.optimize and not args.no_structured:
                 cmd.append("-O1")
-            if args.toy_backend:
-                cmd.append("--toy-backend")  # S11b: not yet real lowering.
             res["compile_invocations"].append(cmd)
             started = time.monotonic()
             rc, _, err, to = run_cmd(cmd, workdir, timeout=args.compile_timeout)
@@ -321,28 +319,30 @@ def evaluate(case, args, workdir, llvm_bin):
             res["status"] = BUILD_FAIL
             res["detail"] = "无法读取 .ll: %s" % e
             return res
-        with open(os.path.join(workdir, "clean.ll"), "w", encoding="utf-8") as f:
-            f.write(clean_ir(raw))
-        res['llvm_ir_bytes'] = os.path.getsize(ll_in)
-        started = time.monotonic()
-        rc, _, err, to = run_cmd([os.path.join(llvm_bin, "llvm-as"), "clean.ll",
-                                  "-o", "clean.bc"], workdir, timeout=args.timeout)
-        res["llvm_as_seconds"] = time.monotonic() - started
-        if rc != 0:
-            res["status"] = BUILD_FAIL
-            res["detail"] = ("llvm-as 拒绝我们 dump 的 IR（IR 非法）:\n"
-                             + (tail(err) or "退出码 %s" % rc))
-            return res
-
+        res["llvm_ir_bytes"] = os.path.getsize(ll_in)
         tgt = TARGETS[args.target]
-        llc_cmd = [os.path.join(llvm_bin, "llc"), "-mtriple=" + tgt["llc_triple"]] \
-            + tgt["llc_extra"] + ["-filetype=asm", "clean.bc", "-o", "case.s"]
+        if args.toy_backend:
+            lower_cmd = [args.toy_backend_bin, ll_in, "-o", "case.s"]
+        else:
+            with open(os.path.join(workdir, "clean.ll"), "w", encoding="utf-8") as f:
+                f.write(clean_ir(raw))
+            started = time.monotonic()
+            rc, _, err, to = run_cmd([os.path.join(llvm_bin, "llvm-as"), "clean.ll",
+                                      "-o", "clean.bc"], workdir, timeout=args.timeout)
+            res["llvm_as_seconds"] = time.monotonic() - started
+            if to or rc != 0:
+                res["status"] = TIMEOUT if to else BUILD_FAIL
+                res["detail"] = "llvm-as 拒绝 IR 或超时:\n" + (tail(err) or "退出码 %s" % rc)
+                return res
+            lower_cmd = [os.path.join(llvm_bin, "llc"), "-mtriple=" + tgt["llc_triple"]] \
+                + tgt["llc_extra"] + ["-filetype=asm", "clean.bc", "-o", "case.s"]
+        res["lower_invocation"] = lower_cmd
         started = time.monotonic()
-        rc, _, err, to = run_cmd(llc_cmd, workdir, timeout=args.timeout)
+        rc, _, err, to = run_cmd(lower_cmd, workdir, timeout=args.timeout)
         res["lower_seconds"] = time.monotonic() - started
-        if rc != 0:
-            res["status"] = BUILD_FAIL
-            res["detail"] = "llc 降级失败:\n" + (tail(err) or "退出码 %s" % rc)
+        if to or rc != 0:
+            res["status"] = TIMEOUT if to else BUILD_FAIL
+            res["detail"] = "lowering 失败或超时:\n" + (tail(err) or "退出码 %s" % rc)
             return res
 
         res["asm_bytes"] = os.path.getsize(os.path.join(workdir, "case.s"))
@@ -449,6 +449,7 @@ def build_argparser():
     p.add_argument("--optimize", action="store_true", help="-O1")
     p.add_argument("--no-structured", action="store_true")
     p.add_argument("--toy-backend", action="store_true")
+    p.add_argument("--toy-backend-bin", default=os.path.join(HERE, "..", "build", "toy_backend"))
     p.add_argument("--verbose", action="store_true")
     p.add_argument("--keep-going", action="store_true")
     p.add_argument("--json", default=None)
@@ -481,7 +482,15 @@ def main(argv=None):
     args.compiler = os.path.abspath(args.compiler)
     if args.manifest is None:
         args.manifest = os.path.join(args.root, "tests", "manifest.tsv")
-    args.llvm_bin = find_llvm_bin(args.llvm_bin)
+    args.toy_backend_bin = os.path.realpath(args.toy_backend_bin)
+    if args.toy_backend:
+        if args.target != "x86":
+            sys.stderr.write("[ERROR] toy backend requires --target x86\n")
+            return 2
+        if not os.path.isfile(args.toy_backend_bin) or not os.access(args.toy_backend_bin, os.X_OK):
+            sys.stderr.write("[ERROR] toy backend binary missing or not executable: %s\n" % args.toy_backend_bin)
+            return 2
+    args.llvm_bin = "" if args.toy_backend else find_llvm_bin(args.llvm_bin)
 
     work_root = args.work or tempfile.mkdtemp(prefix="sysy_tests_")
     os.makedirs(work_root, exist_ok=True)
@@ -492,7 +501,7 @@ def main(argv=None):
                              "        先构建: cmake -S compiler -B compiler/build -G Ninja "
                              "&& cmake --build compiler/build\n" % args.compiler)
             return 2
-    if not args.llvm_bin:
+    if not args.toy_backend and not args.llvm_bin:
         sys.stderr.write("[ERROR] 找不到 llc/llvm-as（--llvm-bin 指定或用 apt 安装 llvm-18）\n")
         return 2
 

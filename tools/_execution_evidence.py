@@ -35,8 +35,18 @@ def executable(command):
 
 def evidence(args, TARGETS):
     target = TARGETS[args.target]
-    llvm_as = executable(os.path.join(args.llvm_bin, "llvm-as"))
-    llc = executable(os.path.join(args.llvm_bin, "llc"))
+    if args.toy_backend:
+        lowerer = executable(args.toy_backend_bin)
+        llvm = {}
+        provider = {"kind": "self-built-toy", "path": lowerer,
+                    "sha256": sha256_file(lowerer), "version": probe([lowerer, "--version"])}
+    else:
+        llvm_as = executable(os.path.join(args.llvm_bin, "llvm-as"))
+        llc = executable(os.path.join(args.llvm_bin, "llc"))
+        llvm = {"llvm_as": {"path": llvm_as, "version": probe([llvm_as, "--version"])},
+                "llc": {"path": llc, "version": probe([llc, "--version"])}}
+        provider = {"kind": "llvm-llc", "path": llc,
+                    "sha256": sha256_file(llc), "version": llvm["llc"]["version"]}
     linker = executable(target["link_cc"])
     runner = executable(target["runner"][0]) if target["runner"] else executable("uname")
     revision = probe(["git", "-C", os.path.join(os.path.dirname(__file__), ".."), "rev-parse", "HEAD"])
@@ -61,10 +71,11 @@ def evidence(args, TARGETS):
                      "sha256": sha256_file(args.manifest)},
         "mode": {"target": args.target, "optimize": args.optimize,
                  "no_structured": args.no_structured,
-                 "boundary": "from-flat" if args.no_structured else "source"},
+                 "boundary": "from-flat" if args.no_structured else "source",
+                 "lowering": "self-built-toy" if args.toy_backend else "llvm-llc"},
         "toolchain": {
-            "llvm": {"llvm_as": {"path": llvm_as, "version": probe([llvm_as, "--version"])},
-                     "llc": {"path": llc, "version": probe([llc, "--version"])}},
+            "llvm": llvm,
+            "lowering_provider": provider,
             "linker": {"path": linker, "version": probe([linker, "--version"]).splitlines()[0],
                        "dumpmachine": facts["dumpmachine"]},
             "execution": {"kind": "qemu" if target["runner"] else "native",

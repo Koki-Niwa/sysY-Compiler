@@ -14,7 +14,6 @@
 #   --timeout <sec>       单用例超时（默认 60；性能用例建议 300）
 #   --warmup <N> / --repeat <N>  预热次数默认 0、测量次数默认 1
 #   --no-structured       Flat 序列化 → 新编译器进程 --from-flat → LLVM
-#   --toy-backend         走自研降级器而非 clang（S11b 之后才有效）
 #   --verbose             打印每个用例的命令
 #   --keep-going          兼容用；本运行器【总是】跑完整个选择集（不会早停）
 #   --list                只列出会被选中的用例，不执行
@@ -75,6 +74,7 @@ while [ $# -gt 0 ]; do
     --work)      WORK="$2"; shift 2 ;;
     --json)      JSON="$2"; shift 2 ;;
     --llvm-bin)  LLVM_BIN_ARG="$2"; shift 2 ;;
+    --toy-backend-bin) TOY_BIN="$2"; shift 2 ;;
     --no-structured) NO_STRUCT=1; shift ;;
     --toy-backend)   TOY=1; shift ;;
     -O1|--O1)        OPT=1; shift ;;
@@ -117,7 +117,7 @@ ARGS=( "$HERE/_run_tests.py"
 [ "$DRY" = 1 ]        && ARGS+=( --dry-run )
 [ "$NO_STRUCT" = 1 ]  && ARGS+=( --no-structured )
 [ "$TOY" = 1 ]        && ARGS+=( --toy-backend )
+[ -n "${TOY_BIN:-}" ] && ARGS+=( --toy-backend-bin "$TOY_BIN" )
 [ "$OPT" = 1 ]        && ARGS+=( --optimize )
-# --no-structured 是跨进程 Flat 边界；--toy-backend 仍兼容但非 S11b 真实降级。
 
 exec "$PY" "${ARGS[@]}"

@@ -28,7 +28,7 @@ def manifest_cases(path):
     return expected
 
 
-def validate(report, expected, target, runner_rc=0, required=490, excluded=50, revision=None, manifest_sha256=None, no_structured=False, expected_compiler=None, expected_manifest=None):
+def validate(report, expected, target, runner_rc=0, required=490, excluded=50, revision=None, manifest_sha256=None, no_structured=False, expected_compiler=None, expected_manifest=None, toy_backend=False, toy_backend_bin=None):
     problems = []
     if runner_rc != 0:
         problems.append('运行器退出非零')
@@ -39,6 +39,8 @@ def validate(report, expected, target, runner_rc=0, required=490, excluded=50, r
         return problems + ['JSON 根不是对象']
     if report.get('target') != target:
         problems.append('执行 target 不符')
+    if toy_backend and target != "x86":
+        problems.append("toy provider only supports x86")
     compiler = report.get('compiler')
     manifest = report.get('manifest')
     mode = report.get('mode')
@@ -73,6 +75,9 @@ def validate(report, expected, target, runner_rc=0, required=490, excluded=50, r
             mode.get('no_structured') is not no_structured) or (
             mode.get('boundary') != ('from-flat' if no_structured else 'source')):
         problems.append('mode/boundary 不符')
+    if not isinstance(mode, dict) or mode.get("lowering", "llvm-llc") != (
+            "self-built-toy" if toy_backend else "llvm-llc"):
+        problems.append("lowering mode/provider mismatch")
     if not isinstance(chain, dict):
         problems.append('toolchain identity 缺失')
     else:
@@ -81,7 +86,7 @@ def validate(report, expected, target, runner_rc=0, required=490, excluded=50, r
         execution = chain.get('execution', {})
         config = chain.get('target_config', {})
         if not all(isinstance(v, dict) for v in (llvm, linker, execution, config)) or (
-                not all(isinstance(llvm.get(k), dict) and llvm[k].get('path') and
+                not toy_backend and not all(isinstance(llvm.get(k), dict) and llvm[k].get('path') and
                         llvm[k].get('version') for k in ('llvm_as', 'llc'))) or (
                 not all(linker.get(k) for k in ('path', 'version', 'dumpmachine'))) or (
                 not all(execution.get(k) for k in ('kind', 'runner', 'runner_version'))) or (
@@ -93,6 +98,22 @@ def validate(report, expected, target, runner_rc=0, required=490, excluded=50, r
         if target != 'x86' and isinstance(execution, dict) and (
                 execution.get('kind') != 'qemu' or execution.get('real_target_performance') is not False):
             problems.append('QEMU performance label 不符')
+    if toy_backend:
+        provider = chain.get("lowering_provider") if isinstance(chain, dict) else None
+        if not isinstance(provider, dict) or provider.get("kind") != "self-built-toy":
+            problems.append("self-built toy provider identity missing")
+        else:
+            requested = toy_backend_bin
+            if not requested or not os.path.isfile(requested) or not os.access(requested, os.X_OK):
+                problems.append("toy backend executable missing")
+            else:
+                real = os.path.realpath(requested)
+                if provider.get("path") != real:
+                    problems.append("toy backend path mismatch")
+                elif provider.get("sha256") != hashlib.sha256(Path(real).read_bytes()).hexdigest():
+                    problems.append("toy backend SHA256 mismatch")
+                if not isinstance(provider.get("version"), str) or not provider["version"]:
+                    problems.append("toy backend version missing")
     results = report.get('results')
     if not isinstance(results, list):
         return problems + ['缺少逐文件 results']
@@ -103,6 +124,22 @@ def validate(report, expected, target, runner_rc=0, required=490, excluded=50, r
             continue
         key, status = row['key'], row.get('status')
         ids[key] += 1
+        if toy_backend and not expected.get(key, False):
+            commands = row.get("compile_invocations")
+            if (not isinstance(commands, list) or not commands or
+                    not all(isinstance(cmd, list) for cmd in commands) or
+                    not any("--emit=llvm-ir" in cmd for cmd in commands) or
+                    any("--toy-backend" in cmd for cmd in commands)):
+                problems.append("toy mode compiler invocation invalid: " + key)
+            invocation = row.get("lower_invocation")
+            if (not isinstance(invocation, list) or len(invocation) < 4 or
+                    not all(isinstance(x, str) for x in invocation) or
+                    invocation[0] != os.path.realpath(toy_backend_bin or "") or
+                    "-o" not in invocation or
+                    any(os.path.basename(x) in ("llc","clang","gcc","clang-S","gcc-S")
+                        for x in invocation) or
+                    any(x == "-S" for x in invocation)):
+                problems.append("toy lowering invocation is not self-built: " + key)
         if no_structured and not expected.get(key, False):
             commands = row.get('compile_invocations')
             if not isinstance(commands, list) or len(commands) != 2 or (
@@ -150,6 +187,7 @@ def main():
     parser.add_argument('--report', required=True)
     parser.add_argument('--no-structured', action='store_true')
     parser.add_argument('--toy-backend', action='store_true')
+    parser.add_argument('--toy-backend-bin', default=str(Path(__file__).resolve().parents[2] / 'build/toy_backend'))
     parser.add_argument('--target', required=True, choices=['x86', 'aarch64', 'riscv64'])
     args = parser.parse_args()
     try:
@@ -160,7 +198,8 @@ def main():
         digest = hashlib.sha256(Path(args.manifest).read_bytes()).hexdigest()
         problems = validate(report, expected, args.target, revision=revision,
                             manifest_sha256=digest, no_structured=args.no_structured,
-                            expected_compiler=args.compiler, expected_manifest=args.manifest)
+                            expected_compiler=args.compiler, expected_manifest=args.manifest,
+                            toy_backend=args.toy_backend, toy_backend_bin=args.toy_backend_bin)
     except (OSError, ValueError, TypeError, subprocess.CalledProcessError) as error:
         print('FAIL: 执行证据无法读取: ' + str(error))
         return 1

@@ -59,8 +59,33 @@ else
   run_execution E2E_NO_STRUCT x86 "回归 --no-structured" --no-structured
 fi
 
+run_toy_execution() {
+  # Isolated from run_execution: accepting a toy CLI flag cannot set TOY_OK.
+  local toy_bin="$ROOT/compiler/build/toy_backend"
+  local log="$WORK/TOY_OK.log" report="$WORK/TOY_OK.json"
+  if [ ! -x "$toy_bin" ]; then
+    c_bad "toy backend binary missing: $toy_bin"
+    return 1
+  fi
+  if printf 'target=x86 provider=self-built-toy correctness_timeout=600s\n' >"$log" &&
+     bash "$TOOLS/run_tests.sh" --target x86 --toy-backend \
+       --toy-backend-bin "$toy_bin" --timeout 600 --jobs "$(nproc)" \
+       --json "$report" >>"$log" 2>&1 &&
+     python3 "$GATE/check_execution.py" --manifest "$TESTS/manifest.tsv" \
+       --report "$report" --target x86 --compiler "$COMPILER" \
+       --toy-backend --toy-backend-bin "$toy_bin" >>"$log" 2>&1; then
+    TOY_OK=1
+    c_ok "S11b toy lowering: 490 required PASS / 50 tensor SKIP; provider identity verified"
+  else
+    c_bad "S11b toy execution failed or provider evidence incomplete"
+    tail -10 "$log" | sed 's/^/      /'
+    return 1
+  fi
+}
 hdr "E. 自研降级器契约验证"
-# S11b must replace LLVM lowering with real toy-backend lowering.
-# A CLI that accepts --toy-backend while using llc must never set TOY_OK.
-c_skip "S11b 自研降级器尚未接入；不得设置 TOY_OK"
+if [ -n "${STAGE:-}" ] && stage_requires "$STAGE" S11b; then
+  run_toy_execution || :
+else
+  c_skip "S11b toy backend not required at stage ${STAGE:-unspecified}"
+fi
 return 0

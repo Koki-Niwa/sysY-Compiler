@@ -93,6 +93,43 @@ class EvidenceTests(unittest.TestCase):
                 self.assertTrue(self.errors(data, revision='fixture', manifest_sha256='hash'))
         self.assertEqual([], self.errors(self.report, revision='fixture', manifest_sha256='hash'))
 
+    def test_toy_provider_positive_and_negative_controls(self):
+        data = copy.deepcopy(self.report)
+        data['mode']['lowering'] = 'self-built-toy'
+        binary = sys.executable
+        data['toolchain']['llvm'] = {}
+        data['toolchain']['lowering_provider'] = {
+            'kind': 'self-built-toy', 'path': os.path.realpath(binary),
+            'sha256': hashlib.sha256(Path(binary).read_bytes()).hexdigest(),
+            'version': 'self-built-toy-x86 test fixture'}
+        for row in data['results']:
+            if row['status'] != 'PASS':
+                continue
+            row['compile_invocations'] = [['compiler', 'source.sy', '--emit=llvm-ir', '-o', 'case.ll']]
+            row['lower_invocation'] = [os.path.realpath(binary), 'case.ll', '-o', 'case.s']
+        context = {'toy_backend': True, 'toy_backend_bin': binary}
+        self.assertEqual([], self.errors(data, **context))
+        for kind in ('fake_llc', 'wrong_binary', 'wrong_hash', 'missing_binary',
+                     'bad_compile', 'wrong_target', 'wrong_mode'):
+            broken = copy.deepcopy(data)
+            opt = dict(context)
+            if kind == 'fake_llc':
+                broken['results'][0]['lower_invocation'][0] = '/usr/bin/llc'
+            elif kind == 'wrong_binary':
+                broken['toolchain']['lowering_provider']['path'] = '/wrong/toy'
+            elif kind == 'wrong_hash':
+                broken['toolchain']['lowering_provider']['sha256'] = '0' * 64
+            elif kind == 'missing_binary':
+                opt['toy_backend_bin'] = '/missing/toy'
+            elif kind == 'bad_compile':
+                broken['results'][0]['compile_invocations'][0].append('--toy-backend')
+            elif kind == 'wrong_target':
+                broken['target'] = 'aarch64'
+            else:
+                broken['mode']['lowering'] = 'llvm-llc'
+            with self.subTest(kind=kind):
+                self.assertTrue(self.errors(broken, **opt))
+
     def test_no_structured_requires_two_compiler_calls(self):
         data = copy.deepcopy(self.report)
         data['mode']['no_structured'] = True
@@ -158,7 +195,11 @@ exit 2
 FAIL=0; CAN_IR=0; E2E_X86=0; TOY_OK=0
 hdr(){ :; }; c_skip(){ :; }; c_ok(){ :; }; c_bad(){ FAIL=$((FAIL+1)); }
 source "$GATE/execution.sh"
-run_execution "$FLAG" x86 fixture --toy-backend
+if [ "$FLAG" = TOY_OK ]; then
+  run_execution "$FLAG" x86 fixture --toy-backend
+else
+  run_execution "$FLAG" x86 fixture
+fi
 printf 'RESULT %s %s\n' "${!FLAG}" "$FAIL"
 '''
                         env = dict(os.environ, GATE=str(GATE), TOOLS=str(root), TESTS=str(root),

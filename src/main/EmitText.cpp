@@ -34,7 +34,7 @@ std::string helpText() {
       "  --optimize         -O1 的别名（tools/run_tests.sh 使用长选项名）\n"
       "  -S                 接受但不解释（比赛调用形式: compiler a.sy -S -o a.s）\n"
       "  --structured       使用结构化 IR 层（默认）\n"
-      "  --no-structured    不走结构化 IR 层（供回归对照用）\n"
+      "  --no-structured    兼容旧参数；隔离执行请使用 run_tests.sh --no-structured\n"
       "  --normalize        跑 LoopNormalize（while→for + continue 消解）与\n"
       "                     AllocaHoist（alloca 提到函数入口 Region）。**默认关**：\n"
       "                     不带它时 --emit=structured-ir 的输出与 S05 契约逐字节相同\n"

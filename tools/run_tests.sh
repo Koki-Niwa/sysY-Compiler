@@ -12,7 +12,7 @@
 #   --target <t>          x86（默认）| aarch64 | riscv64
 #   --jobs <n>            并行数（默认 nproc）
 #   --timeout <sec>       单用例超时（默认 60；性能用例建议 300）
-#   --no-structured       传给编译器一个开关（S06 之后才有效）
+#   --no-structured       Flat 序列化 → 新编译器进程 --from-flat → LLVM
 #   --toy-backend         走自研降级器而非 clang（S11b 之后才有效）
 #   --verbose             打印每个用例的命令
 #   --keep-going          兼容用；本运行器【总是】跑完整个选择集（不会早停）
@@ -117,7 +117,7 @@ ARGS=( "$HERE/_run_tests.py"
 [ "$NO_STRUCT" = 1 ]  && ARGS+=( --no-structured )
 [ "$TOY" = 1 ]        && ARGS+=( --toy-backend )
 [ "$OPT" = 1 ]        && ARGS+=( --optimize )
-# 注：--no-structured 与 --toy-backend 目前只是【透传给编译器】的开关，
-#     S06 / S11b 之前编译器会接受但忽略它们（见 P00 prompt §4.3）。
+# --no-structured 由 Python runner 实现真正的跨进程 Flat 边界。
+# --toy-backend 仍只是兼容参数；S11b 必须替换 LLVM llc 降级。
 
 exec "$PY" "${ARGS[@]}"

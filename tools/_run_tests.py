@@ -33,6 +33,8 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from expect_out import CANDIDATE_NAMES, candidate_expectations, match  # noqa: E402
+from _execution_evidence import evidence, sha256_file  # noqa: E402
+from _execution_report import _emit  # noqa: E402
 
 # 失败类型（run_tests.sh 汇总行会打印这些字面量）
 def _has_definition(path):
@@ -221,8 +223,13 @@ def evaluate(case, args, workdir, llvm_bin):
         "key": case.key, "suite": case.suite, "category": case.category,
         "name": case.name, "status": PASS, "failure": "", "detail": "",
         "seconds": 0.0, "candidate": "", "skip_reason": case.skip or "",
+        "compile_seconds": None, "llvm_as_seconds": None, "lower_seconds": None,
+        "link_seconds": None, "run_seconds": None, "llvm_ir_bytes": None,
+        "asm_bytes": None, "executable_bytes": None,
+        "source_sha256": None, "stdin_sha256": None, "expected_sha256": None,
+        "compile_invocations": [],
     }
-    t0 = time.time()
+    t0 = time.monotonic()
     try:
         if case.skip:
             res["status"] = SKIP
@@ -244,16 +251,33 @@ def evaluate(case, args, workdir, llvm_bin):
                                  "（若确应跳过，请在 manifest 的 skip 列声明）" % case.stdin)
                 return res
 
+        res["source_sha256"] = sha256_file(sy)
+        res["stdin_sha256"] = sha256_file(stdin_path)
+        res["expected_sha256"] = sha256_file(exp) if exp != "-" else None
         # ① 编译 → .ll
         if not args.no_compile_step:
-            cmd = [args.compiler, sy, "--emit=llvm-ir", "-o", "case.ll"]
-            if args.optimize:
+            cmd = [args.compiler, sy, "--emit=flat-ir" if args.no_structured
+                   else "--emit=llvm-ir", "-o", "case.flat" if args.no_structured else "case.ll"]
+            if args.optimize and not args.no_structured:
                 cmd.append("-O1")
-            if args.no_structured:
-                cmd.append("--no-structured")
             if args.toy_backend:
-                cmd.append("--toy-backend")
+                cmd.append("--toy-backend")  # S11b: not yet real lowering.
+            res["compile_invocations"].append(cmd)
+            started = time.monotonic()
             rc, _, err, to = run_cmd(cmd, workdir, timeout=args.compile_timeout)
+            res["compile_seconds"] = time.monotonic() - started
+            if args.no_structured and rc == 0 and not to:
+                flat = os.path.join(workdir, "case.flat")
+                if not os.path.isfile(flat):
+                    rc, err = 1, "compiler did not produce serialized Flat artifact"
+                else:
+                    cmd = [args.compiler, flat, "--from-flat", "--emit=llvm-ir", "-o", "case.ll"]
+                    if args.optimize:
+                        cmd.append("-O1")
+                    res["compile_invocations"].append(cmd)
+                    started = time.monotonic()
+                    rc, _, err, to = run_cmd(cmd, workdir, timeout=args.compile_timeout)
+                    res["compile_seconds"] += time.monotonic() - started
             if to:
                 res["status"] = TIMEOUT
                 res["detail"] = "编译超时: %s" % " ".join(cmd)
@@ -295,8 +319,11 @@ def evaluate(case, args, workdir, llvm_bin):
             return res
         with open(os.path.join(workdir, "clean.ll"), "w", encoding="utf-8") as f:
             f.write(clean_ir(raw))
+        res['llvm_ir_bytes'] = os.path.getsize(ll_in)
+        started = time.monotonic()
         rc, _, err, to = run_cmd([os.path.join(llvm_bin, "llvm-as"), "clean.ll",
                                   "-o", "clean.bc"], workdir, timeout=args.timeout)
+        res["llvm_as_seconds"] = time.monotonic() - started
         if rc != 0:
             res["status"] = BUILD_FAIL
             res["detail"] = ("llvm-as 拒绝我们 dump 的 IR（IR 非法）:\n"
@@ -306,28 +333,36 @@ def evaluate(case, args, workdir, llvm_bin):
         tgt = TARGETS[args.target]
         llc_cmd = [os.path.join(llvm_bin, "llc"), "-mtriple=" + tgt["llc_triple"]] \
             + tgt["llc_extra"] + ["-filetype=asm", "clean.bc", "-o", "case.s"]
+        started = time.monotonic()
         rc, _, err, to = run_cmd(llc_cmd, workdir, timeout=args.timeout)
+        res["lower_seconds"] = time.monotonic() - started
         if rc != 0:
             res["status"] = BUILD_FAIL
             res["detail"] = "llc 降级失败:\n" + (tail(err) or "退出码 %s" % rc)
             return res
 
+        res["asm_bytes"] = os.path.getsize(os.path.join(workdir, "case.s"))
         # ③ 链接
         link = [tgt["link_cc"]]
         if tgt["static"]:
             link.append("-static")
         link += ["case.s", os.path.join(args.root, "runtime", "sylib.c"),
                  "-o", "prog", "-w", "-lm"] + tgt["link_extra"]
+        started = time.monotonic()
         rc, _, err, to = run_cmd(link, workdir, timeout=args.timeout)
+        res["link_seconds"] = time.monotonic() - started
         if rc != 0:
             res["status"] = BUILD_FAIL
             res["detail"] = "链接失败:\n" + (tail(err) or "退出码 %s" % rc)
             return res
 
+        res["executable_bytes"] = os.path.getsize(os.path.join(workdir, "prog"))
         # ④ 运行（超时 = 单用例预算；性能用例由调用方 --timeout 放宽）
         run = tgt["runner"] + ["./prog"]
+        started = time.monotonic()
         rc, out, err, to = run_cmd(run, workdir, stdin_path=stdin_path,
                                    timeout=args.timeout)
+        res["run_seconds"] = time.monotonic() - started
         if to:
             res["status"] = TIMEOUT
             res["detail"] = "运行超过 %ss" % args.timeout
@@ -369,7 +404,7 @@ def evaluate(case, args, workdir, llvm_bin):
                              % CANDIDATE_NAMES[hit])
         return res
     finally:
-        res["seconds"] = time.time() - t0
+        res["seconds"] = time.monotonic() - t0
         if args.clean_work and not res["detail"]:
             shutil.rmtree(workdir, ignore_errors=True)
 
@@ -476,6 +511,11 @@ def main(argv=None):
                          % (args.manifest, len(picked), args.target, args.jobs, args.timeout))
         sys.stderr.write("[info] llvm-bin=%s work=%s\n" % (args.llvm_bin, work_root))
 
+    try:
+        args.evidence = evidence(args, TARGETS)
+    except (OSError, RuntimeError, ValueError) as error:
+        sys.stderr.write("[ERROR] revision/toolchain probe: %s\n" % error)
+        return 2
     results = []
     lock = threading.Lock()
 
@@ -501,90 +541,19 @@ def main(argv=None):
                                     ("  " + r["detail"].splitlines()[0]) if r["detail"] else ""))
         return r
 
-    t0 = time.time()
+    t0 = time.monotonic()
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.jobs)) as ex:
             list(ex.map(worker, list(enumerate(picked))))
     except KeyboardInterrupt:
         STOP.set()
         sys.stderr.write("\n[中断] 已停止调度新用例（已完成 %d 个）\n" % len(results))
-        _emit(results, args, time.time() - t0, work_root)
+        _emit(results, args, time.monotonic() - t0, work_root)
         return 130
 
-    return _emit(results, args, time.time() - t0, work_root)
+    return _emit(results, args, time.monotonic() - t0, work_root)
 
 
-def _emit(results, args, elapsed, work_root):
-    order = {PASS: 0, FORMAT_WARN: 1, FORMAT_NOTE: 1, COMPILE_FAIL: 2,
-             BUILD_FAIL: 3, WRONG_OUTPUT: 4, TIMEOUT: 5, SKIP: 6}
-    results.sort(key=lambda r: (r["suite"], r["category"], r["name"]))
-
-    groups = {}
-    for r in results:
-        g = groups.setdefault("%s/%s" % (r["suite"], r["category"]),
-                              {"total": 0, "pass": 0, "fail": 0, "timeout": 0, "skip": 0})
-        g["total"] += 1
-        st = r["status"]
-        if st == SKIP:
-            g["skip"] += 1
-        elif st == TIMEOUT:
-            g["timeout"] += 1
-        elif st in (PASS, FORMAT_WARN, FORMAT_NOTE):
-            g["pass"] += 1
-        else:
-            g["fail"] += 1
-
-    n_pass = sum(1 for r in results if r["status"] in (PASS, FORMAT_WARN, FORMAT_NOTE))
-    n_fail = sum(1 for r in results if r["status"] in
-                 (COMPILE_FAIL, BUILD_FAIL, WRONG_OUTPUT))
-    n_timeout = sum(1 for r in results if r["status"] == TIMEOUT)
-    n_skip = sum(1 for r in results if r["status"] == SKIP)
-    n_fmt = sum(1 for r in results if r["status"] in (FORMAT_WARN, FORMAT_NOTE))
-
-    out = sys.stdout
-    out.write("\n=== 汇总 ===\n")
-    out.write("%-28s %6s %6s %6s %6s %6s\n"
-              % ("suite/category", "总数", "通过", "失败", "超时", "跳过"))
-    for key in sorted(groups):
-        g = groups[key]
-        out.write("%-28s %6d %6d %6d %6d %6d\n"
-                  % (key, g["total"], g["pass"], g["fail"], g["timeout"], g["skip"]))
-    out.write("-" * 70 + "\n")
-    total_all = len(results)
-    tail_note = ("（跳过 %d 个 tensor/无 .out 用例）" % n_skip) if n_skip else ""
-    out.write("总计: %d / %d 通过    (失败 %d，超时 %d，跳过 %d，耗时 %.1fs) %s\n"
-              % (n_pass, total_all - n_skip, n_fail, n_timeout, n_skip, elapsed, tail_note))
-    out.write("target=%s  工作目录=%s\n" % (args.target, work_root))
-    if n_fmt:
-        out.write("注: %d 个用例按 C1–C3 命中（.out 格式差异，非语义错误）: %s\n"
-                  % (n_fmt, ", ".join(r["key"] for r in results
-                                      if r["status"] in (FORMAT_WARN, FORMAT_NOTE))[:400]))
-
-    bad = [r for r in results if r["status"] in
-           (COMPILE_FAIL, BUILD_FAIL, WRONG_OUTPUT, TIMEOUT)]
-    if bad:
-        out.write("\n失败的用例:\n")
-        for r in sorted(bad, key=lambda r: (order.get(r["status"], 9), r["key"])):
-            line = "  %s  [%s]" % (r["key"], r["status"])
-            if r["detail"]:
-                first = r["detail"].splitlines()[0]
-                line += "  " + first
-            out.write(line + "\n")
-            for extra in r["detail"].splitlines()[1:10]:
-                out.write("      " + extra + "\n")
-    else:
-        out.write("\n失败的用例: 无\n")
-
-    if args.json:
-        with open(args.json, "w", encoding="utf-8") as f:
-            json.dump({"target": args.target, "elapsed": elapsed,
-                       "summary": {"total": total_all, "pass": n_pass, "fail": n_fail,
-                                   "timeout": n_timeout, "skip": n_skip,
-                                   "format_diff": n_fmt},
-                       "results": results}, f, ensure_ascii=False, indent=1)
-        out.write("\nJSON 明细: %s\n" % args.json)
-
-    return 0 if (n_fail == 0 and n_timeout == 0) else 1
 
 
 if __name__ == "__main__":

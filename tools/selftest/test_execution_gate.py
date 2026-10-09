@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """执行证据反证：身份、覆盖和汇总必须同时成立，测试含真实 shell 接线。"""
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -18,7 +19,21 @@ def report_for(expected, all_skip=False):
     rows = [{'key': key, 'status': 'SKIP' if skip or all_skip else 'PASS',
              'skip_reason': 'tensor' if skip else ''} for key, skip in expected.items()]
     skipped = sum(r['status'] == 'SKIP' for r in rows)
-    return {'target': 'x86', 'results': rows,
+    return {'schema_version': 1, 'target': 'x86',
+            'compiler': {'revision': 'fixture', 'dirty': False,
+                         'executable': '/fixture/compiler', 'executable_sha256': 'hash'},
+            'manifest': {'path': '/fixture/manifest', 'sha256': 'hash'},
+            'mode': {'target': 'x86', 'optimize': False,
+                     'no_structured': False, 'boundary': 'source'},
+            'toolchain': {
+                'llvm': {'llvm_as': {'path': '/fixture/as', 'version': '18'},
+                         'llc': {'path': '/fixture/llc', 'version': '18'}},
+                'linker': {'path': '/fixture/clang', 'version': '18', 'dumpmachine': 'x86_64'},
+                'execution': {'kind': 'native', 'runner': '/bin/uname',
+                              'runner_version': 'kernel', 'real_target_performance': True},
+                'target_config': {'triple': 'x86_64-linux-gnu',
+                                  'probed': {'dumpmachine': 'x86_64'}}},
+            'results': rows,
             'summary': {'total': len(rows), 'pass': len(rows) - skipped, 'skip': skipped,
                         'fail': 0, 'timeout': 0, 'format_diff': 0}}
 
@@ -63,10 +78,52 @@ class EvidenceTests(unittest.TestCase):
         self.assertTrue(self.errors(None))
         self.assertTrue(validate(self.report, self.expected, 'x86'))  # 非 490/50 范围
 
+    def test_revision_manifest_toolchain_and_mode_negative_controls(self):
+        for path, value in (
+                (('compiler', 'revision'), 'wrong'),
+                (('compiler', 'dirty'), True),
+                (('manifest', 'sha256'), 'wrong'),
+                (('toolchain', 'llvm'), {}),
+                (('mode', 'no_structured'), True),
+                (('mode', 'boundary'), 'fake')):
+            with self.subTest(path=path):
+                data = copy.deepcopy(self.report)
+                data[path[0]][path[1]] = value
+                self.assertTrue(self.errors(data, revision='fixture', manifest_sha256='hash'))
+        self.assertEqual([], self.errors(self.report, revision='fixture', manifest_sha256='hash'))
+
+    def test_no_structured_requires_two_compiler_calls(self):
+        data = copy.deepcopy(self.report)
+        data['mode']['no_structured'] = True
+        data['mode']['boundary'] = 'from-flat'
+        self.assertTrue(self.errors(data, no_structured=True))
+        for row in data['results']:
+            if row['status'] == 'PASS':
+                row['compile_invocations'] = [
+                    ['compiler', 'source.sy', '--emit=flat-ir'],
+                    ['compiler', 'case.flat', '--from-flat', '--emit=llvm-ir']]
+        self.assertEqual([], self.errors(data, no_structured=True))
+        data['results'][0]['compile_invocations'].pop()
+        self.assertTrue(self.errors(data, no_structured=True))
+
     def test_documented_format_pass_keeps_explicit_counter(self):
         self.report['results'][0]['status'] = 'PASS(FORMAT_C1)'
         self.report['summary']['format_diff'] = 1
         self.assertEqual([], self.errors(self.report))
+
+    def test_malformed_serialized_flat_is_rejected(self):
+        compiler = GATE.parents[1] / 'build' / 'compiler'
+        if not compiler.exists():
+            self.skipTest('compiler has not been built')
+        with tempfile.TemporaryDirectory() as directory:
+            bad = Path(directory) / 'corrupt.flat'
+            output = Path(directory) / 'invalid.ll'
+            bad.write_text('this is not a valid flat module\n')
+            result = subprocess.run([str(compiler), str(bad), '--from-flat',
+                                     '--emit=llvm-ir', '-o', str(output)],
+                                    capture_output=True, timeout=15)
+            self.assertNotEqual(0, result.returncode)
+            self.assertFalse(output.exists())
 
     def test_real_execution_wrapper_rejects_all_skip_for_full_and_toy(self):
         expected = {f'suite/cat/{n}': n >= 490 for n in range(540)}
@@ -88,7 +145,13 @@ exit 2
             for flag in ('E2E_X86', 'TOY_OK'):
                 for all_skip in (False, True):
                     with self.subTest(flag=flag, all_skip=all_skip):
-                        fixture.write_text(json.dumps(report_for(expected, all_skip)))
+                        data = report_for(expected, all_skip)
+                        data['compiler']['revision'] = subprocess.check_output(
+                            ['git', '-C', str(GATE.parents[1]), 'rev-parse', 'HEAD'],
+                            text=True).strip()
+                        data['manifest']['sha256'] = hashlib.sha256(
+                            (root / 'manifest.tsv').read_bytes()).hexdigest()
+                        fixture.write_text(json.dumps(data))
                         command = '''
 FAIL=0; CAN_IR=0; E2E_X86=0; TOY_OK=0
 hdr(){ :; }; c_skip(){ :; }; c_ok(){ :; }; c_bad(){ FAIL=$((FAIL+1)); }

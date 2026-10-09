@@ -97,7 +97,6 @@ struct Options {
   EmitKind emit = EmitKind::LlvmIr;
   bool haveOutput = false;
   int optLevel = 0;            // 默认 O0；仅 -O1/--optimize 启用优化
-  bool structured = true;      // S05 起：结构化 IR 层开关（默认开）
   bool toyBackend = false;     // --toy-backend：S11b 起表示"用自研降级器"；当前只接受
   bool fromAst = false;        // --from-ast：输入是 S-表达式（不是 SysY 源码）
   bool fromStructured = false;  // --from-structured：输入是结构化 IR 文本
@@ -160,8 +159,9 @@ bool parseCommandLine(int argc, char** argv, Options& opts) {
     }
     if (a == "-S") { continue; }              // 比赛调用形式：接受，忽略含义
     if (a == "-c" || a == "-E") { continue; }  // 同理：不为它们做事，但不报错
-    if (a == "--structured")    { opts.structured = true;  continue; }
-    if (a == "--no-structured") { opts.structured = false; continue; }
+    // Deprecated compatibility flags: isolation is a runner-owned two-process
+    // serialized Flat boundary, not a second AST->Flat pipeline.
+    if (a == "--structured" || a == "--no-structured") { continue; }
     // --optimize 是 -O1 的别名（tools/run_tests.sh 用长选项名）。
     if (a == "--optimize")      { opts.optLevel = 1; continue; }
     // --toy-backend 由 tools/run_tests.sh 传入，用于让链路走【自研降级器】而非 clang。

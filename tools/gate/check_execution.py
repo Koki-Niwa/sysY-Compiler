@@ -3,6 +3,9 @@
 import argparse
 from collections import Counter
 import json
+import hashlib
+import os
+import subprocess
 from pathlib import Path
 
 PASSED = {'PASS', 'PASS(FORMAT_C1)', 'PASS(FORMAT_C2/C3)'}
@@ -25,7 +28,7 @@ def manifest_cases(path):
     return expected
 
 
-def validate(report, expected, target, runner_rc=0, required=490, excluded=50):
+def validate(report, expected, target, runner_rc=0, required=490, excluded=50, revision=None, manifest_sha256=None, no_structured=False):
     problems = []
     if runner_rc != 0:
         problems.append('运行器退出非零')
@@ -36,6 +39,50 @@ def validate(report, expected, target, runner_rc=0, required=490, excluded=50):
         return problems + ['JSON 根不是对象']
     if report.get('target') != target:
         problems.append('执行 target 不符')
+    compiler = report.get('compiler')
+    manifest = report.get('manifest')
+    mode = report.get('mode')
+    chain = report.get('toolchain')
+    if report.get('schema_version') != 1:
+        problems.append('schema_version 不符')
+    if not isinstance(compiler, dict) or not isinstance(compiler.get('revision'), str) or (
+            revision is not None and compiler.get('revision') != revision):
+        problems.append('compiler revision 不符')
+    if not isinstance(compiler, dict) or compiler.get('dirty') is not False:
+        problems.append('compiler dirty')
+    if not isinstance(compiler, dict) or not compiler.get('executable_sha256') or not compiler.get('executable'):
+        problems.append('compiler identity 缺失')
+    elif os.path.isfile(compiler['executable']):
+        digest = hashlib.sha256(Path(compiler['executable']).read_bytes()).hexdigest()
+        if compiler['executable_sha256'] != digest:
+            problems.append('compiler executable hash 不符')
+    if not isinstance(manifest, dict) or not manifest.get('path') or not manifest.get('sha256') or (
+            manifest_sha256 is not None and manifest.get('sha256') != manifest_sha256):
+        problems.append('manifest sha256 不符')
+    if not isinstance(mode, dict) or mode.get('target') != target or (
+            mode.get('no_structured') is not no_structured) or (
+            mode.get('boundary') != ('from-flat' if no_structured else 'source')):
+        problems.append('mode/boundary 不符')
+    if not isinstance(chain, dict):
+        problems.append('toolchain identity 缺失')
+    else:
+        llvm = chain.get('llvm', {})
+        linker = chain.get('linker', {})
+        execution = chain.get('execution', {})
+        config = chain.get('target_config', {})
+        if not all(isinstance(v, dict) for v in (llvm, linker, execution, config)) or (
+                not all(isinstance(llvm.get(k), dict) and llvm[k].get('path') and
+                        llvm[k].get('version') for k in ('llvm_as', 'llc'))) or (
+                not all(linker.get(k) for k in ('path', 'version', 'dumpmachine'))) or (
+                not all(execution.get(k) for k in ('kind', 'runner', 'runner_version'))) or (
+                not all(config.get(k) for k in ('triple', 'probed'))):
+            problems.append('toolchain identity 缺失')
+        if target == 'riscv64' and isinstance(config, dict):
+            if not all(config.get('probed', {}).get(k) for k in ('dumpmachine', 'march', 'mabi')):
+                problems.append('RISC-V probe 不完整')
+        if target != 'x86' and isinstance(execution, dict) and (
+                execution.get('kind') != 'qemu' or execution.get('real_target_performance') is not False):
+            problems.append('QEMU performance label 不符')
     results = report.get('results')
     if not isinstance(results, list):
         return problems + ['缺少逐文件 results']
@@ -46,6 +93,14 @@ def validate(report, expected, target, runner_rc=0, required=490, excluded=50):
             continue
         key, status = row['key'], row.get('status')
         ids[key] += 1
+        if no_structured and not expected.get(key, False):
+            commands = row.get('compile_invocations')
+            if not isinstance(commands, list) or len(commands) != 2 or (
+                    not all(isinstance(cmd, list) for cmd in commands)) or (
+                    '--emit=flat-ir' not in commands[0]) or (
+                    '--from-flat' not in commands[1]) or (
+                    '--emit=llvm-ir' not in commands[1]):
+                problems.append('缺少两个独立 Flat compiler invocations: ' + key)
         if not isinstance(status, str):
             problems.append('非法状态: ' + key)
             continue
@@ -82,13 +137,19 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--manifest', required=True)
     parser.add_argument('--report', required=True)
+    parser.add_argument('--no-structured', action='store_true')
+    parser.add_argument('--toy-backend', action='store_true')
     parser.add_argument('--target', required=True, choices=['x86', 'aarch64', 'riscv64'])
     args = parser.parse_args()
     try:
         expected = manifest_cases(args.manifest)
         report = json.loads(Path(args.report).read_text())
-        problems = validate(report, expected, args.target)
-    except (OSError, ValueError, TypeError) as error:
+        revision = subprocess.check_output(['git', '-C', str(Path(__file__).resolve().parents[2]),
+                                            'rev-parse', 'HEAD'], text=True).strip()
+        digest = hashlib.sha256(Path(args.manifest).read_bytes()).hexdigest()
+        problems = validate(report, expected, args.target, revision=revision,
+                            manifest_sha256=digest, no_structured=args.no_structured)
+    except (OSError, ValueError, TypeError, subprocess.CalledProcessError) as error:
         print('FAIL: 执行证据无法读取: ' + str(error))
         return 1
     for problem in problems[:10]:

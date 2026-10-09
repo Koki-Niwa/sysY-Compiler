@@ -19,7 +19,7 @@ run_execution() {
   if bash "$TOOLS/run_tests.sh" --target "$target" --jobs "$(nproc)" \
        --json "$report" "$@" >"$log" 2>&1 && \
      python3 "$GATE/check_execution.py" --manifest "$TESTS/manifest.tsv" \
-       --report "$report" --target "$target" >>"$log" 2>&1; then
+       --report "$report" --target "$target" "$@" >>"$log" 2>&1; then
     printf -v "$flag" '%s' 1
     c_ok "$label：490 必需用例通过，50 清单内排除；逐文件证据完整"
   else
@@ -49,9 +49,7 @@ else
 fi
 
 hdr "E. 自研降级器契约验证"
-if [ "$CAN_IR" = 1 ] && [ -x "$TOOLS/toy_backend" ]; then
-  run_execution TOY_OK x86 "自研降级器" --toy-backend
-else
-  c_skip "toy backend 或 LLVM 发射尚未实现（S11b 必需）"
-fi
+# S11b must replace LLVM lowering with real toy-backend lowering.
+# A CLI that accepts --toy-backend while using llc must never set TOY_OK.
+c_skip "S11b 自研降级器尚未接入；不得设置 TOY_OK"
 return 0

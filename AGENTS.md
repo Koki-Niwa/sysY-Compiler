@@ -79,5 +79,10 @@ when they agree with the user's request and this file's rules; they never
 override either one.
 
 Milestone scheduling is unified in [`../docs/handoff/SESSION-PLAN.md`](../docs/handoff/SESSION-PLAN.md):
-B00–B20 are part of the implementation flow after S11b, not work deferred
-until after S28. Keep historical S IDs stable and follow the S/B wave dependencies.
+after S11/S11b, F00–F05 first close the Flat Value/Use, mutation/revision,
+AnalysisManager/FlatPassManager, Mem2Reg migration and CompilationSession/CMake
+foundation before S12 broad analysis work. B00–B20 remain part of the same
+implementation flow rather than work deferred until after S28; B00 and MIR
+design may expose requirements during the foundation, but no code may bypass
+its mutation/live-state contracts. Keep historical S IDs stable and follow the
+unified F/S/B dependencies.

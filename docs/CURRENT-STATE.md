@@ -18,22 +18,38 @@ unless it links a new run.
 The default product path now verifies the structured and flat modules before
 emitting LLVM IR; `--from-flat` accepts a serialized flat module. Unsupported
 emission fails without creating or overwriting the output file. The text is
-target-independent and does not include triple or data layout. `-O1` remains
-an option record and does not enable optimization.
+target-independent and does not include triple or data layout. `-O1` / `--optimize`
+explicitly enable the current O1 pipeline (today: mem2reg), while the default
+product path remains O0. `--mem2reg` stays an explicit focused switch for tests
+and diagnostics.
 
 ## Next milestone
 
 S07, the S08 verifier boundary, S09 mem2reg, and the S10a direct AST interpreter
-are implemented. The closeout findings in dynamic remainder lowering,
-FlatVerifier structural/type checks, S09's structural promotion evidence,
-S10a's generated-case oracle and durable evidence, and the stage dependency
-model are fixed. Fresh post-fix S08 and S09 gates and a revision-bound S10a
-runner all pass; exact results are recorded below.
+are implemented. S11-Preflight closed on clean compiler revision
+`708388751d0aac70fdd06c35f88af9452537a94f`: S08 passed 49/0 with 3 expected
+stage skips, S09 passed 52/0 with 2 expected skips, and revision-bound S10a
+passed 115/115 fixed cases twice plus 32/32 generated cases with seed
+`24176631846`. S08/S09 flat-vs-structured behavior on this revision is
+357 identical trajectories, 62 loop-count-only differences, 0 observable
+differences and 121 categorized skips.
 
-The next milestone is S11 target execution and its performance baseline. S10b
-target differential work waits for S11 and S11b.
-End-to-end execution and target-code runtime measurements remain unimplemented
-and must not be inferred from LLVM assembly validation.
+The next milestone is S11 target execution and its performance baseline. The
+existing S11 runner/gate infrastructure is reused, but live audit found two
+capability hazards that must not be allowed to false-green: `--no-structured`
+currently only sets an otherwise-unused option, and S11b's `--toy-backend`
+selection is not yet a real lowering path. S11 must make the no-structured
+evidence a real serialized Flat -> fresh `--from-flat` -> LLVM/target execution
+boundary and extend execution JSON with revision/toolchain/manifest identity.
+S11b must later route lowering through the toy backend rather than still using
+LLVM `llc`.
+
+After S11b, F00–F05 are mandatory before S12: complete Flat Value/Use,
+IRMutator/CFGEditor + live/revision tracking, revision-aware AnalysisManager,
+FlatPassManager/instrumentation, Mem2Reg migration, and CompilationSession/CMake
+component boundaries. S16b becomes the broad-optimization entry audit rather
+than the first implementation of pass/analysis management. S10b target
+differential still waits for S11/S11b evidence.
 
 ## Validation ledger
 
@@ -87,7 +103,7 @@ It reported **49 passed, 0 failed, 3 expected stage skips** (S09, S11 target
 execution, and S10a interpreter evidence are not required by this stage). The
 490-supported /
 50-tensor LLVM manifest gate passed; flat versus structured execution reported
-359 identical trajectories, 60 loop-count-only differences, 0 observable
+357 identical trajectories, 62 loop-count-only differences, 0 observable
 differences, and 121 categorized skips. The S08 public-boundary matrix passed
 44 invalid, 7 positive, and 8 mapped legacy cases. This supersedes the earlier
 49/0/2 and 28/7/8 historical baseline for the current source. The gate also
@@ -100,7 +116,7 @@ ulimit -v 8388608 && timeout 2400 bash compiler/tools/verify.sh --stage S09
 ```
 
 It reported **52 passed, 0 failed, 2 expected stage skips**. The promoted flat
-path ran across 540 files: **359 identical complete trajectories, 60
+path ran across 540 files: **357 identical complete trajectories, 62
 loop-count-only differences, 0 observable differences, and 121 categorized
 skips**. S08's public matrix again reported 28 invalid / 7 positive / 8 legacy
 cases in the historical baseline and 44 / 7 / 8 in this post-fix run; the same

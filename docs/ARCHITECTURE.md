@@ -105,18 +105,53 @@ terminators, then rebuilds CFG and use-def caches after commits. Its per-candida
 worklists use finite CFG data and linear temporary storage in blocks, accesses,
 and phi inputs; the stage gate supplies the process timeout and memory limits.
 Candidate declines do not roll back earlier successful candidates. The API can
-be disabled and can capture before/after dumps. The fresh S09 gate passed 51
+be disabled and can capture before/after dumps. The current revision-bound S09 gate passed 52
 checks with 0 failures and 2 expected stage skips; the [dated report](../../docs/audit/S09-FRESH-2026-09-30.md)
 records corpus counts and limits. This validates interpreter-observed behavior,
 not target runtime performance.
 
 Broad optimization and target backend consumption remain future work.
 
-Future analyses are contracts, not empty framework classes. Each must state its
-input, output, preserved/invalidated analyses, resource budget, diagnostics,
-failure atomicity, and before/after dump format before being wired into a
-pipeline. Future passes must support disabling and before/after dumps. A general
-pass manager is not implemented yet.
+Before S12/S17 work expands, the Flat IR foundation must be upgraded in the
+F00–F05 slices recorded in `../docs/handoff/SESSION-PLAN.md`. The current
+`operands + Instruction::users + rebuildUseDef/rebuildCFG` model remains a
+construction/debug mechanism, not the long-term mutation contract.
+
+The planned Flat optimization invariants are:
+
+- every `Value` kind has precise reverse `Use{user, operandIndex}` edges; a
+  repeated operand is multiple uses even when it has one distinct user;
+- optimization code mutates operands/instruction membership only through an
+  `IRMutator`, and CFG/phi structure only through a `CFGEditor`;
+- arena/central ownership is allowed for pointer stability, but owned objects
+  and live IR membership are distinct; erased/tombstoned instructions are not
+  traversed by normal analyses;
+- mutation records data-flow/CFG/memory/call/interface revisions. Analysis
+  cache validity is checked against those revisions; a pass's
+  `PreservedAnalyses` declaration cannot override a real incompatible mutation;
+- `rebuildUseDef()` / `rebuildCFG()` remain reader/builder finalization and
+  verifier/debug reconstruction tools, not the normal maintenance strategy for
+  optimization passes;
+- `replaceAllUsesWith`, conditional replacement, safe erase and phi incoming
+  edits are first-class operations with bidirectional verifier checks;
+- Argument becomes a real `Value`, not a Nop instruction; scalar constants
+  converge on canonical `(type,bits)` values even if stable dump syntax keeps
+  its historical textual form.
+
+Future analyses are contracts, not empty framework classes. F02/F03 establish
+the minimal revision-aware `AnalysisManager` and `FlatPassManager` before S12.
+Module/Function scopes land first; CGSCC/Loop scopes are added only when S12/S14
+provide real consumers. Analyses state their dependencies and are immutable
+results; the first implementation uses invalidate-and-lazy-recompute rather
+than complex incremental updaters. Future passes support disabling, verify-each,
+before/after dumps, timing/stats and bounded ablation. S09 Mem2Reg is migrated
+in F04 as the first formal FunctionPass.
+
+The future `analysis/` source layer is not considered implemented merely because
+an executable checker knows its name. When that directory first lands, the
+module graph in this document, `AGENTS.md`, `check_architecture.py` and negative
+architecture tests must change atomically; pre-authorized undocumented
+dependencies are not a supported contract.
 
 ## Validation commands
 

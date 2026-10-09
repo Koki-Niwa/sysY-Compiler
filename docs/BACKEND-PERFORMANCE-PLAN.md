@@ -82,25 +82,34 @@ GAS AsmPrinter
 不要等所有中端优化完成再开始正式后端。最低后端、MIR、ABI、RA 和实验基础应与中端分析/优化共同演进，
 否则中端 cost model 会长期对真实机器成本失明。
 
-### 2.1 Pass / Analysis 管理边界
+### 2.1 Flat mutation / Pass / Analysis 管理边界
 
-不要在后端启动时复制一个 mini-LLVM PassManager，但也不能继续依赖硬编码调用顺序和隐式缓存。S09 Mem2Reg 可作为第一个正式 `FlatPass`；在 S12–S16 分析基础成熟、S17 broad optimization 开始前，应收敛到小型 `FlatPassManager + AnalysisManager`。
+不要复制 mini-LLVM，但也不能让正式 analyses/backend 继续建立在“裸改 operand/CFG，最后全量 `rebuildUseDef/rebuildCFG`”的第一版容器模型上。S11b 后、S12 前执行 `SESSION-PLAN.md` 的 F00–F05 foundation：
 
-建议最小返回契约：
+1. F00：完整 `Value -> Use{Instruction*, operandIndex}`，Argument 独立 Value，canonical Constant，稳定文本协议与内存模型解耦；
+2. F01：`IRMutator + CFGEditor`、phi incoming 原子维护、owned/live instruction 分离、MutationSummary/IRRevision；
+3. F02：revision-aware、dependency-aware、fail-closed 的 AnalysisManager；
+4. F03：FlatPassManager/PassContext/instrumentation/verify-each/ablation；
+5. F04：S09 Mem2Reg 迁移为第一个正式 FunctionPass；
+6. F05：CompilationSession 与 CMake component boundary 收敛。
+
+`PreservedAnalyses` 只是 pass 的声明，真实 mutation/revision 是事实。二者冲突时必须强制 invalidate；第一版采用 invalidate → lazy recompute，宁可多失效，不允许 stale analysis。`changed` 也不由 pass 自报，而应从 mutation session 自动推导。PassResult 保留语义状态和统计，例如：
 
 ```cpp
+enum class PassStatus { NoChange, Applied, Declined, Failed };
+
 struct PassResult {
-    bool changed;
+    PassStatus status;
     PreservedAnalyses preserved;
     PassStats stats;
 };
 ```
 
-AnalysisManager 逐步拥有 CFG/DominatorTree/LoopInfo/Alias/SCEV/ValueFacts(Bounds/Range)/BPI/BFI；只有 DSE/load elimination 等真实 consumer 证明需要时，再增加轻量 `MemoryDefUse`/MemorySSA-like 结构，避免提前复制完整 LLVM MemorySSA。
+AnalysisManager 从真实 consumer 开始逐步拥有 CallGraph/FunctionSummary、DominatorTree/LoopInfo/Alias/SCEV/ValueFacts/BPI/BFI/Dependence。Module/Function scope 先落地；CGSCC/Loop scope 在 S12/S14 出现首个 consumer 时再增加，不预造万能 adaptor。只有 DSE/load elimination 等真实 consumer 证明需要时，才增加轻量 `MemoryDefUse`/MemorySSA-like 结构。
 
-Structured pass execution 与 Flat pass execution 分开管理，`FlattenCFG` 永远是显式 type-changing boundary，不把它伪装成普通同类型 pass。Backend/Machine pipeline 同样声明每阶段 input/output、preserved/invalidated analysis、预算和 failure atomicity。
+Structured pass execution 与 Flat pass execution 分开管理，`FlattenCFG` 永远是显式 type-changing boundary。Backend/Machine pipeline 同样声明每阶段 input/output、preserved/invalidated analysis、预算和 failure atomicity。B00 的只读 target/ABI audit 可与 foundation 交错；B01 MIR 设计也可提前，但正式 Flat→Backend integration 不得绕过 F01 mutation/live 契约。
 
-复杂 transform 后允许明确的 cleanup group（例如 SimplifyCFG/DCE/CSE），但 cleanup ownership 必须显式，不能靠“某个后续 pass 恰好会修”。
+复杂 transform 后允许明确 cleanup group（例如 SimplifyCFG/DCE/CSE），但 cleanup ownership 必须显式，不能靠“某个后续 pass 恰好会修”。
 
 
 ## 3. MIR：第一天就必须具备的表达能力
@@ -556,7 +565,7 @@ Cost model 记录 predicted vs actual backend metrics；dashboard 按 prediction
 
 ## 15. 开发里程碑（B 系列，接入现有 S00–S28 主线）
 
-B 系列与 S 系列编号独立只是为了职责和历史稳定性，执行流程并不独立。`docs/handoff/SESSION-PLAN.md` §1.3 是统一调度权威：S11b 后进入 W1，B00–B04 与 S12–S14b 共同推进；B05–B09 与 S15–S16b 建立 cost/analysis/RA 基础；B10–B15 为 S17–S20 提供真实机器反馈；B16–B18 与 S21–S25 共同决定 target-aware loop plans；B19/B20 与 S26 一起完成最终调优。S27/S28 冻结和交付的是完整自研编译器，而不是仍待实现的后端。
+B 系列与 S 系列编号独立只是为了职责和历史稳定性，执行流程并不独立。`docs/handoff/SESSION-PLAN.md` 是统一调度权威：S11b 后先进入 F00–F05 foundation；B00 的只读 target/ABI/benchmark audit 可在 foundation 期间穿插，B01 的 MIR 设计可提前，但 live Flat→Backend integration 要等 F01 mutation/live 契约。F00–F05 完整验收后，B00–B04 与 S12–S14b 共同推进；B05–B09 与 S15–S16b 建立 cost/analysis/RA 基础；B10–B15 为 S17–S20 提供真实机器反馈；B16–B18 与 S21–S25 共同决定 target-aware loop plans；B19/B20 与 S26 一起完成最终调优。S27/S28 冻结和交付的是完整自研编译器，而不是仍待实现的后端。
 
 | 阶段 | 目标 | 关键验收 |
 |---|---|---|

@@ -112,16 +112,31 @@ not target runtime performance.
 
 Broad optimization and target backend consumption remain future work.
 
-Before S12/S17 work expands, the Flat IR foundation must be upgraded in the
-F00–F05 slices recorded in `../docs/handoff/SESSION-PLAN.md`. F00 establishes exact operand/use relationships: every Value kind owns indexed
-Use occurrences, operand primitives update reverse edges incrementally, and
-Arguments and canonical scalar Constants are no longer Instructions.
-F00 does not yet establish live/owned mutation semantics. `rebuildUseDef()` is
-a builder/debug repair fallback, not a normal operand mutation path.
+The Flat IR foundation proceeds through the F00–F05 slices recorded in
+`../docs/handoff/SESSION-PLAN.md`. F00 is closed on accepted revision
+`f9425dc56b74b9312f6a336f334e5b347844e830`; F01 is the active next milestone.
+F00 establishes exact operand/use relationships: `Value` owns reverse
+`Use{Instruction*, operandIndex}` occurrences for Instructions, Arguments,
+Constants, GlobalAddr, and BlockAddr. `addOperand`, `setOperand`, and
+`clearOperands` maintain those edges incrementally and exactly. Argument and
+canonical scalar Constant are independent Value kinds, not Instructions.
+F00 does not establish live/owned mutation semantics. `rebuildUseDef()` is a
+builder/debug repair fallback, not a normal operand mutation path.
+
+The canonical scalar Constant identity is `(type pointer, raw bits)`: i32 uses
+the low 32 bits, i64 the full 64 bits, and f32 the IEEE raw 32-bit pattern.
+Thus i32 1 differs from i64 1, positive and negative zero differ, equal NaN
+payloads share identity, and different NaN payloads do not. A canonical
+Constant has no unique SourceLoc because it may be shared across functions;
+Flat dump `@line` presentation is per-function metadata. Object identity and
+textual presentation location are separate, preserving frozen dumps during
+canonicalization. The former Nop-Instruction parameter model and
+`Opcode::ConstantInt` / `Opcode::ConstantFP` payload model have zero active
+product references.
 
 The planned Flat optimization invariants are:
 
-- every `Value` kind has precise reverse `Use{user, operandIndex}` edges; a
+- every `Value` kind owns precise reverse `Use{user, operandIndex}` edges; a
   repeated operand is multiple uses even when it has one distinct user;
 - optimization code mutates operands/instruction membership only through an
   `IRMutator`, and CFG/phi structure only through a `CFGEditor`;

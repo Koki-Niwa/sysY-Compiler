@@ -81,12 +81,18 @@ manifest SHA256 is
 The toy backend is a correctness-only protocol consumer, not the formal
 backend and not a performance backend.
 
-The active next milestone is **F00 — complete first-class Flat Value/Use
-foundation**. The required order remains F00 → F01 → F02 → F03 → F04 → F05 →
-S12+. B00 read-only target/ABI audit and B01 MIR design may interleave only
-within their documented boundaries; live Flat→formal backend integration must
-not bypass the foundation. S10b remains separately dependent on S10a, S11, and
-S11b evidence.
+F00 is **CLOSED / PASS** on accepted compiler revision
+`f9425dc56b74b9312f6a336f334e5b347844e830`. Its first-class Value/Use model,
+independent Argument Values, canonical Constants, and exact operand/use
+maintenance preserve the frozen Flat text protocol byte-for-byte (490/490).
+The clean S09 gate passed with 0 observable differences; current-revision host
+execution passed x86 490/50/0/0 and no-structured 490/50/0/0 (PASS/SKIP/FAIL/
+TIMEOUT). The next active milestone is **F01 — IRMutator + CFGEditor +
+live/owned separation + revision**. The order remains F00 → F01 → F02 → F03 →
+F04 → F05 → S12+. B00 read-only target/ABI audit and B01 MIR design may
+interleave only within their documented boundaries; live Flat→formal backend
+integration must not bypass the foundation. S10b remains separately dependent
+on S10a, S11, and S11b evidence.
 
 ## Validation ledger
 

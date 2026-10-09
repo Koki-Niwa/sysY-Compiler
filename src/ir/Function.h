@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "ir/BasicBlock.h"
+#include "ir/Mutation.h"
 #include "ir/Type.h"
 #include "support/SourceLoc.h"
 
@@ -38,6 +39,7 @@ class Function {
       : parent_(parent), name_(std::move(name)), retTy_(retTy) {}
 
   Module* parent() const { return parent_; }
+  const IRRevision& revision() const { return revision_; }
   const std::string& name() const { return name_; }
   const Type* retType() const { return retTy_; }
   void setRetType(const Type* t) { retTy_ = t; }
@@ -99,6 +101,8 @@ class Function {
   size_t blockCount() const { return blocks_.size(); }
 
  private:
+  friend class IRMutator;
+  IRRevision revision_;
   Module* parent_;
   std::string name_;
   const Type* retTy_;

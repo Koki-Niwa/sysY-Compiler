@@ -71,8 +71,10 @@ void testStraightAndFloat() {
   Mem2RegOptions options;
   options.captureDumps = true;
   Mem2RegResult result = sysy::flat::runMem2Reg(module, options);
-  check(result.success && result.changed && result.promotedAllocas == 2,
-        "i32 and f32 allocas are promoted");
+  check(result.success && result.changed && result.promotedAllocas == 2 &&
+        module.revision().any != 0 && ints->revision().any != 0 &&
+        floats->revision().any != 0,
+        "i32 and f32 allocas promoted and revision facts recorded");
   check(ints->instCount() == 1 && floats->instCount() == 1,
         "straight-line loads, stores, and allocas are removed");
   check(ints->entry()->back()->operand(0) == seven &&
@@ -144,7 +146,8 @@ void testDiamondAndLoop() {
 
   Mem2RegOptions options;
   Mem2RegResult result = sysy::flat::runMem2Reg(module, options);
-  check(result.success && result.promotedAllocas == 3 && result.generatedPhis >= 2,
+  check(result.success && result.changed && module.revision().any != 0 &&
+        result.promotedAllocas == 3 && result.generatedPhis >= 2,
         "diamond and loop promotion creates reaching-definition phis");
   check(join->front()->op() == Opcode::Phi && head->front()->op() == Opcode::Phi,
         "phis are at block starts");
@@ -153,7 +156,7 @@ void testDiamondAndLoop() {
   Instruction* joinPhi = join->front();
   check(joinPhi->succ(0)->index() < joinPhi->succ(1)->index(),
         "diamond phi preserves canonical predecessor order");
-  check(valid(module), "diamond and loop output verifies with use-def rebuilt");
+  check(valid(module), "diamond and loop output verifies without optimizer rebuild");
 }
 
 void testInvalidInputIsAtomic() {
@@ -306,7 +309,8 @@ void testBranchOnlyInitAndDisabled() {
             result.beforeDump == result.afterDump && result.beforeDump == before,
         "disabled mode preserves identical before and after dumps");
   Mem2RegResult declined = sysy::flat::runMem2Reg(module);
-  check(declined.success && declined.promotedAllocas == 0 &&
+  check(declined.success && !declined.changed && declined.promotedAllocas == 0 &&
+            module.revision().any == 0 && f->revision().any == 0 &&
             sysy::flat::dumpModule(module) == before,
         "one-branch-only initialization is declined unchanged");
 }

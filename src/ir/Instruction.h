@@ -123,6 +123,8 @@ IPred invertIPred(IPred p);
 // ============================================================================
 // 2. Instruction
 // ============================================================================
+enum class InstructionLifecycle : uint8_t { Detached, Live, Tombstone };
+
 class Instruction : public Value {
  public:
   Instruction(Opcode op, const Type* resultTy, SourceLoc loc)
@@ -159,6 +161,9 @@ class Instruction : public Value {
   // 所属基本块（**唯一所有权**在 BasicBlock 的指令表里）。
   BasicBlock* parent() const { return parent_; }
   void setParent(BasicBlock* b) { parent_ = b; }
+  InstructionLifecycle lifecycle() const { return lifecycle_; }
+  // Construction primitives are untracked; only IRMutator/CFGEditor commit revisions.
+  void setLifecycle(InstructionLifecycle state) { lifecycle_ = state; }
 
   // 类型判别（**不引入 RTTI**：判别标准就是 opcode，O(1)）。
   bool isBinOp() const;
@@ -185,6 +190,7 @@ class Instruction : public Value {
   std::vector<Value*> operands_;
   std::vector<BasicBlock*> succs_;
   BasicBlock* parent_ = nullptr;
+  InstructionLifecycle lifecycle_ = InstructionLifecycle::Detached;
   IPred ipred_ = IPred::Eq;
   FPred fpred_ = FPred::Oeq;
   std::string callee_;

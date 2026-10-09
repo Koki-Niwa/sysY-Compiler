@@ -34,6 +34,7 @@
 #include "ir/BasicBlock.h"
 #include "ir/Function.h"
 #include "ir/Instruction.h"
+#include "ir/Mutation.h"
 #include "ir/Type.h"
 #include "support/SourceLoc.h"
 
@@ -127,7 +128,24 @@ class Module {
     if (i == nullptr) return;
     if (!ownedSet_.insert(i).second) return;
     insts_.push_back(i);
+    if (i->lifecycle() == InstructionLifecycle::Live && i->parent() != nullptr)
+      liveSet_.insert(i);
   }
+  bool ownsInstruction(const Instruction* i) const {
+    return ownedSet_.count(const_cast<Instruction*>(i)) != 0;
+  }
+  bool isLiveInstruction(const Instruction* i) const {
+    return liveSet_.count(const_cast<Instruction*>(i)) != 0;
+  }
+  bool isTombstone(const Instruction* i) const {
+    return ownsInstruction(i) && i->lifecycle() == InstructionLifecycle::Tombstone;
+  }
+  const std::vector<Instruction*>& ownedInstructions() const { return insts_; }
+  const std::unordered_set<Instruction*>& liveInstructions() const { return liveSet_; }
+  // Raw builder membership registration has no revision side effects.
+  void rawMarkLive(Instruction* i) { if (ownsInstruction(i)) liveSet_.insert(i); }
+  void rawMarkDetached(Instruction* i) { liveSet_.erase(i); }
+  const IRRevision& revision() const { return revision_; }
   // 【后置】一个新基本块（自动追加到 `fn` 的块表末尾并编号）。
   BasicBlock* createBlock(Function* fn, const std::string& name = std::string());
   // 【后置】一个新函数（追加到模块函数表末尾）。
@@ -186,6 +204,9 @@ class Module {
   uint64_t nextValueId() { return nextId_++; }
 
  private:
+  friend class IRMutator;
+  IRRevision revision_;
+  std::unordered_set<Instruction*> liveSet_;
   std::string sourceName_;
   std::vector<Instruction*> insts_;
   std::vector<BasicBlock*> blocks_;

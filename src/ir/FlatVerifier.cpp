@@ -53,6 +53,61 @@ std::vector<Violation> verifyFlatModule(const Module& m) {
     if (global != nullptr) moduleGlobals.insert(global);
   }
 
+  // F01 finalized-live inventory: ownership, physical membership and the
+  // explicit registry are three independently audited facts.
+  std::unordered_map<const Instruction*, size_t> occurrences;
+  for (Function* function : m.functions()) {
+    if (function == nullptr) continue;
+    for (BasicBlock* block : function->blocks()) {
+      if (block == nullptr) continue;
+      for (Instruction* inst : block->insts())
+        if (inst != nullptr) ++occurrences[inst];
+    }
+  }
+  for (const auto& item : occurrences) {
+    const Instruction* inst = item.first;
+    if (!m.ownsInstruction(inst) || !m.isLiveInstruction(inst) ||
+        inst->lifecycle() != InstructionLifecycle::Live ||
+        inst->parent() == nullptr || item.second != 1)
+      add("V1", std::string(), inst->loc(),
+          "live 指令的 ownership、registry 或 block membership 不一致");
+  }
+  for (Instruction* inst : m.liveInstructions()) {
+    if (inst == nullptr || !m.ownsInstruction(inst) ||
+        inst->lifecycle() != InstructionLifecycle::Live ||
+        occurrences[inst] != 1)
+      add("V1", std::string(), SourceLoc(),
+          "live registry 含非 live 或不在唯一基本块内的指令");
+  }
+  for (Instruction* inst : m.ownedInstructions()) {
+    if (inst == nullptr) continue;
+    if (inst->lifecycle() == InstructionLifecycle::Tombstone &&
+        (inst->parent() != nullptr || m.isLiveInstruction(inst) ||
+         inst->numOperands() != 0 || inst->numSuccs() != 0 || inst->hasUses()))
+      add("V1", std::string(), inst->loc(), "tombstone 未完全解除 live 关系");
+    if (inst->lifecycle() == InstructionLifecycle::Detached &&
+        (inst->parent() != nullptr || m.isLiveInstruction(inst) ||
+         occurrences.count(inst) != 0))
+      add("V1", std::string(), inst->loc(), "detached 指令仍在 live registry 或基本块");
+  }
+  // Audit canonical values even when the original defining instruction has
+  // disappeared from all blocks. A detached/tombstone user is never valid.
+  auto auditUses = [&](const Value* value) {
+    if (value == nullptr) return;
+    for (const Use& use : value->uses()) {
+      if (use.user == nullptr || !m.isLiveInstruction(use.user) ||
+          use.user->lifecycle() != InstructionLifecycle::Live) {
+        add("V1", std::string(), SourceLoc(),
+            "finalized Module 的 reverse Use 包含 detached/tombstone user");
+      }
+    }
+  };
+  for (Instruction* i : m.ownedInstructions()) auditUses(i);
+  for (Argument* a : m.arguments()) auditUses(a);
+  for (Constant* c : m.constants()) auditUses(c);
+  for (GlobalAddr* a : m.globalAddresses()) auditUses(a);
+  for (BlockAddr* a : m.blockAddresses()) auditUses(a);
+
   for (size_t fi = 0; fi < m.numFunctions(); ++fi) {
     Function* f = m.function(fi);
     if (f == nullptr) {
@@ -114,8 +169,10 @@ std::vector<Violation> verifyFlatModule(const Module& m) {
           add("V1", fname, instruction->loc(), "同一条指令重复出现在多个基本块中");
           structurallySafe = false;
         }
-        if (instruction->parent() != block) {
-          add("V1", fname, instruction->loc(), "指令归属基本块与指令表不一致");
+        if (instruction->parent() != block || !m.ownsInstruction(instruction) ||
+            !m.isLiveInstruction(instruction) ||
+            instruction->lifecycle() != InstructionLifecycle::Live) {
+          add("V1", fname, instruction->loc(), "指令归属、所有权或 live 状态不一致");
           structurallySafe = false;
         }
         if (!isRealOpcode(instruction->op())) {

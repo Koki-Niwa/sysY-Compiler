@@ -15,19 +15,24 @@ namespace flat {
 // BasicBlock
 // ============================================================================
 void BasicBlock::addInst(Instruction* inst) {
-  if (inst == nullptr) return;
+  if (inst == nullptr ||
+      inst->lifecycle() == InstructionLifecycle::Tombstone) return;
   inst->setParent(this);
+  inst->setLifecycle(InstructionLifecycle::Live);
   insts_.push_back(inst);
+  if (parent_ != nullptr && parent_->parent() != nullptr)
+    parent_->parent()->rawMarkLive(inst);
 }
 
 void BasicBlock::insertInst(size_t i, Instruction* inst) {
-  if (inst == nullptr) return;
+  if (inst == nullptr ||
+      inst->lifecycle() == InstructionLifecycle::Tombstone) return;
   inst->setParent(this);
-  if (i >= insts_.size()) {
-    insts_.push_back(inst);
-    return;
-  }
-  insts_.insert(insts_.begin() + static_cast<long>(i), inst);
+  inst->setLifecycle(InstructionLifecycle::Live);
+  if (i >= insts_.size()) insts_.push_back(inst);
+  else insts_.insert(insts_.begin() + static_cast<long>(i), inst);
+  if (parent_ != nullptr && parent_->parent() != nullptr)
+    parent_->parent()->rawMarkLive(inst);
 }
 
 bool BasicBlock::removeInst(Instruction* inst) {
@@ -35,6 +40,9 @@ bool BasicBlock::removeInst(Instruction* inst) {
     if (insts_[i] == inst) {
       insts_.erase(insts_.begin() + static_cast<long>(i));
       inst->setParent(nullptr);
+      if (parent_ != nullptr && parent_->parent() != nullptr)
+        parent_->parent()->rawMarkDetached(inst);
+      inst->setLifecycle(InstructionLifecycle::Detached);
       return true;
     }
   }
@@ -42,7 +50,12 @@ bool BasicBlock::removeInst(Instruction* inst) {
 }
 
 void BasicBlock::clearInsts() {
-  for (Instruction* i : insts_) i->setParent(nullptr);
+  for (Instruction* i : insts_) {
+    i->setParent(nullptr);
+    i->setLifecycle(InstructionLifecycle::Detached);
+    if (parent_ != nullptr && parent_->parent() != nullptr)
+      parent_->parent()->rawMarkDetached(i);
+  }
   insts_.clear();
 }
 
@@ -314,6 +327,8 @@ void Module::clear() {
   for (BlockAddr* a : blockAddrs_) delete a;
   blockAddrs_.clear();
   ownedSet_.clear();
+  liveSet_.clear();
+  // Lifetime reset is not a tracked optimizer mutation; a revision never rolls back.
   constants_.clear();
   addrOf_.clear();
 }

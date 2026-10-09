@@ -91,8 +91,8 @@ verification, loop normalization, flattening, dumps, and the S07 target-neutral
 LLVM text emitter. `IREmitter` owns the consumer interface; `LLVMTextEmitter`
 owns the LLVM dialect mapping and rejects an unsupported module atomically.
 
-S09 mem2reg requires a flat module whose CFG and use-def caches were rebuilt
-after prior structural edits and which passes `verifyFlatModule`. It may promote
+S09 mem2reg requires a finalized flat module whose CFG and use-def caches
+are consistent and which passes `verifyFlatModule`. It may promote
 only entry-block scalar `i32` and `f32` allocas whose uses are direct matching
 loads and stores and whose loads are definitely initialized along all
 entry-reachable paths. Escaped or derived pointers, aggregates, unsupported
@@ -101,7 +101,8 @@ analyzes before mutation, sorts predecessor/value pairs for generated phis, and
 keeps tentative phis unowned until the candidate plan is complete. Failed plans
 discard those phis without interning constants; successful candidates remove
 only their alloca/load/store operations. The pass preserves block order and
-terminators, then rebuilds CFG and use-def caches after commits. Its per-candidate
+terminators. In F01 it uses IRMutator/CFGEditor for every live mutation;
+operand reverse uses stay exact and the predecessor cache needs no rebuilding. Its per-candidate
 worklists use finite CFG data and linear temporary storage in blocks, accesses,
 and phi inputs; the stage gate supplies the process timeout and memory limits.
 Candidate declines do not roll back earlier successful candidates. The API can
@@ -114,14 +115,32 @@ Broad optimization and target backend consumption remain future work.
 
 The Flat IR foundation proceeds through the F00–F05 slices recorded in
 `../docs/handoff/SESSION-PLAN.md`. F00 is closed on accepted revision
-`f9425dc56b74b9312f6a336f334e5b347844e830`; F01 is the active next milestone.
+`f9425dc56b74b9312f6a336f334e5b347844e830`; F01 is active, with
+implementation present but not yet independently accepted.
 F00 establishes exact operand/use relationships: `Value` owns reverse
 `Use{Instruction*, operandIndex}` occurrences for Instructions, Arguments,
 Constants, GlobalAddr, and BlockAddr. `addOperand`, `setOperand`, and
 `clearOperands` maintain those edges incrementally and exactly. Argument and
 canonical scalar Constant are independent Value kinds, not Instructions.
-F00 does not establish live/owned mutation semantics. `rebuildUseDef()` is a
-builder/debug repair fallback, not a normal operand mutation path.
+F00 closed with exact Value/Use tracking; F01 adds tracked mutation and
+separates Module ownership from live BasicBlock membership. Instructions move
+through Detached → Live → Tombstone, with tombstones never reinserted. Owned
+but detached scratch is excluded from live analysis. `Module::liveInstructions()`
+tracks live, owned instructions independently of the ownership inventory.
+
+`IRMutator` is the normal optimizer authority for operands, RAUW, insert,
+safe erase and replace-and-erase. `CFGEditor` owns live Phi and CFG operations,
+including duplicate-successor-aware redirect/split, sorted predecessor caches,
+and matching sorted Phi incoming pairs with precise indexed Use edges. Each
+logical edit preflights the entire change, then commits one mutation fact; an
+unchanged/rejected operation never bumps a revision. `MutationSummary` derives
+operation counts, categories and affected Functions from successful edits only.
+`Module::revision()` and each `Function::revision()` carry monotonic category
+counters (DataFlow/CFG/Memory/Calls/Globals/Interface); shared Constant RAUW
+bumps all touched Functions without invalidating unrelated Functions. F02 will
+consume these facts but no analysis caches exist in F01. `rebuildUseDef()` and
+`rebuildCFG()` remain construction finalization, debug repair and negative-test
+recovery only, never normal optimizer mutation paths.
 
 The canonical scalar Constant identity is `(type pointer, raw bits)`: i32 uses
 the low 32 bits, i64 the full 64 bits, and f32 the IEEE raw 32-bit pattern.
@@ -134,7 +153,7 @@ canonicalization. The former Nop-Instruction parameter model and
 `Opcode::ConstantInt` / `Opcode::ConstantFP` payload model have zero active
 product references.
 
-The planned Flat optimization invariants are:
+The Flat optimization contracts (F01 present; F02+ cache/pass pieces future) are:
 
 - every `Value` kind owns precise reverse `Use{user, operandIndex}` edges; a
   repeated operand is multiple uses even when it has one distinct user;

@@ -6,10 +6,14 @@
 #include <unordered_set>
 #include "ir/FlatDump.h"
 #include "ir/FlatVerifier.h"
+#include "ir/IRMutator.h"
+#include "ir/CFGEditor.h"
+#include <cstdlib>
 #include "opt/Mem2RegInternal.h"
 namespace sysy {
 namespace flat {
 namespace {
+void requireMutation(bool ok) { if (!ok) std::abort(); }
 using mem2reg_detail::CandidatePlan;
 using mem2reg_detail::Reachability;
 using mem2reg_detail::computeNeedIn;
@@ -53,7 +57,7 @@ struct SSAPlan {
   std::unordered_map<Instruction*, Value*> foldedPhis;
   std::unordered_map<Instruction*, Value*> loadValues;
 };
-SSAPlan constructSSA(Module& module, const CandidatePlan& plan,
+SSAPlan constructSSA(Module& module, IRMutator& mutator, const CandidatePlan& plan,
                      const Reachability& reach, const std::vector<char>& needIn) {
   const Function& function = *plan.function;
   const size_t count = function.blockCount();
@@ -116,7 +120,7 @@ SSAPlan constructSSA(Module& module, const CandidatePlan& plan,
               reach.reachable[pred->index()]) {
             incoming = blockOut[pred->index()];
           }
-          phis[index]->setOperand(i, incoming);
+          requireMutation(mutator.setOperand(phis[index], i, incoming) != MutationResult::Rejected);
         }
       } else {
         bool hasReachablePred = false;
@@ -197,7 +201,7 @@ SSAPlan constructSSA(Module& module, const CandidatePlan& plan,
       if (phi->operand(i) == nullptr &&
           (pred == nullptr || pred->parent() != &function ||
            !reach.reachable[pred->index()])) {
-        phi->setOperand(i, getZero());
+        requireMutation(mutator.setOperand(phi, i, getZero()) != MutationResult::Rejected);
       }
     }
   }
@@ -227,7 +231,8 @@ SSAPlan constructSSA(Module& module, const CandidatePlan& plan,
   for (Instruction* phi : result.generatedPhis) {
     for (size_t i = 0; i < phi->numOperands(); ++i) {
       Value* replacement = canonicalValue(phi->operand(i), result.foldedPhis);
-      if (replacement != nullptr) phi->setOperand(i, replacement);
+      if (replacement != nullptr)
+        requireMutation(mutator.setOperand(phi, i, replacement) != MutationResult::Rejected);
     }
   }
   for (Instruction* instruction : plan.loads) {
@@ -238,27 +243,18 @@ SSAPlan constructSSA(Module& module, const CandidatePlan& plan,
   }
   return result;
 }
-void discardSSA(SSAPlan& ssa) {
-  for (Instruction* phi : ssa.generatedPhis) {
-    if (phi->parent() != nullptr) phi->parent()->removeInst(phi);
-    phi->clearOperands();
-    phi->clearSuccs();
-    delete phi;
-  }
+void discardSSA(IRMutator& mutator, SSAPlan& ssa) {
+  requireMutation(mutator.discardDetached(ssa.generatedPhis) != MutationResult::Rejected);
   ssa.generatedPhis.clear();
   ssa.phiBlocks.clear();
 }
-void materializeSSA(Module& module, SSAPlan& ssa) {
-  for (size_t i = 0; i < ssa.generatedPhis.size(); ++i) {
-    Instruction* phi = ssa.generatedPhis[i];
-    BasicBlock* block = ssa.phiBlocks[i];
-    module.ownInst(phi);
-    size_t position = 0;
-    while (position < block->size() && block->at(position)->op() == Opcode::Phi) ++position;
-    block->insertInst(position, phi);
-  }
+void materializeSSA(CFGEditor& cfg, const SSAPlan& ssa) {
+  std::vector<std::pair<BasicBlock*, Instruction*>> inserts;
+  for (size_t i = 0; i < ssa.generatedPhis.size(); ++i)
+    inserts.emplace_back(ssa.phiBlocks[i], ssa.generatedPhis[i]);
+  requireMutation(cfg.insertPhiBatch(inserts) != MutationResult::Rejected);
 }
-void replaceUses(Module& module, const SSAPlan& ssa) {
+void replaceUses(Module& module, IRMutator& mutator, const SSAPlan& ssa) {
   for (Function* function : module.functions()) {
     if (function == nullptr || function->isDeclaration()) continue;
     for (BasicBlock* block : function->blocks()) {
@@ -269,13 +265,14 @@ void replaceUses(Module& module, const SSAPlan& ssa) {
             Instruction* asInstruction = static_cast<Instruction*>(operand);
             const auto loadIt = ssa.loadValues.find(asInstruction);
             if (loadIt != ssa.loadValues.end()) {
-              instruction->setOperand(i, loadIt->second);
+              requireMutation(mutator.setOperand(instruction, i, loadIt->second) != MutationResult::Rejected);
               continue;
             }
             const auto phiIt = ssa.foldedPhis.find(asInstruction);
             if (phiIt != ssa.foldedPhis.end()) {
               Value* replacement = canonicalValue(phiIt->second, ssa.foldedPhis);
-              if (replacement != nullptr) instruction->setOperand(i, replacement);
+              if (replacement != nullptr)
+                requireMutation(mutator.setOperand(instruction, i, replacement) != MutationResult::Rejected);
             }
           }
         }
@@ -284,24 +281,19 @@ void replaceUses(Module& module, const SSAPlan& ssa) {
   }
 }
 void removePromotedInstructions(const CandidatePlan& plan, const SSAPlan& ssa,
+                                IRMutator& mutator, CFGEditor& cfg,
                                 Mem2RegResult& result) {
   for (Instruction* load : plan.loads) {
-    if (load->parent() != nullptr) load->parent()->removeInst(load);
-    load->clearOperands();
+    requireMutation(mutator.eraseInstruction(load) == MutationResult::Applied);
     ++result.removedLoads;
   }
   for (Instruction* store : plan.stores) {
-    if (store->parent() != nullptr) store->parent()->removeInst(store);
-    store->clearOperands();
+    requireMutation(mutator.eraseInstruction(store) == MutationResult::Applied);
     ++result.removedStores;
   }
-  if (plan.allocaInst->parent() != nullptr) plan.allocaInst->parent()->removeInst(plan.allocaInst);
-  plan.allocaInst->clearOperands();
+  requireMutation(mutator.eraseInstruction(plan.allocaInst) == MutationResult::Applied);
   for (const auto& item : ssa.foldedPhis) {
-    Instruction* phi = item.first;
-    if (phi->parent() != nullptr) phi->parent()->removeInst(phi);
-    phi->clearOperands();
-    phi->clearSuccs();
+    requireMutation(cfg.erasePhi(item.first) == MutationResult::Applied);
     ++result.eliminatedPhis;
   }
   result.generatedPhis += ssa.generatedPhis.size();
@@ -341,6 +333,8 @@ Mem2RegResult runMem2Reg(Module& module, const Mem2RegOptions& options) {
     return result;
   }
 
+  IRMutator mutator(module);
+  CFGEditor cfg(mutator);
   std::vector<std::pair<Function*, Instruction*>> allocas;
   for (Function* function : module.functions()) {
     if (function == nullptr || function->isDeclaration()) continue;
@@ -360,32 +354,29 @@ Mem2RegResult runMem2Reg(Module& module, const Mem2RegOptions& options) {
         prepareCandidate(function, allocaInst, plan, reason)) {
       const Reachability reach = findReachable(*function);
       const std::vector<char> needIn = computeNeedIn(plan, reach);
-      SSAPlan ssa = constructSSA(module, plan, reach, needIn);
+      SSAPlan ssa = constructSSA(module, mutator, plan, reach, needIn);
       if (!ssa.complete) {
-        discardSSA(ssa);
+        discardSSA(mutator, ssa);
         result.candidates.push_back(
             Mem2RegCandidate{function->name(), allocaInst->loc(), false,
                              Mem2RegSkipReason::UnresolvedDefinition});
-        module.rebuildUseDef();
         continue;
       }
-      materializeSSA(module, ssa);
-      replaceUses(module, ssa);
-      removePromotedInstructions(plan, ssa, result);
+      materializeSSA(cfg, ssa);
+      replaceUses(module, mutator, ssa);
+      removePromotedInstructions(plan, ssa, mutator, cfg, result);
       ++result.promotedAllocas;
       result.candidates.push_back(
           Mem2RegCandidate{function->name(), allocaInst->loc(), true,
                            Mem2RegSkipReason::Count});
-      module.rebuildUseDef();
       continue;
     }
     result.candidates.push_back(
         Mem2RegCandidate{function->name(), allocaInst->loc(), false, reason});
   }
 
-  module.rebuildCFG();
-  module.rebuildUseDef();
-  result.changed = result.promotedAllocas != 0;
+  result.changed = mutator.summary().changed();
+  requireMutation(result.changed == (result.promotedAllocas != 0));
   result.status = result.changed ? Mem2RegStatus::Changed : Mem2RegStatus::NoChange;
   if (options.captureDumps) result.afterDump = dumpModule(module);
   return result;

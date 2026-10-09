@@ -7,6 +7,7 @@
 #include "ir/FlatDump.h"
 #include "ir/FlatVerifier.h"
 #include "ir/Module.h"
+#include "ir/IRMutator.h"
 #include "support/Diagnostic.h"
 
 using namespace sysy::flat;
@@ -15,6 +16,9 @@ int failures=0;
 void check(bool ok, const char* name) {
   std::printf("%s: %s\n", ok ? "PASS" : "FAIL", name);
   if (!ok) ++failures;
+}
+bool rauw(IRMutator& mut, Value* from, Value* to) {
+  return mut.replaceAllUsesWith(from, to) != MutationResult::Rejected;
 }
 bool edge(const Value* v, const Instruction* u, size_t index) {
   size_t n=0;
@@ -31,6 +35,7 @@ void valuesAndRAUW() {
   static_assert(!std::is_base_of<Instruction, Argument>::value,
                 "Argument must not be an Instruction");
   Module m;
+  IRMutator mut(m);
   const Type* t=typePool().i32();
   const Type* i64=typePool().i64();
   Function* f=m.createFunction("values",t);
@@ -42,13 +47,13 @@ void valuesAndRAUW() {
   check(x->useCount()==3 && edge(x,y,0) && edge(x,y,1) && edge(x,z,0),
         "repeated operand multiplicity and multiple users");
   Instruction* replacement=own(m,b,createBin(Opcode::Add,c,c,{}));
-  check(x->replaceAllUsesWith(replacement) && x->useCount()==0 &&
+  check(rauw(mut,x,replacement) && x->useCount()==0 &&
         edge(replacement,y,0) && edge(replacement,y,1) &&
         edge(replacement,z,0), "RAUW exact repeated indexes");
-  check(replacement->replaceAllUsesWith(replacement) &&
+  check(rauw(mut,replacement,replacement) &&
         replacement->useCount()==3, "self RAUW no duplicate use");
-  check(!replacement->replaceAllUsesWith(nullptr) &&
-        !replacement->replaceAllUsesWith(m.getIntConst(i64,1)) &&
+  check(!rauw(mut,replacement,nullptr) &&
+        !rauw(mut,replacement,m.getIntConst(i64,1)) &&
         edge(replacement,y,0), "RAUW null and type mismatch atomic");
   y->setOperand(0,c);
   check(edge(c,y,0) && !edge(replacement,y,0) && edge(replacement,y,1),
@@ -59,7 +64,7 @@ void valuesAndRAUW() {
   Instruction* ret=own(m,b,createRet(c,{}));
   check(edge(c,y,0) && edge(c,y,1) && edge(c,ret,0),
         "Constant has three exact use occurrences");
-  check(c->replaceAllUsesWith(replacement) && !c->hasUses() &&
+  check(rauw(mut,c,replacement) && !c->hasUses() &&
         edge(replacement,ret,0), "Constant RAUW to instruction");
   y->clearOperands();
   check(y->numOperands()==0 && !edge(replacement,y,0) &&
@@ -74,7 +79,7 @@ void valuesAndRAUW() {
   auto& reverse=const_cast<std::vector<Use>&>(replacement->uses());
   reverse.push_back(Use{ret,static_cast<size_t>(999)});
   const size_t oldCount=replacement->useCount();
-  check(!replacement->replaceAllUsesWith(c) && replacement->useCount()==oldCount &&
+  check(!rauw(mut,replacement,c) && replacement->useCount()==oldCount &&
         ret->operand(0)==replacement, "stale reverse-use RAUW failure is atomic");
   m.rebuildUseDef();
   check(replacement->useCount()==7 && edge(replacement,x,0) &&
@@ -82,17 +87,18 @@ void valuesAndRAUW() {
         edge(replacement,ret,0), "repair rebuildUseDef recovers indexed uses");
   auto& duplicate=const_cast<std::vector<Use>&>(replacement->uses());
   duplicate.push_back(Use{z,0});
-  check(!replacement->replaceAllUsesWith(c) && z->operand(0)==replacement,
+  check(!rauw(mut,replacement,c) && z->operand(0)==replacement,
         "duplicate reverse edge causes atomic RAUW failure");
   m.rebuildUseDef();
-  check(replacement->replaceAllUsesWith(c) && !replacement->hasUses() &&
+  check(rauw(mut,replacement,c) && !replacement->hasUses() &&
         edge(c,ret,0) && edge(c,z,0), "RAUW Instruction to Constant");
   Constant* two=m.getIntConst(t,2);
-  check(c->replaceAllUsesWith(two) && !c->hasUses() && edge(two,ret,0),
+  check(rauw(mut,c,two) && !c->hasUses() && edge(two,ret,0),
         "RAUW Constant to Constant");
 }
 void argumentsAndGlobals() {
   Module m;
+  IRMutator mut(m);
   const Type* t=typePool().i32();
   Function* f=m.createFunction("arguments",t);
   BasicBlock* b=m.createBlock(f);
@@ -105,7 +111,7 @@ void argumentsAndGlobals() {
   check(arg->useCount()==3 && edge(arg,addi,0) && edge(arg,addi,1) &&
         edge(arg,ret,0), "Argument duplicate uses and direct return");
   Constant* c=m.getIntConst(t,10);
-  check(arg->replaceAllUsesWith(c) && !arg->hasUses() &&
+  check(rauw(mut,arg,c) && !arg->hasUses() &&
         c->useCount()==3, "Argument RAUW to canonical Constant");
   GlobalVariable* gv=m.createGlobal("glob",t);
   GlobalAddr* ga=m.globalAddr(gv);
@@ -114,14 +120,14 @@ void argumentsAndGlobals() {
   check(ga->useCount()==2 && edge(ga,load,0) && edge(ga,store,1),
         "GlobalAddr exact use indexes");
   Instruction* ptr=own(m,b,createAlloca(t,{}));
-  check(ga->replaceAllUsesWith(ptr) && !ga->hasUses() &&
+  check(rauw(mut,ga,ptr) && !ga->hasUses() &&
         edge(ptr,load,0) && edge(ptr,store,1),
         "GlobalAddr RAUW to pointer value");
   BlockAddr* ba=m.createBlockAddr(typePool().ptrTo(t),b);
   Instruction* baUse=own(m,b,createLoad(t,ba,{}));
   check(ba->isBlockAddr() && edge(ba,baUse,0),
         "BlockAddr tracks a structural operand use");
-  check(ba->replaceAllUsesWith(ptr) && !ba->hasUses() &&
+  check(rauw(mut,ba,ptr) && !ba->hasUses() &&
         edge(ptr,baUse,0), "BlockAddr RAUW to typed pointer");
   m.rebuildUseDef();
   check(ptr->useCount()==3 && c->useCount()==4,

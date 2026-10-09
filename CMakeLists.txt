@@ -62,6 +62,8 @@ add_executable(compiler
   src/ir/Instruction.cpp
   src/ir/Value.cpp
   src/ir/IR.cpp
+  src/ir/IRMutator.cpp
+  src/ir/CFGEditor.cpp
   src/ir/FlatDump.cpp
   src/ir/FlatReader.cpp
   src/ir/LLVMTextEmitter.cpp

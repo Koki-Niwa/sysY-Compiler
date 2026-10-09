@@ -40,7 +40,7 @@ TESTS=(
   "test_initlowering|${SUPPORT[*]} ${FRONTEND[*]}"
   "test_const_remainder|${SUPPORT[*]} ${FRONTEND[*]}"
   "test_structured|${SUPPORT[*]} ${FRONTEND[*]}" "test_loopnorm|${SUPPORT[*]} ${FRONTEND[*]}"
-  "test_flat|${SUPPORT[*]} ${FRONTEND[*]}" "test_value_use|${SUPPORT[*]} ${FRONTEND[*]}" "test_flat_f2i|${SUPPORT[*]} ${FRONTEND[*]}" "test_flat_dead_phi|${SUPPORT[*]} ${FRONTEND[*]}" "test_llvm_emitter|${SUPPORT[*]} ${FRONTEND[*]}"
+  "test_flat|${SUPPORT[*]} ${FRONTEND[*]}" "test_ir_mutation|${SUPPORT[*]} ${FRONTEND[*]}" "test_value_use|${SUPPORT[*]} ${FRONTEND[*]}" "test_flat_f2i|${SUPPORT[*]} ${FRONTEND[*]}" "test_flat_dead_phi|${SUPPORT[*]} ${FRONTEND[*]}" "test_llvm_emitter|${SUPPORT[*]} ${FRONTEND[*]}"
   "test_mem2reg|${SUPPORT[*]} ${FRONTEND[*]} ${OPT[*]}")
 
 BENCHES=(

@@ -38,12 +38,14 @@ class Value {
   const std::vector<Use>& uses() const { return uses_; }
   size_t useCount() const { return uses_.size(); }
   bool hasUses() const { return !uses_.empty(); }
-  bool replaceAllUsesWith(Value* replacement);
   // Legacy builder-local ordering tag. FlatDump never uses this for numbering.
   uint64_t id() const { return id_; }
   void setId(uint64_t value) { id_ = value; }
 
  private:
+  friend class IRMutator;
+  // Internal-only F00 primitive; optimizer RAUW is IRMutator.
+  bool replaceAllUsesWith(Value* replacement);
   friend class Instruction;
   friend class Module;
   void addUse(Instruction* user, size_t index);

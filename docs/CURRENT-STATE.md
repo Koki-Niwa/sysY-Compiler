@@ -25,38 +25,51 @@ and diagnostics.
 
 ## Next milestone
 
-S07, the S08 verifier boundary, S09 mem2reg, and the S10a direct AST interpreter
-are implemented. S11-Preflight closed on clean compiler revision
-`708388751d0aac70fdd06c35f88af9452537a94f`: S08 passed 49/0 with 3 expected
-stage skips, S09 passed 52/0 with 2 expected skips, and revision-bound S10a
-passed 115/115 fixed cases twice plus 32/32 generated cases with seed
-`24176631846`. S08/S09 flat-vs-structured behavior on this revision is
-357 identical trajectories, 62 loop-count-only differences, 0 observable
-differences and 121 categorized skips.
+**S11 closed** on clean compiler revision
+`52018acfa087ec8bc97ae20d4570290857c2cd3b`, after final independent clean
+revalidation. Its clean S09 prerequisite on the same revision passed 52 checks,
+0 failed, with 2 expected skips: 490 supported cases and 50 tensor expected
+rejects; 357 exact trajectories, 62 loop-count-only, 0 observable differences,
+and 121 categorized skips. FlatVerifier reported 44 invalid, 7 positive, and 8
+legacy cases. Mem2Reg changed the fixture from 1 alloca / 1 load / 3 stores to
+0 / 0 / 0 and 1 phi; the forged-stat negative control, S08_OK, and MEM2REG_OK
+all passed.
 
-The next milestone is S11 target execution and its performance baseline. The
-existing S11 runner/gate infrastructure is reused, but live audit found two
-capability hazards that must not be allowed to false-green: `--no-structured`
-currently only sets an otherwise-unused option, and S11b's `--toy-backend`
-selection is not yet a real lowering path. S11 must make the no-structured
-evidence a real serialized Flat -> fresh `--from-flat` -> LLVM/target execution
-boundary and extend execution JSON with revision/toolchain/manifest identity.
-S11b must later route lowering through the toy backend rather than still using
-LLVM `llc`.
+Four revision-bound S11 evidence reports each passed 490 supported cases, skipped
+the 50 expected tensor cases, and had 0 failures and 0 timeouts: x86,
+AArch64, RV64, and no-structured. All report schema version 1, compiler revision
+`52018acfa087ec8bc97ae20d4570290857c2cd3b`, and `compiler.dirty = false`. The
+compiler artifact `/home/koki1/try/compiler/build/compiler` has SHA256
+`7e771737703d8f3e685c9dbe15aa3478c9fc88182ffaa33ad6670ef2e5acf8c3`; the
+manifest `/home/koki1/try/tests/manifest.tsv` has SHA256
+`143fdf139c21782575ab1899f312d82ca4b6ceace4a39329636f54035b443a35`.
 
-S11 correctness runners use a target-specific per-case timeout: x86 native is
-60 seconds, while AArch64 and RV64 QEMU are 300 seconds. The timeout is recorded
-as `measurement.case_timeout_seconds` in each execution report; this is a
-correctness hang limit, not a performance threshold or target-runtime claim.
-`verify.sh` obtains its private workspace with `mktemp -d` under `TMPDIR` (or
-`/tmp`) so concurrent PID namespaces cannot collide.
+The no-structured evidence follows the real boundary: source → `--emit=flat-ir`
+→ serialized Flat → fresh compiler process → `--from-flat --emit=llvm-ir` →
+LLVM target lowering → execution (`mode.no_structured = true`,
+`mode.boundary = from-flat`). S11 target timeouts are x86 native 60 seconds per
+case (including no-structured x86), AArch64 QEMU 300, and RV64 QEMU 300; these
+are correctness hang limits, not performance thresholds. AArch64 and RV64
+evidence uses QEMU 8.2.2 proxy metrics (`metric_scope = qemu-proxy`, triple
+`aarch64-linux-gnu` and `riscv64-linux-gnu`, respectively; RV64 dumpmachine is
+`riscv64-linux-gnu`, with `rv64imafdc_zicsr_zifencei` / `lp64d`). It is not real
+target performance: there are no real Cortex-A53 or BOOM v3 measurements.
 
-After S11b, F00–F05 are mandatory before S12: complete Flat Value/Use,
-IRMutator/CFGEditor + live/revision tracking, revision-aware AnalysisManager,
-FlatPassManager/instrumentation, Mem2Reg migration, and CompilationSession/CMake
-component boundaries. S16b becomes the broad-optimization entry audit rather
-than the first implementation of pass/analysis management. S10b target
-differential still waits for S11/S11b evidence.
+The S11 measurement protocol supports warmup, repeats, raw samples, median,
+MAD, comparison reports, per-case speedup, geomean, and worst/best case.
+Focused smoke proves that this plumbing works; its two O0/O1 cases are not
+optimization-gain evidence. S11 also fixed the `verify.sh /tmp/verify_$$`
+workspace collision by using `mktemp -d .../sysy_verify.XXXXXXXX`, and raised
+QEMU correctness timeouts to 300 seconds to avoid killing valid long cases.
+
+The active next milestone is **S11b toy/self-built lowering contract**. It must
+actually replace LLVM `llc` as the lowering provider for target-neutral `.ll`
+and validate x86 correctness execution; accepting a `--toy-backend` flag alone
+does not meet the contract. This is protocol-consumer validation, not the
+formal performance backend. After S11b, F00–F05 remain mandatory before S12.
+F00–F05 → S12+ ordering remains in force; B00 read-only design and B01 MIR
+design may interleave as planned, but live Flat→formal backend integration must
+not bypass the foundation. S10b target differential waits for S11/S11b evidence.
 
 ## Validation ledger
 

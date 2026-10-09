@@ -1,20 +1,43 @@
 # S11b Toy Backend Contract Findings
 
-**Scope:** independent C++17 consumer of current LLVMTextEmitter text and
-x86-64 SysV GAS lowering; this is neither a formal backend nor proof of
-490-case coverage. Evidence: executable handcrafted IR fixtures, a real 14-case
-manifest smoke (functional, h_functional, performance), and 3-case focused
-normal S11, no-structured S11 and unavailable-LLVM toy regression.
+**Status: S11b closed.** Accepted compiler revision:
+`7648f928fcc4cd45dad66a2b97ce5bfe22875a01`.
+The independent long validation completed the full manifest scope: **490
+required PASS / 50 tensor SKIP / 0 FAIL / 0 TIMEOUT**, with `format_diff = 127`.
+All format-difference cases passed the frozen C1–C3 output-matching contract.
+The per-case timeout was 600 seconds for correctness hang detection, not a
+performance threshold. This document records the evidence and its limits; the
+toy backend remains a correctness-only contract consumer, not a formal backend.
 
-An earlier, separate 11-case toy smoke at only 30 seconds per case yielded
-10 PASS and one 30-second timeout (final_arm/performance/h-1-01). That case
-has not been retested at the S11b 600-second correctness timeout. **Full 490
-required / 50 tensor excluded evidence: NOT RUN.**
+The earlier 11-case smoke at a 30-second timeout had one timeout. That history
+is superseded for S11b acceptance by the independent 600-second full run.
+S11b did not modify `src/**`; the compiler binary remains identical to the
+frozen S11 binary. Full-corpus evidence is now available for the supported
+manifest cases, with the observations below scoped to those emitted `.ll`
+files. Handwritten executable fixtures remain the evidence for behavior not
+exercised by the corpus.
+
+The self-built provider was `/home/koki1/try/compiler/build/toy_backend`,
+SHA256 `ca1abc57312fcb352f7968d1841297b466664c5df4829fe69d84eea12e5b3063`,
+version `self-built-toy-x86 1`. Its dynamic dependencies contain **NO LLVM
+library dependency**. The provider audit found 490/490 toy lower invocations,
+0 llc lowering, 0 clang/gcc lowering, and 0 compiler invocations containing
+`--toy-backend`. A focused no-LLVM smoke passed; fake-llc, wrong-path, and
+wrong-hash reports were all rejected by the formal checker. Runner clang is
+still used for assembling/linking generated `.s` with `runtime/sylib.c`; that
+is not lowering-provider use.
+
+The manifest SHA256 was
+`143fdf139c21782575ab1899f312d82ca4b6ceace4a39329636f54035b443a35`.
+The corpus evidence is x86 source-boundary execution through the self-built
+toy provider. It is correctness evidence only: it does not establish real
+target hardware performance or accurate peak RSS.
 
 Authority: actual LLVMTextEmitter > current BACKEND-HANDOFF > current
-runner/gate > historical S11b prompt. Product src/** was not changed.
-CORPUS_OBSERVED means only the short focused cases; FIXTURE_CONFIRMED
-means executable handwritten IR. Neither is full-corpus CONFIRMED.
+runner/gate > historical S11b prompt. Product `src/**` was not changed.
+`FULL_CORPUS_CONFIRMED` means observed or validated over all 490 supported
+corpus cases; it does not imply unobserved constructs were dynamically tested.
+`FIXTURE_CONFIRMED` means executable handwritten IR fixtures.
 
 ## The twelve contract points
 
@@ -25,7 +48,7 @@ means executable handwritten IR. Neither is full-corpus CONFIRMED.
 - Actual observation: emitter switch emits these forms; focused manifest
   parsed and executed. Parser rejects unknown opcodes instead of guessing.
 - Toy consumer requirement: no general LLVM fallback, no silently ignored syntax.
-- **Status: CORPUS_OBSERVED** (not all 490).
+- **Status: FULL_CORPUS_CONFIRMED** (490 supported cases).
 
 ### 2. Entry-block alloca
 
@@ -33,15 +56,16 @@ means executable handwritten IR. Neither is full-corpus CONFIRMED.
 - Actual observation: emitter formats alloca with alignment; fixtures and
   selected real tests ran. Parser rejects an alloca in any non-entry block.
 - Toy requirement: fixed entry-time frame allocation, no dynamic RSP per inst.
-- **Status: CORPUS_OBSERVED** (partial).
+- **Status: FULL_CORPUS_CONFIRMED** (490 supported cases).
 
 ### 3. Phi placement and contiguity
 
 - Contract claim: all phi instructions form a contiguous block prefix.
-- Observation: executable loop fixture with three phis; malformed late phi
-  rejected. No exhaustive real optimized-phi census was performed.
+- Observation: 256 corpus cases contain phi instructions; full-corpus parsing,
+  validation, and execution passed. The malformed late-phi negative fixture is
+  also rejected.
 - Toy requirement: parse only the prefix; fail closed for later phi.
-- **Status: FIXTURE_CONFIRMED**.
+- **Status: FULL_CORPUS_CONFIRMED**.
 
 ### 4. Phi predecessor completeness
 
@@ -50,7 +74,8 @@ means executable handwritten IR. Neither is full-corpus CONFIRMED.
   missing inputs. A phi-cycle test executes correctly.
 - Toy requirement: all incoming sources first copied to edge temporaries,
   then to destination SSA slots, including conditional edges.
-- **Status: FIXTURE_CONFIRMED**.
+- **Status: FULL_CORPUS_CONFIRMED**; corpus phis passed predecessor-set
+  validation and execution, alongside the phi-cycle executable fixture.
 
 ### 5. GEP / index / address width
 
@@ -62,16 +87,16 @@ means executable handwritten IR. Neither is full-corpus CONFIRMED.
   Array and byte-offset GEP executable fixtures passed.
 - Toy requirement: typed scale, not a hardcoded 4; reject inbounds, i32
   indices and additional indices outside current subset.
-- **Status: CORPUS_OBSERVED** for focused GEP behavior.
-  **CONTRACT_DOC_STALE** for historical requirement that all indices
-  originate in sext.
+- **Status: FULL_CORPUS_CONFIRMED** (396 cases contain GEP).
+  **CONTRACT_DOC_STALE** for the historical requirement that all indices
+  originate in sext; literal zero indices are valid.
 
 ### 6. Inbounds absence
 
 - Contract claim: no inbounds GEP.
 - Observation: emitter does not append inbounds; negative parser test rejects it.
 - Toy requirement: exact shape, no speculative flags.
-- **Status: CORPUS_OBSERVED** (selected cases only).
+- **Status: FULL_CORPUS_CONFIRMED** (490 supported cases; `inbounds` count 0).
 
 ### 7. nsw/nuw/fast absence
 
@@ -79,7 +104,8 @@ means executable handwritten IR. Neither is full-corpus CONFIRMED.
 - Observation: emitter writes bare opcodes. Negative nsw and fast fixtures
   reject unsupported syntax.
 - Toy requirement: signed/unsigned 32-bit arithmetic wraps; no implicit flags.
-- **Status: CORPUS_OBSERVED** (selected cases only).
+- **Status: FULL_CORPUS_CONFIRMED** (490 supported cases; all three modifier
+  counts are 0).
 
 ### 8. Zero-global representation
 
@@ -90,7 +116,9 @@ means executable handwritten IR. Neither is full-corpus CONFIRMED.
   one .zero 1650000000 under .bss and a tiny assembly file.
 - Toy requirement: no GB-sized buffers or expansion; .long words, sparse gaps,
   emitted alignment.
-- **Status: FIXTURE_CONFIRMED**, actual emitter text inspected.
+- **Status: FIXTURE_CONFIRMED**, actual emitter text inspected; the full corpus
+  contained 1,128 `zeroinitializer` global definitions and all required cases
+  passed, but sparse BSS behavior remains fixture-confirmed.
 
 ### 9. Array parameters as ptr
 
@@ -98,7 +126,8 @@ means executable handwritten IR. Neither is full-corpus CONFIRMED.
 - Observation: emitter's llvmType prints ptr; parser accepts ptr params,
   disallows aggregate-valued params.
 - Toy requirement: 64-bit SysV pointer ABI, no SysY AST shape metadata.
-- **Status: FIXTURE_CONFIRMED** (no exhaustive manifest param census).
+- **Status: FULL_CORPUS_CONFIRMED**; 152 corpus cases contain ptr function
+  parameters (744 ptr parameters observed).
 
 ### 10. FCmp predicates
 
@@ -106,7 +135,11 @@ means executable handwritten IR. Neither is full-corpus CONFIRMED.
 - Observation: toy parses only these predicates; executable tests check
   NaN unordered une versus ordered oeq and +0/-0 equality.
 - Toy requirement: parity handling after ucomiss; not plain != for une.
-- **Status: FIXTURE_CONFIRMED**.
+- Actual corpus predicates: `oge` 116, `ogt` 41, `ole` 23, `olt` 194,
+  `une` 138. `oeq` was not dynamically observed in the 490-case corpus; its
+  behavior remains executable-fixture confirmed.
+- **Status: FULL_CORPUS_CONFIRMED** for the observed predicate closure, with
+  the `oeq` limitation above.
 
 ### 11. i64 use boundary
 
@@ -123,7 +156,21 @@ means executable handwritten IR. Neither is full-corpus CONFIRMED.
 - Contract claim: defined main returns i32.
 - Observation: parser enforces this; short manifest smoke observed it.
 - Toy requirement: return via eax per x86 SysV.
-- **Status: CORPUS_OBSERVED** (selected cases only).
+- **Status: FULL_CORPUS_CONFIRMED** (490/490 supported `case.ll` files define
+  `main` as returning i32).
+
+## Full-corpus observations
+
+The independent run scanned **490 `case.ll` files**. Feature-bearing case
+counts were: phi 256, alloca 476, GEP 396, i64 396, memcpy 14, and memset 44.
+The observed `fcmp` predicates were `oge` 116, `ogt` 41, `ole` 23, `olt` 194,
+and `une` 138. There were 0 `putf` calls and 0 external globals. Occurrences
+of `inbounds`, `nsw`, `nuw`, and `fast` were all 0.
+
+Main opcode occurrence highlights: `load` 59,467; `store` 38,235; `br` 41,741;
+`icmp` 33,618; `getelementptr` 31,027; `sext` 30,983; `zext` 20,329;
+`alloca` 17,593; `add` 21,022; `mul` 12,771; `sub` 10,627; `phi` 1,657;
+`fcmp` 512; `select` 174.
 
 ## Coverage, limitations, and anomalies
 
@@ -141,9 +188,13 @@ means executable handwritten IR. Neither is full-corpus CONFIRMED.
 - Provider evidence: exact toy lowering invocation, realpath and SHA256,
   version, lowering mode and negative checker controls guard against fake
   toy flags or actual llc lowering.
-- **VIOLATION**: none conclusively established by focused evidence.
-  This does not establish complete protocol closure.
-- **UNEXERCISED**: full 490/50 S11b gate, 600-second threshold for the
-  timed-out performance case, exhaustive dynamic opcode/predicate coverage,
-  actual-corpus putf, all external globals, and accurate peak RSS measurement.
-  These require independent long validation and must not be reported as PASS.
+- **VIOLATION**: none found in the accepted full-corpus run or focused controls.
+- **CONTRACT_DOC_STALE**:
+  - historical requirement that every GEP index originate from `sext`;
+  - historical narrow four-context description of i64 use.
+- **UNEXERCISED**:
+  - actual-corpus `putf` call path (0 calls observed);
+  - actual-corpus external-global path (0 external globals observed);
+  - real target hardware performance;
+  - accurate peak RSS measurement.
+  Parser/unit fixtures do not upgrade these corpus paths to dynamically confirmed.

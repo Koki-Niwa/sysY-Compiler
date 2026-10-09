@@ -62,14 +62,31 @@ optimization-gain evidence. S11 also fixed the `verify.sh /tmp/verify_$$`
 workspace collision by using `mktemp -d .../sysy_verify.XXXXXXXX`, and raised
 QEMU correctness timeouts to 300 seconds to avoid killing valid long cases.
 
-The active next milestone is **S11b toy/self-built lowering contract**. It must
-actually replace LLVM `llc` as the lowering provider for target-neutral `.ll`
-and validate x86 correctness execution; accepting a `--toy-backend` flag alone
-does not meet the contract. This is protocol-consumer validation, not the
-formal performance backend. After S11b, F00–F05 remain mandatory before S12.
-F00–F05 → S12+ ordering remains in force; B00 read-only design and B01 MIR
-design may interleave as planned, but live Flat→formal backend integration must
-not bypass the foundation. S10b target differential waits for S11/S11b evidence.
+S11b is closed on revision
+`7648f928fcc4cd45dad66a2b97ce5bfe22875a01`. Its independent long validation
+reported 490 required PASS, 50 tensor SKIP, 0 FAIL, 0 TIMEOUT, with
+`format_diff = 127`; those format-difference cases passed the frozen C1–C3
+output-matching contract. The 600-second per-case timeout was a correctness
+hang limit, not a performance threshold.
+
+The self-built toy lowering provider was audited on all 490 required rows:
+490 toy lower invocations, 0 llc, 0 clang/gcc lowering, and 0 compiler
+invocations containing `--toy-backend`. The no-LLVM focused smoke passed, as
+did fake-llc, wrong-provider-path, and wrong-provider-hash negative controls.
+S11b made no `src/**` changes. `build/compiler` remains byte-identical to the
+frozen S11 binary (SHA256
+`7e771737703d8f3e685c9dbe15aa3478c9fc88182ffaa33ad6670ef2e5acf8c3`); the
+manifest SHA256 is
+`143fdf139c21782575ab1899f312d82ca4b6ceace4a39329636f54035b443a35`.
+The toy backend is a correctness-only protocol consumer, not the formal
+backend and not a performance backend.
+
+The active next milestone is **F00 — complete first-class Flat Value/Use
+foundation**. The required order remains F00 → F01 → F02 → F03 → F04 → F05 →
+S12+. B00 read-only target/ABI audit and B01 MIR design may interleave only
+within their documented boundaries; live Flat→formal backend integration must
+not bypass the foundation. S10b remains separately dependent on S10a, S11, and
+S11b evidence.
 
 ## Validation ledger
 

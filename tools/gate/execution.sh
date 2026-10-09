@@ -14,12 +14,16 @@ fi
 
 run_execution() {
   local flag="$1" target="$2" label="$3"
+  case "$flag" in
+    E2E_X86|E2E_AARCH64|E2E_RISCV64|E2E_NO_STRUCT) ;;
+    *) c_bad "未知 execution evidence flag: $flag"; return 2 ;;
+  esac
   shift 3
   local log="$WORK/$flag.log" report="$WORK/$flag.json"
   if bash "$TOOLS/run_tests.sh" --target "$target" --jobs "$(nproc)" \
        --json "$report" "$@" >"$log" 2>&1 && \
      python3 "$GATE/check_execution.py" --manifest "$TESTS/manifest.tsv" \
-       --report "$report" --target "$target" "$@" >>"$log" 2>&1; then
+       --report "$report" --target "$target" --compiler "$COMPILER" "$@" >>"$log" 2>&1; then
     printf -v "$flag" '%s' 1
     c_ok "$label：490 必需用例通过，50 清单内排除；逐文件证据完整"
   else

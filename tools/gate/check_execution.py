@@ -28,7 +28,7 @@ def manifest_cases(path):
     return expected
 
 
-def validate(report, expected, target, runner_rc=0, required=490, excluded=50, revision=None, manifest_sha256=None, no_structured=False):
+def validate(report, expected, target, runner_rc=0, required=490, excluded=50, revision=None, manifest_sha256=None, no_structured=False, expected_compiler=None, expected_manifest=None):
     problems = []
     if runner_rc != 0:
         problems.append('运行器退出非零')
@@ -52,13 +52,23 @@ def validate(report, expected, target, runner_rc=0, required=490, excluded=50, r
         problems.append('compiler dirty')
     if not isinstance(compiler, dict) or not compiler.get('executable_sha256') or not compiler.get('executable'):
         problems.append('compiler identity 缺失')
-    elif os.path.isfile(compiler['executable']):
-        digest = hashlib.sha256(Path(compiler['executable']).read_bytes()).hexdigest()
-        if compiler['executable_sha256'] != digest:
-            problems.append('compiler executable hash 不符')
+    else:
+        executable = compiler['executable']
+        path = expected_compiler or executable
+        if not os.path.isfile(path) or not os.access(path, os.X_OK):
+            problems.append('expected compiler 不存在或不可执行')
+        elif os.path.realpath(executable) != os.path.realpath(path):
+            problems.append('compiler executable path 不符')
+        else:
+            digest = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+            if compiler['executable_sha256'] != digest:
+                problems.append('compiler executable hash 不符')
     if not isinstance(manifest, dict) or not manifest.get('path') or not manifest.get('sha256') or (
             manifest_sha256 is not None and manifest.get('sha256') != manifest_sha256):
         problems.append('manifest sha256 不符')
+    if expected_manifest is not None and (not isinstance(manifest, dict) or
+            not manifest.get('path') or os.path.realpath(manifest['path']) != os.path.realpath(expected_manifest)):
+        problems.append('manifest path 不符')
     if not isinstance(mode, dict) or mode.get('target') != target or (
             mode.get('no_structured') is not no_structured) or (
             mode.get('boundary') != ('from-flat' if no_structured else 'source')):
@@ -136,6 +146,7 @@ def validate(report, expected, target, runner_rc=0, required=490, excluded=50, r
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--manifest', required=True)
+    parser.add_argument('--compiler', required=True)
     parser.add_argument('--report', required=True)
     parser.add_argument('--no-structured', action='store_true')
     parser.add_argument('--toy-backend', action='store_true')
@@ -148,7 +159,8 @@ def main():
                                             'rev-parse', 'HEAD'], text=True).strip()
         digest = hashlib.sha256(Path(args.manifest).read_bytes()).hexdigest()
         problems = validate(report, expected, args.target, revision=revision,
-                            manifest_sha256=digest, no_structured=args.no_structured)
+                            manifest_sha256=digest, no_structured=args.no_structured,
+                            expected_compiler=args.compiler, expected_manifest=args.manifest)
     except (OSError, ValueError, TypeError, subprocess.CalledProcessError) as error:
         print('FAIL: 执行证据无法读取: ' + str(error))
         return 1

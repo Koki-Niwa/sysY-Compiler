@@ -21,7 +21,8 @@ def report_for(expected, all_skip=False):
     skipped = sum(r['status'] == 'SKIP' for r in rows)
     return {'schema_version': 1, 'target': 'x86',
             'compiler': {'revision': 'fixture', 'dirty': False,
-                         'executable': '/fixture/compiler', 'executable_sha256': 'hash'},
+                         'executable': sys.executable,
+                         'executable_sha256': hashlib.sha256(Path(sys.executable).read_bytes()).hexdigest()},
             'manifest': {'path': '/fixture/manifest', 'sha256': 'hash'},
             'mode': {'target': 'x86', 'optimize': False,
                      'no_structured': False, 'boundary': 'source'},
@@ -149,6 +150,7 @@ exit 2
                         data['compiler']['revision'] = subprocess.check_output(
                             ['git', '-C', str(GATE.parents[1]), 'rev-parse', 'HEAD'],
                             text=True).strip()
+                        data['manifest']['path'] = str(root / 'manifest.tsv')
                         data['manifest']['sha256'] = hashlib.sha256(
                             (root / 'manifest.tsv').read_bytes()).hexdigest()
                         fixture.write_text(json.dumps(data))
@@ -161,10 +163,40 @@ printf 'RESULT %s %s\n' "${!FLAG}" "$FAIL"
 '''
                         env = dict(os.environ, GATE=str(GATE), TOOLS=str(root), TESTS=str(root),
                                    WORK=str(root), FIXTURE=str(fixture), FLAG=flag)
+                        env['COMPILER'] = sys.executable
                         result = subprocess.run(['bash', '-c', command], env=env,
                                                 capture_output=True, text=True, timeout=20)
                         self.assertEqual(0, result.returncode, result.stderr)
-                        self.assertIn('RESULT 0 1' if all_skip else 'RESULT 1 0', result.stdout)
+                        self.assertIn('RESULT 0 1' if all_skip or flag == 'TOY_OK' else 'RESULT 1 0', result.stdout)
+
+    def test_compiler_and_manifest_path_negative_controls(self):
+        with tempfile.TemporaryDirectory() as directory:
+            compiler = Path(directory) / 'compiler'
+            compiler.write_text('#!/bin/sh\nexit 0\n')
+            compiler.chmod(0o755)
+            manifest = Path(directory) / 'manifest.tsv'
+            manifest.write_text('fixture')
+            data = copy.deepcopy(self.report)
+            data['compiler']['executable'] = str(compiler)
+            data['compiler']['executable_sha256'] = hashlib.sha256(compiler.read_bytes()).hexdigest()
+            data['manifest']['path'] = str(manifest)
+            common = {'expected_compiler': str(compiler), 'expected_manifest': str(manifest)}
+            self.assertEqual([], self.errors(data, **common))
+            for kind in ('missing', 'different', 'hash', 'manifest'):
+                broken = copy.deepcopy(data)
+                if kind == 'missing':
+                    broken['compiler']['executable'] = str(Path(directory) / 'missing')
+                elif kind == 'different':
+                    other = Path(directory) / 'other'
+                    other.write_bytes(compiler.read_bytes())
+                    other.chmod(0o755)
+                    broken['compiler']['executable'] = str(other)
+                elif kind == 'hash':
+                    broken['compiler']['executable_sha256'] = 'wrong'
+                else:
+                    broken['manifest']['path'] = str(Path(directory) / 'other-manifest')
+                with self.subTest(kind=kind):
+                    self.assertTrue(self.errors(broken, **common))
 
     def test_s07_stage_does_not_run_s11_execution_gate(self):
         command = '''

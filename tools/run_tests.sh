@@ -12,6 +12,7 @@
 #   --target <t>          x86（默认）| aarch64 | riscv64
 #   --jobs <n>            并行数（默认 nproc）
 #   --timeout <sec>       单用例超时（默认 60；性能用例建议 300）
+#   --warmup <N> / --repeat <N>  预热次数默认 0、测量次数默认 1
 #   --no-structured       Flat 序列化 → 新编译器进程 --from-flat → LLVM
 #   --toy-backend         走自研降级器而非 clang（S11b 之后才有效）
 #   --verbose             打印每个用例的命令
@@ -57,8 +58,7 @@ JOBS="$(nproc 2>/dev/null || echo 4)"
 TIMEOUT="60"
 CASE=""; SUITE=""; CATEGORY=""; FILTER=""
 VERBOSE=0; KEEP_GOING=0; DRY=0; NO_STRUCT=0; TOY=0; OPT=0; JSON=""; WORK=""
-COMPILE_TIMEOUT="60"
-
+COMPILE_TIMEOUT="60"; WARMUP=0; REPEAT=1
 while [ $# -gt 0 ]; do
   case "$1" in
     --compiler)  COMPILER="$2"; shift 2 ;;
@@ -70,6 +70,7 @@ while [ $# -gt 0 ]; do
     --target)    TARGET="$2"; shift 2 ;;
     --jobs|-j)   JOBS="$2"; shift 2 ;;
     --timeout)   TIMEOUT="$2"; shift 2 ;;
+    --warmup|--repeat) if [ "$1" = --warmup ]; then WARMUP="$2"; else REPEAT="$2"; fi; shift 2 ;;
     --compile-timeout) COMPILE_TIMEOUT="$2"; shift 2 ;;
     --work)      WORK="$2"; shift 2 ;;
     --json)      JSON="$2"; shift 2 ;;
@@ -84,7 +85,7 @@ while [ $# -gt 0 ]; do
     *) echo "run_tests.sh: 未知参数 '$1'（--help 看用法）" >&2; exit 2 ;;
   esac
 done
-
+[[ "$WARMUP" =~ ^[0-9]+$ && "$REPEAT" =~ ^[0-9]+$ && "$REPEAT" -ge 1 ]] || { echo 'run_tests.sh: --warmup 必须 >= 0 且 --repeat 必须 >= 1' >&2; exit 2; }
 case "$TARGET" in
   x86|aarch64|riscv64) ;;
   *) echo "run_tests.sh: 未知 target '$TARGET'（x86 | aarch64 | riscv64）" >&2; exit 2 ;;
@@ -102,7 +103,7 @@ esac
 
 ARGS=( "$HERE/_run_tests.py"
        --compiler "$COMPILER" --manifest "$MANIFEST" --root "$ROOT"
-       --target "$TARGET" --jobs "$JOBS" --timeout "$TIMEOUT"
+       --target "$TARGET" --jobs "$JOBS" --timeout "$TIMEOUT" --warmup "$WARMUP" --repeat "$REPEAT"
        --compile-timeout "$COMPILE_TIMEOUT" )
 [ -n "$CASE" ]     && ARGS+=( --case "$CASE" )
 [ -n "$SUITE" ]    && ARGS+=( --suite "$SUITE" )
@@ -117,7 +118,6 @@ ARGS=( "$HERE/_run_tests.py"
 [ "$NO_STRUCT" = 1 ]  && ARGS+=( --no-structured )
 [ "$TOY" = 1 ]        && ARGS+=( --toy-backend )
 [ "$OPT" = 1 ]        && ARGS+=( --optimize )
-# --no-structured 由 Python runner 实现真正的跨进程 Flat 边界。
-# --toy-backend 仍只是兼容参数；S11b 必须替换 LLVM llc 降级。
+# --no-structured 是跨进程 Flat 边界；--toy-backend 仍兼容但非 S11b 真实降级。
 
 exec "$PY" "${ARGS[@]}"

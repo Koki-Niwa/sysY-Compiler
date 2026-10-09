@@ -15,7 +15,10 @@ def sha256_file(path):
 
 
 def probe(command):
-    result = subprocess.run(command, capture_output=True, timeout=15)
+    try:
+        result = subprocess.run(command, capture_output=True, timeout=15)
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError("toolchain probe failed: %r: timeout" % (command,)) from error
     rc, out, err, timed_out = (result.returncode, result.stdout,
                               result.stderr.decode("utf-8", "replace"), False)
     if rc != 0 or timed_out:
@@ -52,7 +55,7 @@ def evidence(args, TARGETS):
     config["probed"] = facts
     return {
         "schema_version": 1,
-        "compiler": {"revision": revision, "dirty": dirty, "executable": args.compiler,
+        "compiler": {"revision": revision, "dirty": dirty, "executable": os.path.realpath(args.compiler),
                      "executable_sha256": sha256_file(args.compiler)},
         "manifest": {"path": os.path.realpath(args.manifest),
                      "sha256": sha256_file(args.manifest)},
@@ -67,10 +70,16 @@ def evidence(args, TARGETS):
             "execution": {"kind": "qemu" if target["runner"] else "native",
                           "runner": runner, "runner_version": probe([runner, "--version"]).splitlines()[0]
                           if target["runner"] else probe([runner, "-r"]),
-                          "real_target_performance": not bool(target["runner"]),
-                          "not_real_target_performance": bool(target["runner"])},
+                          "real_target_performance": False,
+                          "not_real_target_performance": True},
             "target_config": config
         },
         "measurement": {"peak_rss": "unavailable",
+                        "warmup_count": args.warmup, "repeat_count": args.repeat,
+                        "statistic": "median", "spread_kind": "mad",
+                        "sample_quality": "correctness/diagnostic single-sample" if args.repeat == 1 else "repeated diagnostic",
+                        "metric_scope": "qemu-proxy" if target["runner"] else "native-host",
+                        "target_hardware_runtime": "unmeasured" if target["runner"] else "not-product-target",
+                        "real_target_performance": False,
                         "qemu_timing": "proxy diagnostic" if target["runner"] else "native"}
     }

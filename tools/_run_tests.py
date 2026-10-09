@@ -23,6 +23,7 @@ import concurrent.futures
 import fnmatch
 import json
 import os
+import statistics
 import shutil
 import subprocess
 import sys
@@ -228,6 +229,9 @@ def evaluate(case, args, workdir, llvm_bin):
         "asm_bytes": None, "executable_bytes": None,
         "source_sha256": None, "stdin_sha256": None, "expected_sha256": None,
         "compile_invocations": [],
+        "run_protocol": {"warmup_count": args.warmup, "repeat_count": args.repeat},
+        "run_samples_seconds": [], "run_median_seconds": None,
+        "run_spread": {"kind": "mad", "seconds": None},
     }
     t0 = time.monotonic()
     try:
@@ -357,51 +361,51 @@ def evaluate(case, args, workdir, llvm_bin):
             return res
 
         res["executable_bytes"] = os.path.getsize(os.path.join(workdir, "prog"))
-        # ④ 运行（超时 = 单用例预算；性能用例由调用方 --timeout 放宽）
-        run = tgt["runner"] + ["./prog"]
-        started = time.monotonic()
-        rc, out, err, to = run_cmd(run, workdir, stdin_path=stdin_path,
-                                   timeout=args.timeout)
-        res["run_seconds"] = time.monotonic() - started
-        if to:
-            res["status"] = TIMEOUT
-            res["detail"] = "运行超过 %ss" % args.timeout
-            return res
-        if rc is None:
-            res["status"] = BUILD_FAIL
-            res["detail"] = "无法运行产物: " + tail(err)
-            return res
-        if rc < 0:
-            res["status"] = WRONG_OUTPUT
-            res["detail"] = "程序被信号杀死 (signal %d)" % (-rc)
-            return res
-
-        got_path = os.path.join(workdir, "got.bin")
-        with open(got_path, "wb") as f:
-            f.write(out)
-
-        # ⑤ 比对：C0 优先；C1–C3 命中算通过但标注格式差异
+        # ④ 每次预热和测量均独立启动进程、重放相同输入并校验结果。
         if exp == "-":
             res["status"] = SKIP
             res["skip_reason"] = "用例没有 .out（无法判定）"
             return res
-        want = open(exp, "rb").read()
-        hit = match(want, out, rc)
-        if hit < 0:
-            res["status"] = WRONG_OUTPUT
-            cands = candidate_expectations(out, rc)
-            res["detail"] = ("期望 %d 字节 / 实际候选 C0 %d 字节（退出码 %s）\n"
-                             "  首处差异: %s\n  期望前 %d 字节: %r\n  实际前 %d 字节: %r"
-                             % (len(want), len(cands[0]), rc,
-                                _first_diff(want, cands[0]),
-                                min(80, len(want)), want[:80],
-                                min(80, len(cands[0])), cands[0][:80]))
-            return res
-        if hit != 0:
+        with open(exp, "rb") as expected_stream:
+            want = expected_stream.read()
+        run = tgt["runner"] + ["./prog"]
+        hits = []
+        for index in range(args.warmup + args.repeat):
+            phase = "warmup" if index < args.warmup else "measured"
+            started = time.monotonic()
+            rc, out, err, to = run_cmd(run, workdir, stdin_path=stdin_path,
+                                       timeout=args.timeout)
+            duration = time.monotonic() - started
+            if to:
+                res["status"] = TIMEOUT
+                res["detail"] = "%s run %d 超过 %ss" % (phase, index + 1, args.timeout)
+                return res
+            if rc is None:
+                res["status"] = BUILD_FAIL
+                res["detail"] = "%s 无法运行: %s" % (phase, tail(err))
+                return res
+            if rc < 0:
+                res["status"] = WRONG_OUTPUT
+                res["detail"] = "%s 程序被信号杀死 (signal %d)" % (phase, -rc)
+                return res
+            hit = match(want, out, rc)
+            if hit < 0:
+                res["status"] = WRONG_OUTPUT
+                res["detail"] = "%s run %d 输出/退出状态错误 (rc=%s)" % (phase, index + 1, rc)
+                return res
+            hits.append(hit)
+            if index >= args.warmup:
+                res["run_samples_seconds"].append(duration)
+        samples = res["run_samples_seconds"]
+        median = statistics.median(samples)
+        res["run_median_seconds"] = median
+        res["run_seconds"] = median  # 旧报表字段保持兼容，定义为测量中位数
+        res["run_spread"]["seconds"] = statistics.median(abs(t - median) for t in samples)
+        if any(hit != 0 for hit in hits):
+            hit = next(h for h in hits if h != 0)
             res["status"] = FORMAT_WARN if hit == 1 else FORMAT_NOTE
             res["candidate"] = CANDIDATE_NAMES[hit]
-            res["detail"] = ("按 %s 命中（C0 不中 → .out 格式差异，非语义错误）"
-                             % CANDIDATE_NAMES[hit])
+            res["detail"] = "按 %s 命中（C0 不中 → .out 格式差异）" % CANDIDATE_NAMES[hit]
         return res
     finally:
         res["seconds"] = time.monotonic() - t0
@@ -439,6 +443,8 @@ def build_argparser():
     p.add_argument("--target", default="x86", choices=sorted(TARGETS))
     p.add_argument("--jobs", type=int, default=os.cpu_count() or 1)
     p.add_argument("--timeout", type=float, default=60.0)
+    p.add_argument("--warmup", type=int, default=0)
+    p.add_argument("--repeat", type=int, default=1)
     p.add_argument("--compile-timeout", type=float, default=60.0)
     p.add_argument("--optimize", action="store_true", help="-O1")
     p.add_argument("--no-structured", action="store_true")
@@ -468,6 +474,9 @@ def find_llvm_bin(explicit):
 
 def main(argv=None):
     args = build_argparser().parse_args(argv)
+    if args.warmup < 0 or args.repeat < 1:
+        sys.stderr.write('[ERROR] --warmup >= 0, --repeat >= 1 required\n')
+        return 2
     args.root = os.path.abspath(args.root)
     args.compiler = os.path.abspath(args.compiler)
     if args.manifest is None:

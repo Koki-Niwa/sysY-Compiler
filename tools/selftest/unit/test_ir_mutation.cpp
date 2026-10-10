@@ -249,7 +249,8 @@ void splitDuplicate(bool duplicate) {
   auto result=cfg.splitEdge(a,0);
   BasicBlock* mid=result.block;
   bool ok=result.result==MutationResult::Applied && mid!=nullptr &&
-      mid->parent()==f && a->terminator()->succ(0)==mid &&
+      mid->parent()==f && mid->ownerModule()==&m && m.ownsBlock(mid) &&
+      a->terminator()->succ(0)==mid &&
       mid->terminator()!=nullptr && mid->terminator()->succ(0)==b &&
       mid->numPreds()==1 && mid->pred(0)==a;
   if (duplicate) {
@@ -270,6 +271,63 @@ void splitDuplicate(bool duplicate) {
         f->revision().any==1,"split atomic mutation summary/revision");
   valid(m,duplicate?"duplicate split verifier":"simple split verifier");
 }
+void blockOwnership() {
+  Module a, b;
+  const Type* t = typePool().i32();
+  Function* fb = b.createFunction("owned", t);
+  BasicBlock* owned = b.createBlock(fb);
+  check(owned != nullptr && owned->ownerModule() == &b &&
+        b.ownsBlock(owned) && !a.ownsBlock(owned) &&
+        owned->parent() == fb && fb->blockCount() == 1 &&
+        std::count(fb->blocks().begin(), fb->blocks().end(), owned) == 1,
+        "same-Module createBlock has unique lifetime and structural ownership");
+  add(b, owned, createRet(b.getIntConst(t, 1), {}));
+  valid(a, "empty Module is valid");
+  valid(b, "normal owned BasicBlock verifier");
+
+  const size_t before = fb->blockCount();
+  const auto aRev = a.revision().any, bRev = b.revision().any;
+  const auto fRev = fb->revision().any, bErrors = verifyFlatModule(b).size();
+  Function unregistered(&a, "unregistered", t);
+  check(a.createBlock(fb) == nullptr &&
+        a.createBlock(nullptr) == nullptr &&
+        a.createBlock(&unregistered) == nullptr &&
+        fb->blockCount() == before && a.ownedBlocks().empty() &&
+        !a.ownsBlock(owned) && b.ownsBlock(owned) &&
+        a.revision().any == aRev && b.revision().any == bRev &&
+        fb->revision().any == fRev,
+        "foreign/null/unregistered Function createBlock rejects before allocation");
+  check(verifyFlatModule(a).empty() && verifyFlatModule(b).size() == bErrors,
+        "foreign Module rejection preserves both verifier states");
+  check(!fb->addBlock(owned) && fb->blockCount() == before &&
+        owned->index() == 0, "duplicate addBlock rejected without mutation");
+
+  auto hasV1 = [&](const Module& module) {
+    for (const auto& error : verifyFlatModule(module))
+      if (error.invariant == "V1") return true;
+    return false;
+  };
+  BasicBlock* rogue = new BasicBlock(fb, static_cast<uint32_t>(before));
+  check(rogue->ownerModule() == nullptr && !fb->addBlock(rogue) &&
+        fb->blockCount() == before, "raw unowned BasicBlock addBlock rejected");
+  // Explicit test-only corruption bypasses the const API, not product factories.
+  auto& table = const_cast<std::vector<BasicBlock*>&>(fb->blocks());
+  table.push_back(rogue);
+  check(hasV1(b), "verifier independently rejects raw unowned block injection");
+  table.pop_back();
+  delete rogue;
+  valid(b, "raw corruption cleanup restores module");
+
+  table.push_back(owned);
+  check(hasV1(b), "verifier rejects duplicate block table membership");
+  table.pop_back();
+  check(fb->removeBlock(owned) && hasV1(b),
+        "verifier detects orphan Module-owned block");
+  check(fb->addBlock(owned) && owned->index() == 0,
+        "orphan test restores original block membership");
+  valid(b, "orphan and duplicate recovery verifier");
+}
+
 void verifierLifecycles() {
   Module m;
   const Type* t=typePool().i32();
@@ -469,6 +527,7 @@ void provenanceCFG() {
 int main() {
   operandsAndLifecycle();
   provenanceMutations();
+  blockOwnership();
   provenanceCFG();
   verifierLifecycles();
   crossFunctionAndScratch();

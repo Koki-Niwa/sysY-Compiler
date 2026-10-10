@@ -32,6 +32,7 @@ namespace sysy {
 namespace flat {
 
 class Function;
+class Module;
 
 // 【后置】`blockaddress` 形态的值（容器支持；dump 不打印）。
 //   用途：将来需要"块地址"类语法时不必改 ValueKind（改 ValueKind 是
@@ -45,8 +46,14 @@ class BlockAddr : public Value {
 class BasicBlock {
  public:
   BasicBlock(Function* parent, uint32_t index) : parent_(parent), index_(index) {}
+  BasicBlock(const BasicBlock&) = delete;
+  BasicBlock& operator=(const BasicBlock&) = delete;
+  BasicBlock(BasicBlock&&) = delete;
+  BasicBlock& operator=(BasicBlock&&) = delete;
 
   Function* parent() const { return parent_; }
+  // Null for raw blocks; set exactly once by Module::createBlock.
+  Module* ownerModule() const { return ownerModule_; }
   // 【后置】块在函数块表里的下标（**稳定**：删除块会重新编号，见
   //         `Function::removeBlock`）。dump 里的 `L<N>` 就是它。
   uint32_t index() const { return index_; }
@@ -103,6 +110,8 @@ class BasicBlock {
   void sortPreds();
 
  private:
+  friend class Module;
+  Module* ownerModule_ = nullptr;
   Function* parent_;
   uint32_t index_;
   std::string name_;

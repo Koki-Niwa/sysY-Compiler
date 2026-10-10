@@ -109,7 +109,10 @@ remain CLOSED; F03 has not started.
 F02 pre-validation Fix1 hardens the F01 Flat lifetime/value boundary: one
 Module owner per Instruction, explicit provenance for all Value kinds,
 Function-local SSA/Arguments, and atomic rejection in mutator/CFG editor with
-independent FlatVerifier negatives. F02 remains pending independent validation;
+independent FlatVerifier negatives. Fix2 adds immutable BasicBlock Module lifetime
+provenance, rejects cross-Module/unregistered Function blocks before allocation,
+and independently verifies Module block inventory and unique Function membership.
+F02 remains pending independent validation;
 this short-gate fix does not close F02 or begin F03.
 Order: F00 → F01 → F02 → F03 → F04 → F05 → S12+. B00 read-only target/ABI
 audit and B01 MIR design may interleave only within their documented boundaries;

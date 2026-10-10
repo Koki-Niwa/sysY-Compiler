@@ -26,7 +26,7 @@ bool hasEdge(const Value* v, Instruction* user, size_t index) {
 }  // namespace
 
 bool IRMutator::isLiveBlock(const BasicBlock* block) const {
-  if (block == nullptr || block->parent() == nullptr ||
+  if (!module_.ownsBlock(block) || block->parent() == nullptr ||
       block->parent()->parent() != &module_) return false;
   const auto& blocks = block->parent()->blocks();
   return std::count(blocks.begin(), blocks.end(), block) == 1;

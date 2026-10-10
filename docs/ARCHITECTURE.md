@@ -159,6 +159,13 @@ Argument and canonical scalar Constant are independent Value kinds.
   `Argument`, canonical `Constant`, `GlobalAddr`, and `BlockAddr` acquire their
   owner at their respective Module factories, which reject foreign referenced
   globals/blocks and cross-Module/cross-Function parameter registration.
+- BasicBlock lifetime ownership is distinct from its structural Function parent:
+  raw blocks have `ownerModule() == nullptr`; only `Module::createBlock` assigns
+  immutable provenance after confirming the Function belongs to its Module.
+  `Function::addBlock` rejects foreign, unowned and duplicate entries; `ownsBlock`
+  checks provenance and Module inventory. FlatVerifier V1 independently audits
+  every Function block and all Module-owned blocks, including orphan and
+  duplicate-membership corruption. No detached block lifecycle is introduced.
 - Live operand preflight is centralized in `IRMutator`: Instructions must be
   owned, live, and defined in the user's Function; Arguments must be registered
   in that Function; other Values must belong to the user's Module. RAUW and

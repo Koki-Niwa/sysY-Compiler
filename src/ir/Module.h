@@ -149,8 +149,15 @@ class Module {
   void rawMarkLive(Instruction* i) { if (ownsInstruction(i)) liveSet_.insert(i); }
   void rawMarkDetached(Instruction* i) { liveSet_.erase(i); }
   const IRRevision& revision() const { return revision_; }
-  // 【后置】一个新基本块（自动追加到 `fn` 的块表末尾并编号）。
+  // Reject null/foreign/unregistered Functions before allocating any block.
   BasicBlock* createBlock(Function* fn, const std::string& name = std::string());
+  // Block lifetime provenance must agree with Module's independent inventory.
+  bool ownsBlock(const BasicBlock* block) const {
+    return block != nullptr &&
+           ownedBlockSet_.count(const_cast<BasicBlock*>(block)) != 0 &&
+           block->ownerModule() == this;
+  }
+  const std::vector<BasicBlock*>& ownedBlocks() const { return blocks_; }
   // 【后置】一个新函数（追加到模块函数表末尾）。
   Function* createFunction(const std::string& name, const Type* retTy);
   // 【后置】一个新的全局对象（追加到全局表末尾）。
@@ -213,6 +220,7 @@ class Module {
   std::string sourceName_;
   std::vector<Instruction*> insts_;
   std::vector<BasicBlock*> blocks_;
+  std::unordered_set<BasicBlock*> ownedBlockSet_;
   std::vector<Function*> funcs_;
   std::vector<GlobalVariable*> globals_;
   std::vector<Constant*> consts_;

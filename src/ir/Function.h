@@ -75,9 +75,9 @@ class Function {
   BasicBlock* at(size_t i) const { return i < blocks_.size() ? blocks_[i] : nullptr; }
   // 【后置】入口块（**恒为 blocks()[0]**；空函数返回 nullptr）。
   BasicBlock* entry() const { return blocks_.empty() ? nullptr : blocks_.front(); }
-  // 【前置】b != nullptr。
-  // 【后置】b 追加到块表末尾，并得到下标 `index() == 原 size`。
-  void addBlock(BasicBlock* b);
+  // Accept only a not-yet-registered block owned by this Function's Module.
+  // On rejection the table and block index remain unchanged.
+  bool addBlock(BasicBlock* b);
   // 【前置】b 属于本函数。
   // 【后置】b 从块表摘除；**其后所有块的 index 前移 1**（dump 的 `L<N>`
   //         依赖它，所以删除后必须调 `Module::rebuildCFG()`）。

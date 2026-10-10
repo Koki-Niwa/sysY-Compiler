@@ -247,6 +247,7 @@ CFGEditor::SplitResult CFGEditor::splitEdge(BasicBlock* from, size_t index) {
   }
   Module& module = mutator_.module();
   BasicBlock* mid = module.createBlock(from->parent());
+  if (mid == nullptr) return {MutationResult::Rejected, nullptr};
   Instruction* branch = createBr(target, term->loc());
   module.ownInst(branch);
   mid->addInst(branch);

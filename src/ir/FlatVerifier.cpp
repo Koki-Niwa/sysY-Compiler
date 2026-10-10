@@ -53,6 +53,32 @@ std::vector<Violation> verifyFlatModule(const Module& m) {
     if (global != nullptr) moduleGlobals.insert(global);
   }
 
+  // F02: audit all block lifetime owners, including blocks omitted from every
+  // Function table. The Module inventory and structural tables are independent.
+  std::unordered_set<Function*> moduleFunctions(m.functions().begin(), m.functions().end());
+  std::unordered_map<const BasicBlock*, size_t> blockOccurrences;
+  for (Function* function : m.functions()) {
+    if (function == nullptr) continue;
+    if (function->parent() != &m)
+      add("V1", function->name(), SourceLoc(), "Function 不属于当前 Module");
+    for (BasicBlock* block : function->blocks())
+      if (block != nullptr) ++blockOccurrences[block];
+  }
+  std::unordered_set<const BasicBlock*> ownedBlockEntries;
+  for (BasicBlock* block : m.ownedBlocks()) {
+    if (block == nullptr || !ownedBlockEntries.insert(block).second) {
+      add("V1", std::string(), SourceLoc(), "Module owned block inventory 含空项或重复项");
+      continue;
+    }
+    Function* function = block->parent();
+    if (block->ownerModule() != &m || !m.ownsBlock(block) ||
+        function == nullptr || moduleFunctions.count(function) == 0 ||
+        blockOccurrences[block] != 1) {
+      add("V1", std::string(), SourceLoc(),
+          "owned block 的 Module/Function provenance 或唯一 membership 不一致");
+    }
+  }
+
   // F01 finalized-live inventory: ownership, physical membership and the
   // explicit registry are three independently audited facts.
   std::unordered_map<const Instruction*, size_t> occurrences;
@@ -138,20 +164,25 @@ std::vector<Violation> verifyFlatModule(const Module& m) {
     for (size_t bi = 0; bi < f->blockCount(); ++bi) {
       BasicBlock* block = f->at(bi);
       if (block == nullptr) {
-        add("V4", fname, SourceLoc(), "函数块表含有空块");
+        add("V1", fname, SourceLoc(), "函数块表含有空块");
         structurallySafe = false;
         continue;
       }
       if (!blockSet.insert(block).second) {
-        add("V4", fname, SourceLoc(), "函数块表重复登记同一个基本块");
+        add("V1", fname, SourceLoc(), "函数块表重复登记同一个基本块");
+        structurallySafe = false;
+      }
+      if (block->ownerModule() != &m || !m.ownsBlock(block) ||
+          blockOccurrences[block] != 1) {
+        add("V1", fname, SourceLoc(), "基本块 Module lifetime owner 或 membership 不一致");
         structurallySafe = false;
       }
       if (block->parent() != f) {
-        add("V4", fname, SourceLoc(), "基本块归属函数与块表不一致");
+        add("V1", fname, SourceLoc(), "基本块归属函数与块表不一致");
         structurallySafe = false;
       }
       if (block->index() != bi) {
-        add("V4", fname, SourceLoc(),
+        add("V1", fname, SourceLoc(),
             "基本块下标不密集或与块表位置不一致：L" + std::to_string(block->index()) +
                 " 应为 L" + std::to_string(bi));
         structurallySafe = false;

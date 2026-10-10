@@ -81,10 +81,14 @@ void Function::addParam(Argument* p) {
   if (BasicBlock* e = entry()) e->addParam(p);
 }
 
-void Function::addBlock(BasicBlock* b) {
-  if (b == nullptr) return;
+bool Function::addBlock(BasicBlock* b) {
+  if (b == nullptr || parent_ == nullptr || b->parent() != this ||
+      b->ownerModule() != parent_ ||
+      std::find(blocks_.begin(), blocks_.end(), b) != blocks_.end())
+    return false;
   b->setIndex(static_cast<uint32_t>(blocks_.size()));
   blocks_.push_back(b);
+  return true;
 }
 
 bool Function::removeBlock(BasicBlock* b) {
@@ -140,9 +144,8 @@ Argument* Module::createArgument(const Type* ty, SourceLoc loc) {
 }
 
 BlockAddr* Module::createBlockAddr(const Type* ty, BasicBlock* block) {
-  if (block == nullptr || block->parent() == nullptr ||
-      block->parent()->parent() != this ||
-      std::find(blocks_.begin(), blocks_.end(), block) == blocks_.end())
+  if (!ownsBlock(block) || block->parent() == nullptr ||
+      block->parent()->parent() != this)
     return nullptr;
   BlockAddr* value = new BlockAddr(ty);
   value->ownerModule_ = this;
@@ -152,10 +155,19 @@ BlockAddr* Module::createBlockAddr(const Type* ty, BasicBlock* block) {
 }
 
 BasicBlock* Module::createBlock(Function* fn, const std::string& name) {
+  if (fn == nullptr ||
+      std::find(funcs_.begin(), funcs_.end(), fn) == funcs_.end() ||
+      fn->parent() != this)
+    return nullptr;
   BasicBlock* b = new BasicBlock(fn, 0);
-  blocks_.push_back(b);
+  b->ownerModule_ = this;
+  if (!fn->addBlock(b)) {
+    delete b;
+    return nullptr;
+  }
   if (!name.empty()) b->setName(name);
-  if (fn != nullptr) fn->addBlock(b);
+  blocks_.push_back(b);
+  ownedBlockSet_.insert(b);
   return b;
 }
 
@@ -326,6 +338,7 @@ void Module::clear() {
   insts_.clear();
   for (BasicBlock* b : blocks_) delete b;
   blocks_.clear();
+  ownedBlockSet_.clear();
   for (Function* f : funcs_) delete f;
   funcs_.clear();
   for (GlobalVariable* g : globals_) delete g;

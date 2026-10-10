@@ -40,7 +40,8 @@ The supported dependency direction is:
 ```text
 main -> frontend, structured, ir, opt, support
 structured core -> ir, support
-opt -> ir, support
+opt -> analysis, ir, support
+analysis -> ir, support
 frontend -> support
 ir -> support
 support -> nothing in the compiler

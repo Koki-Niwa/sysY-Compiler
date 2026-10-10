@@ -27,7 +27,7 @@ F01 已完成并正式验收（**CLOSED / PASS**；accepted validation revision 
 - Mem2Reg 已迁移为上述 mutation layer 的 tracked mutation consumer。
 - optimizer raw-mutation architecture boundary gate 已收紧。
 
-当前下一阶段是 **F02 — AnalysisManager（ACTIVE NEXT，尚未实现）**。
+**F02 — AnalysisManager 实现已落地，等待独立验收（pending independent validation）**。F00 / F01 仍为 CLOSED；F03 尚未开始。
 
 完整、最新的冻结事实以 [CURRENT-STATE](docs/CURRENT-STATE.md) 为准。路线和边界见 [ARCHITECTURE](docs/ARCHITECTURE.md)、[GOALS](docs/GOALS.md) 和 [BACKEND-PERFORMANCE-PLAN](docs/BACKEND-PERFORMANCE-PLAN.md)。
 
@@ -95,14 +95,15 @@ build/compiler --help
 | `src/frontend/` | 词法、AST、语义、常量与初始化计划 |
 | `src/structured/` | AST-to-IR 桥、Structured IR、循环规范化、展平 |
 | `src/ir/` | Flat IR、Value/Use、mutation/revision、读回、验证、LLVM 文本发射 |
-| `src/opt/` | 当前优化实现；目前包含 Mem2Reg |
+| `src/analysis/` | F02 Module/Function revision-aware AnalysisManager 与 reachability |
+| `src/opt/` | Mem2Reg 等优化实现，消费 ReachabilityAnalysis |
 | `src/support/` | 源码位置、诊断、中立运行库签名 |
 | `src/main/` | CLI 与当前管线组合 |
 | `tools/toy_backend/` | 独立 C++17 x86 toy lowering，仅用于 correctness/protocol 验证 |
 | `tools/selftest/` | 单元、架构、mutation boundary 与 focused selftests |
 | `tools/gate/` | 阶段 gate；由 `tools/verify.sh` 协调 |
 
-下一阶段 F02 才会加入 revision-aware / dependency-aware `AnalysisManager`；F03 才会建立正式 `FlatPassManager`。不要把当前 `src/opt/` 理解为已经具备完整通用 pass infrastructure。
+F02 已提供 revision-aware / dependency-aware `AnalysisManager`，尚待独立验收。F03 才会建立正式 `FlatPassManager`；当前 `src/opt/` 尚无通用 pass infrastructure。
 
 ## 关键语义与边界
 

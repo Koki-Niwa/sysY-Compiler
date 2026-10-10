@@ -12,9 +12,9 @@ ALLOWED = {
     'support': set(), 'frontend': {'support'}, 'ir': {'support'},
     'interpreter': {'frontend', 'support'},
     'structured': {'ir', 'support'},
-    'main': {'support', 'frontend', 'ir', 'structured', 'analysis', 'opt'},
-    'analysis': {'support', 'ir', 'structured'},
-    'opt': {'support', 'ir', 'structured', 'analysis'},
+    'main': {'support', 'frontend', 'ir', 'structured', 'opt'},
+    'analysis': {'support', 'ir'},
+    'opt': {'support', 'ir', 'analysis'},
 }
 BRIDGES = {'structured/IRGenInternal.h', 'structured/IRGenImpl.h'}
 EXTENSIONS = {'.h', '.cpp', '.inc'}

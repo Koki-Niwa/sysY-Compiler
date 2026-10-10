@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
 # unit/run.sh —— 支撑层 + 前端 + 两层 IR 的单元测试
-#   sourcefile/diagnostic P00 · lexer S01 · parser S02 · sema S03 · initlowering S04
-#   structured S05 · loopnorm S05b · flat S06 · LLVM emitter S07
 # 用 clang++ --std=c++17 直接编译；退出 0 即通过。S06 的 ir/ 与 Flatten* 用通配，源清单与 CMake 保持一致。
 # ============================================================================
 set -uo pipefail
@@ -29,6 +27,7 @@ FRONTEND=("$SRC/frontend/Lexer.cpp" "$SRC/frontend/Parser.cpp" "$SRC/frontend/Pa
           "$SRC/structured/LoopAnalysis.cpp"
           "$SRC/structured/LoopRewrite.cpp"
           "$SRC/ir/"*.cpp "$SRC/structured/Flatten"*.cpp)
+ANALYSIS=("$SRC/analysis/"*.cpp)
 OPT=("$SRC/opt/Mem2Reg.cpp" "$SRC/opt/Mem2RegAnalysis.cpp")
 TESTS=(
   "test_runtime_catalog|$SRC/frontend/RuntimeLib.cpp"
@@ -41,7 +40,8 @@ TESTS=(
   "test_const_remainder|${SUPPORT[*]} ${FRONTEND[*]}"
   "test_structured|${SUPPORT[*]} ${FRONTEND[*]}" "test_loopnorm|${SUPPORT[*]} ${FRONTEND[*]}"
   "test_flat|${SUPPORT[*]} ${FRONTEND[*]}" "test_ir_mutation|${SUPPORT[*]} ${FRONTEND[*]}" "test_value_use|${SUPPORT[*]} ${FRONTEND[*]}" "test_flat_f2i|${SUPPORT[*]} ${FRONTEND[*]}" "test_flat_dead_phi|${SUPPORT[*]} ${FRONTEND[*]}" "test_llvm_emitter|${SUPPORT[*]} ${FRONTEND[*]}"
-  "test_mem2reg|${SUPPORT[*]} ${FRONTEND[*]} ${OPT[*]}")
+  "test_analysis_manager|${SUPPORT[*]} ${FRONTEND[*]} ${ANALYSIS[*]}"
+  "test_mem2reg|${SUPPORT[*]} ${FRONTEND[*]} ${ANALYSIS[*]} ${OPT[*]}")
 
 BENCHES=(
   "bench_lexer|${SUPPORT[*]} ${FRONTEND[*]}"

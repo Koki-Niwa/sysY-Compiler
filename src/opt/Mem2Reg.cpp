@@ -1,5 +1,6 @@
 // opt/Mem2Reg.cpp -- explicit-worklist Braun-style scalar promotion.
 #include "opt/Mem2Reg.h"
+#include "analysis/ReachabilityAnalysis.h"
 #include <algorithm>
 #include <deque>
 #include <unordered_map>
@@ -18,7 +19,6 @@ using mem2reg_detail::CandidatePlan;
 using mem2reg_detail::Reachability;
 using mem2reg_detail::computeNeedIn;
 using mem2reg_detail::containsInstruction;
-using mem2reg_detail::findReachable;
 using mem2reg_detail::prepareCandidate;
 
 void enqueueSuccessors(const Function& function, BasicBlock* block,
@@ -29,7 +29,7 @@ void enqueueSuccessors(const Function& function, BasicBlock* block,
   for (size_t i = 0; i < terminator->numSuccs(); ++i) {
     BasicBlock* successor = terminator->succ(i);
     if (successor == nullptr || successor->parent() != &function ||
-        !reach.reachable[successor->index()] || queued[successor->index()]) continue;
+        !reach.bits()[successor->index()] || queued[successor->index()]) continue;
     queued[successor->index()] = 1;
     work.push_back(successor->index());
   }
@@ -74,17 +74,17 @@ SSAPlan constructSSA(Module& module, IRMutator& mutator, const CandidatePlan& pl
               [](const BasicBlock* left, const BasicBlock* right) {
                 return left->index() < right->index();
               });
-    if (reach.reachable[i]) {
+    if (reach.bits()[i]) {
       work.push_back(i);
       queued[i] = 1;
     }
   }
   for (size_t index = 0; index < count; ++index) {
     BasicBlock* block = function.at(index);
-    if (!reach.reachable[index] || !needIn[index] || block == function.entry()) continue;
+    if (!reach.bits()[index] || !needIn[index] || block == function.entry()) continue;
     size_t reachablePreds = 0;
     for (BasicBlock* pred : orderedPreds[index]) {
-      if (pred != nullptr && pred->parent() == &function && reach.reachable[pred->index()]) {
+      if (pred != nullptr && pred->parent() == &function && reach.bits()[pred->index()]) {
         ++reachablePreds;
       }
     }
@@ -117,7 +117,7 @@ SSAPlan constructSSA(Module& module, IRMutator& mutator, const CandidatePlan& pl
           BasicBlock* pred = orderedPreds[index][i];
           Value* incoming = nullptr;
           if (pred != nullptr && pred->parent() == &function &&
-              reach.reachable[pred->index()]) {
+              reach.bits()[pred->index()]) {
             incoming = blockOut[pred->index()];
           }
           requireMutation(mutator.rewriteOperand(phis[index], i, incoming) != MutationResult::Rejected);
@@ -129,7 +129,7 @@ SSAPlan constructSSA(Module& module, IRMutator& mutator, const CandidatePlan& pl
         for (size_t i = 0; i < block->numPreds(); ++i) {
           BasicBlock* pred = block->pred(i);
           if (pred == nullptr || pred->parent() != &function ||
-              !reach.reachable[pred->index()]) continue;
+              !reach.bits()[pred->index()]) continue;
           hasReachablePred = true;
           Value* incoming = blockOut[pred->index()];
           if (incoming == nullptr) {
@@ -185,7 +185,7 @@ SSAPlan constructSSA(Module& module, IRMutator& mutator, const CandidatePlan& pl
     for (size_t j = 0; j < phi->numSuccs(); ++j) {
       BasicBlock* pred = phi->succ(j);
       if (pred != nullptr && pred->parent() == &function &&
-          reach.reachable[pred->index()] && phi->operand(j) == nullptr) return result;
+          reach.bits()[pred->index()] && phi->operand(j) == nullptr) return result;
     }
   }
   // Delay constant interning until every reachable definition is resolved.
@@ -200,7 +200,7 @@ SSAPlan constructSSA(Module& module, IRMutator& mutator, const CandidatePlan& pl
       BasicBlock* pred = phi->succ(i);
       if (phi->operand(i) == nullptr &&
           (pred == nullptr || pred->parent() != &function ||
-           !reach.reachable[pred->index()])) {
+           !reach.bits()[pred->index()])) {
         requireMutation(mutator.rewriteOperand(phi, i, getZero()) != MutationResult::Rejected);
       }
     }
@@ -308,6 +308,7 @@ const char* mem2RegSkipReasonName(Mem2RegSkipReason reason) {
     case Mem2RegSkipReason::UnreachableUse: return "unreachable-use";
     case Mem2RegSkipReason::ReadBeforeDefinition: return "read-before-definition";
     case Mem2RegSkipReason::UnresolvedDefinition: return "unresolved-definition";
+    case Mem2RegSkipReason::AnalysisUnavailable: return "analysis-unavailable";
     case Mem2RegSkipReason::Count: break;
   }
   return "?";
@@ -333,6 +334,7 @@ Mem2RegResult runMem2Reg(Module& module, const Mem2RegOptions& options) {
     return result;
   }
 
+  AnalysisManager analyses(module);
   IRMutator mutator(module);
   CFGEditor cfg(mutator);
   std::vector<std::pair<Function*, Instruction*>> allocas;
@@ -350,11 +352,13 @@ Mem2RegResult runMem2Reg(Module& module, const Mem2RegOptions& options) {
     Instruction* allocaInst = item.second;
     CandidatePlan plan;
     Mem2RegSkipReason reason = Mem2RegSkipReason::NotEntryAlloca;
-    if (allocaInst->parent() != nullptr &&
-        prepareCandidate(function, allocaInst, plan, reason)) {
-      const Reachability reach = findReachable(*function);
-      const std::vector<char> needIn = computeNeedIn(plan, reach);
-      SSAPlan ssa = constructSSA(module, mutator, plan, reach, needIn);
+    auto reachHandle = analyses.get<ReachabilityAnalysis>(*function);
+    const Reachability* reach = reachHandle.get();
+    if (reach == nullptr) reason = Mem2RegSkipReason::AnalysisUnavailable;
+    if (allocaInst->parent() != nullptr && reach != nullptr &&
+        prepareCandidate(function, allocaInst, *reach, plan, reason)) {
+      const std::vector<char> needIn = computeNeedIn(plan, *reach);
+      SSAPlan ssa = constructSSA(module, mutator, plan, *reach, needIn);
       if (!ssa.complete) {
         discardSSA(mutator, ssa);
         result.candidates.push_back(

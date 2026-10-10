@@ -74,6 +74,27 @@ class ArchitectureTests(unittest.TestCase):
         self.put('src/ir/A.h', '#include "missing.h"\n')
         self.assertTrue(any('不存在' in e for e in check(self.root)[0]))
 
+
+    def test_f02_analysis_dependency_direction(self):
+        self.put('src/ir/Module.h')
+        self.put('src/support/Base.h')
+        self.put('src/analysis/Manager.h',
+                 '#include "ir/Module.h"\n#include "support/Base.h"\n')
+        self.put('src/opt/Consumer.h', '#include "analysis/Manager.h"\n')
+        self.assertEqual([], check(self.root)[0])
+        for target in ('frontend', 'opt', 'structured'):
+            self.put('src/' + target + '/Bad.h')
+            self.put('src/analysis/Manager.h',
+                     '#include "' + target + '/Bad.h"\n')
+            self.assertTrue(any('analysis -> ' + target in e
+                                for e in check(self.root)[0]))
+        self.put('src/analysis/Manager.h', '#include "ir/Module.h"\n')
+        self.put('src/ir/Module.h', '#include "analysis/Manager.h"\n')
+        self.assertTrue(any('ir -> analysis' in e for e in check(self.root)[0]))
+        self.put('src/ir/Module.h', '')
+        self.put('src/support/Base.h', '#include "analysis/Manager.h"\n')
+        self.assertTrue(any('support -> analysis' in e for e in check(self.root)[0]))
+
     def budget(self):
         return subprocess.run([sys.executable, str(Path(__file__).with_name('check_line_budget.py')),
                                '--root', str(self.root)], capture_output=True, text=True)

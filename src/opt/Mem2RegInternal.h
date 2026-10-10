@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <vector>
 
+#include "analysis/ReachabilityAnalysis.h"
 #include "ir/Module.h"
 #include "opt/Mem2Reg.h"
 
@@ -20,20 +21,18 @@ struct CandidatePlan {
   std::vector<Instruction*> stores;
 };
 
-struct Reachability {
-  std::vector<char> reachable;
-};
+using Reachability = ReachabilityInfo;
 
 inline bool containsInstruction(const std::vector<Instruction*>& values,
                                 Instruction* needle) {
   return std::find(values.begin(), values.end(), needle) != values.end();
 }
 
-Reachability findReachable(const Function& function);
 std::vector<char> computeNeedIn(const CandidatePlan& plan,
                                 const Reachability& reach);
 bool prepareCandidate(Function* function, Instruction* allocaInst,
-                      CandidatePlan& plan, Mem2RegSkipReason& reason);
+                      const Reachability& reach, CandidatePlan& plan,
+                      Mem2RegSkipReason& reason);
 
 }  // namespace mem2reg_detail
 }  // namespace flat

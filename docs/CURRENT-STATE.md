@@ -97,9 +97,15 @@ full x86 O1 **490/50/0/0** and no-structured O1 **490/50/0/0**
 (PASS/SKIP/FAIL/TIMEOUT). The historical pre-F01 S09 total was 52/0/2;
 the two new architecture boundary gates account for 54.
 
-The active next milestone is **F02 — AnalysisManager**, consuming F01's
-revision facts to provide cached, dependency-aware, fail-closed analysis
-management. No AnalysisManager or analysis cache is implemented by F01.
+**F02 implementation present / pending independent validation** (not CLOSED).
+`src/analysis/AnalysisManager` now binds one Module, caches typed immutable
+Module/Function results, checks all six declared revision categories and tracked
+analysis dependency generations, fails closed on cycles, failed dependencies,
+foreign Functions and stale handles, and lazily recomputes invalid entries.
+`ReachabilityAnalysis` is the first Function consumer (CFG-only); Mem2Reg now
+requests it per candidate, preserving the original worklist algorithm and
+declining conservatively when an analysis cannot be obtained. F00 and F01
+remain CLOSED; F03 has not started.
 Order: F00 → F01 → F02 → F03 → F04 → F05 → S12+. B00 read-only target/ABI
 audit and B01 MIR design may interleave only within their documented boundaries;
 formal Flat→backend integration must not bypass the foundation. S10b remains

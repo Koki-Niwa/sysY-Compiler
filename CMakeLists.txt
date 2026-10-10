@@ -73,6 +73,9 @@ add_executable(compiler
   src/ir/DominatorTree.cpp
   src/ir/FlatSemantics.cpp
   src/ir/FlatVerifier.cpp
+  # ── F02：Flat IR analysis management 与 reachability ──────────────────
+  src/analysis/AnalysisManager.cpp
+  src/analysis/ReachabilityAnalysis.cpp
   # ── S09：平面标量 alloca → SSA promotion ────────────────────────────────
   src/opt/Mem2Reg.cpp
   src/opt/Mem2RegAnalysis.cpp

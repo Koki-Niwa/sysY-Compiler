@@ -35,6 +35,7 @@ enum class Mem2RegSkipReason : uint8_t {
   UnreachableUse,
   ReadBeforeDefinition,
   UnresolvedDefinition,
+  AnalysisUnavailable,
   Count
 };
 
@@ -68,14 +69,13 @@ struct Mem2RegResult {
   std::vector<Mem2RegCandidate> candidates;
 };
 
-// Preconditions: the caller has rebuilt CFG and use-def caches after earlier
-// structural edits, and verifyFlatModule(module) is empty. The pass does not
-// repair stale predecessor membership; it does normalize predecessor order for
-// generated phis.
+// Preconditions: the caller supplies a finalized verified flat module.
+// F01 maintains exact live CFG predecessor and use-def links incrementally;
+// this pass does not repair/rebuild them. Generated phi predecessors are sorted.
 //
 // Input/output: direct i32/f32 entry-block allocas with definite initialization
 // are rewritten to SSA. Terminators, block order, and unrelated instructions are
-// preserved; CFG links and use-def links are rebuilt after each commit.
+// preserved; live CFG and use-def links are updated incrementally per commit.
 //
 // Resource behavior: each candidate uses finite CFG worklists. Temporary memory
 // is linear in blocks, candidate accesses, and generated phi inputs; there is no

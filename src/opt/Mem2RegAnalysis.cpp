@@ -79,7 +79,7 @@ bool analyzeInitialization(const CandidatePlan& plan, const Reachability& reach)
   std::deque<size_t> work;
   std::vector<char> queued(count, 0);
   for (size_t i = 0; i < count; ++i) {
-    if (reach.reachable[i]) {
+    if (reach.bits()[i]) {
       work.push_back(i);
       queued[i] = 1;
     } else {
@@ -100,7 +100,7 @@ bool analyzeInitialization(const CandidatePlan& plan, const Reachability& reach)
       for (size_t i = 0; i < block->numPreds(); ++i) {
         BasicBlock* pred = block->pred(i);
         if (pred == nullptr || pred->parent() != &function ||
-            !reach.reachable[pred->index()]) continue;
+            !reach.bits()[pred->index()]) continue;
         hasReachablePred = true;
         newIn = newIn && out[pred->index()];
       }
@@ -120,13 +120,13 @@ bool analyzeInitialization(const CandidatePlan& plan, const Reachability& reach)
     for (size_t i = 0; i < terminator->numSuccs(); ++i) {
       BasicBlock* successor = terminator->succ(i);
       if (successor == nullptr || successor->parent() != &function ||
-          !reach.reachable[successor->index()] || queued[successor->index()]) continue;
+          !reach.bits()[successor->index()] || queued[successor->index()]) continue;
       queued[successor->index()] = 1;
       work.push_back(successor->index());
     }
   }
   for (size_t index = 0; index < count; ++index) {
-    if (!reach.reachable[index]) continue;
+    if (!reach.bits()[index]) continue;
     BasicBlock* block = function.at(index);
     bool initialized = index == function.entry()->index() ? false : in[index];
     for (Instruction* instruction : block->insts()) {
@@ -139,30 +139,6 @@ bool analyzeInitialization(const CandidatePlan& plan, const Reachability& reach)
 
 }  // namespace
 
-Reachability findReachable(const Function& function) {
-  Reachability result;
-  const size_t count = function.blockCount();
-  result.reachable.assign(count, 0);
-  if (count == 0 || function.entry() == nullptr) return result;
-  std::vector<BasicBlock*> stack{function.entry()};
-  result.reachable[function.entry()->index()] = 1;
-  while (!stack.empty()) {
-    BasicBlock* block = stack.back();
-    stack.pop_back();
-    Instruction* terminator = block->terminator();
-    if (terminator == nullptr) continue;
-    for (size_t i = 0; i < terminator->numSuccs(); ++i) {
-      BasicBlock* successor = terminator->succ(i);
-      if (successor == nullptr || successor->parent() != &function) continue;
-      const size_t index = successor->index();
-      if (index >= count || result.reachable[index]) continue;
-      result.reachable[index] = 1;
-      stack.push_back(successor);
-    }
-  }
-  return result;
-}
-
 std::vector<char> computeNeedIn(const CandidatePlan& plan,
                                 const Reachability& reach) {
   const Function& function = *plan.function;
@@ -170,7 +146,7 @@ std::vector<char> computeNeedIn(const CandidatePlan& plan,
   std::vector<char> hasStore(count, 0);
   std::vector<char> localRead(count, 0);
   for (size_t index = 0; index < count; ++index) {
-    if (!reach.reachable[index]) continue;
+    if (!reach.bits()[index]) continue;
     bool sawStore = false;
     for (Instruction* instruction : function.at(index)->insts()) {
       if (containsInstruction(plan.loads, instruction) && !sawStore) localRead[index] = 1;
@@ -183,7 +159,7 @@ std::vector<char> computeNeedIn(const CandidatePlan& plan,
   std::vector<char> need = localRead;
   std::deque<size_t> work;
   for (size_t index = 0; index < count; ++index) {
-    if (reach.reachable[index] && localRead[index]) work.push_back(index);
+    if (reach.bits()[index] && localRead[index]) work.push_back(index);
   }
   while (!work.empty()) {
     BasicBlock* block = function.at(work.front());
@@ -191,7 +167,7 @@ std::vector<char> computeNeedIn(const CandidatePlan& plan,
     for (size_t i = 0; i < block->numPreds(); ++i) {
       BasicBlock* pred = block->pred(i);
       if (pred == nullptr || pred->parent() != &function ||
-          !reach.reachable[pred->index()] || hasStore[pred->index()] ||
+          !reach.bits()[pred->index()] || hasStore[pred->index()] ||
           need[pred->index()]) continue;
       need[pred->index()] = 1;
       work.push_back(pred->index());
@@ -201,7 +177,8 @@ std::vector<char> computeNeedIn(const CandidatePlan& plan,
 }
 
 bool prepareCandidate(Function* function, Instruction* allocaInst,
-                      CandidatePlan& plan, Mem2RegSkipReason& reason) {
+                      const Reachability& reach, CandidatePlan& plan,
+                      Mem2RegSkipReason& reason) {
   if (function == nullptr || allocaInst == nullptr || function->entry() == nullptr ||
       allocaInst->parent() != function->entry()) {
     reason = Mem2RegSkipReason::NotEntryAlloca;
@@ -219,15 +196,14 @@ bool prepareCandidate(Function* function, Instruction* allocaInst,
   seed.allocaInst = allocaInst;
   seed.objectType = objectType;
   if (!analyzeUses(seed, plan, reason)) return false;
-  const Reachability reach = findReachable(*function);
   for (Instruction* access : plan.loads) {
-    if (!reach.reachable[access->parent()->index()]) {
+    if (!reach.bits()[access->parent()->index()]) {
       reason = Mem2RegSkipReason::UnreachableUse;
       return false;
     }
   }
   for (Instruction* access : plan.stores) {
-    if (!reach.reachable[access->parent()->index()]) {
+    if (!reach.bits()[access->parent()->index()]) {
       reason = Mem2RegSkipReason::UnreachableUse;
       return false;
     }

@@ -5,7 +5,8 @@
 ```text
 main -> frontend, structured, ir, opt, support
 interpreter -> frontend, support
-opt -> ir, support
+opt -> analysis, ir, support
+analysis -> ir, support
 structured core -> ir, support
 structured bridge -> frontend (only IRGenInternal.h and IRGenImpl.h)
 frontend -> support
@@ -119,9 +120,9 @@ The Flat IR foundation proceeds through F00–F05 in
 `f9425dc56b74b9312f6a336f334e5b347844e830`); **F01 CLOSED / PASS**
 (accepted validation revision `22eb7a66d6eb57073ecf904323cf10212fe2c247`,
 implementation/Fix1 revision `5f4173caeb8abf78d1ac56c129c9550985f48b0b`);
-**F02 — AnalysisManager is active next**. Only `README.md` differs between
-the F01 implementation and accepted validation revisions: product code,
-tools, and CMake are identical. No F02 implementation is included in F01.
+**F02 implementation present / pending independent validation** (not CLOSED).
+F01 accepted implementation and validation revisions remain historical facts;
+F02 adds the new analysis foundation without changing F01 revision contracts.
 
 F00 established exact `Value` reverse `Use{Instruction*, operandIndex}`
 occurrences across Instructions, Arguments, Constants, GlobalAddr and
@@ -234,7 +235,7 @@ canonicalization. The former Nop-Instruction parameter model and
 `Opcode::ConstantInt` / `Opcode::ConstantFP` payload model have zero active
 product references.
 
-The Flat optimization contracts (F01 present; F02+ cache/pass pieces future) are:
+The Flat optimization contracts (F01 mutation, F02 cache present; F03+ future) are:
 
 - every `Value` kind owns precise reverse `Use{user, operandIndex}` edges; a
   repeated operand is multiple uses even when it has one distinct user;
@@ -244,8 +245,8 @@ The Flat optimization contracts (F01 present; F02+ cache/pass pieces future) are
   and live IR membership are distinct; erased/tombstoned instructions are not
   traversed by normal analyses;
 - F01 records data-flow/CFG/memory/call revisions (Globals/Interface
-  fields reserved); F02 will validate analysis caches against revisions and
-  dependencies, and F03 `PreservedAnalyses` declarations cannot override
+  fields reserved); F02 validates caches against declared revision categories
+  and dependencies; future F03 `PreservedAnalyses` cannot override
   actual incompatible mutation facts;
 - `rebuildUseDef()` / `rebuildCFG()` remain reader/builder finalization and
   verifier/debug reconstruction tools, not the normal maintenance strategy for
@@ -256,8 +257,8 @@ The Flat optimization contracts (F01 present; F02+ cache/pass pieces future) are
   `(type,bits)` identity while Flat dump preserves historical syntax and per-function
   source-location presentation.
 
-Future analyses are contracts, not empty framework classes. F02/F03 establish
-the minimal revision-aware `AnalysisManager` and `FlatPassManager` before S12.
+Future analyses are contracts, not empty framework classes. F02 establishes
+revision-aware `AnalysisManager`; F03 will establish `FlatPassManager` before S12.
 Module/Function scopes land first; CGSCC/Loop scopes are added only when S12/S14
 provide real consumers. Analyses state their dependencies and are immutable
 results; the first implementation uses invalidate-and-lazy-recompute rather
@@ -265,11 +266,35 @@ than complex incremental updaters. Future passes support disabling, verify-each,
 before/after dumps, timing/stats and bounded ablation. S09 Mem2Reg is migrated
 in F04 as the first formal FunctionPass.
 
-The future `analysis/` source layer is not considered implemented merely because
-an executable checker knows its name. When that directory first lands, the
-module graph in this document, `AGENTS.md`, `check_architecture.py` and negative
-architecture tests must change atomically; pre-authorized undocumented
-dependencies are not a supported contract.
+The real `src/analysis/` layer is wired into CMake and the unit runner.
+Its permitted imports are `ir/` and `support/` only; `opt/` may depend on
+`analysis/`, but `ir/` and `support/` cannot. `DominatorTree` stays a direct
+legacy construction in FlatVerifier and its tests until S14.
+
+## F02 AnalysisManager foundation (implementation pending independent validation)
+
+A manager binds one `flat::Module` for its entire lifetime; it owns Module
+and Function cache entries, with type-index analysis identity. Function requests
+reject foreign parent modules. Results are immutable shared ownership held by
+typed handles; handles observe manager lifetime through a weak token and only
+return a `const Result*` when their generation remains current. Manager
+destruction and stale generations cause `get() == nullptr` without dangling
+pointers.
+
+Each analysis declares a dependency mask over F01 DataFlow, CFG, Memory,
+Calls, Globals, Interface revisions (None means no IR dependencies). Function
+entries observe Function revisions, Module entries observe Module revisions;
+unrelated categories and other Function edits leave caches intact. While
+computing, the manager automatically records each requested analysis identity
+and generation. Freshness recursively validates these dependencies, so
+transitive invalidation works even when a parent declares None. Cycles,
+failed dependencies, and failed computations never cache partial results.
+Revision mismatches invalidate logically; the next request lazily recomputes.
+
+`ReachabilityAnalysis` is a pure read-only Function analysis depending on CFG
+only, using the original entry-based terminator-successor stack algorithm.
+Mem2Reg consumes it for each candidate before mutation. No mutation callback,
+PassManager, PreservedAnalyses or DominatorTree migration is part of F02.
 
 ## Validation commands
 

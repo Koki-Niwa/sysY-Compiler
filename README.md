@@ -18,14 +18,16 @@
 - S11b：独立 self-built x86 toy lowering，可直接消费冻结的 LLVM IR 子集；它是 correctness/protocol consumer，不是正式性能后端。
 - F00：一等 `Value/Use{user, operandIndex}`、独立 `Argument`、canonical `Constant`、精确 RAUW，且 490/490 Flat 文本与旧协议逐字节一致。
 
-当前正在收尾 F01：
+F01 已完成并正式验收（**CLOSED / PASS**；accepted validation revision `22eb7a66d6eb57073ecf904323cf10212fe2c247`）：
 
 - `IRMutator`：正常优化器的 tracked data-flow mutation authority。
 - `CFGEditor`：Phi / CFG edge / predecessor cache 的原子修改入口。
-- Instruction 生命周期：`Detached / Live / Tombstone`。
+- Instruction 生命周期：`Detached / Live / Tombstone`（owned/live lifecycle）。
 - Module / Function revision 与 `MutationSummary`。
-- Mem2Reg 已迁移为上述 mutation layer 的真实 consumer。
-- optimizer raw-mutation architecture gate 已收紧；F01 实现与短验证完成，尚待最终独立长验证后才能标记 CLOSED。
+- Mem2Reg 已迁移为上述 mutation layer 的 tracked mutation consumer。
+- optimizer raw-mutation architecture boundary gate 已收紧。
+
+当前下一阶段是 **F02 — AnalysisManager（ACTIVE NEXT，尚未实现）**。
 
 完整、最新的冻结事实以 [CURRENT-STATE](docs/CURRENT-STATE.md) 为准。路线和边界见 [ARCHITECTURE](docs/ARCHITECTURE.md)、[GOALS](docs/GOALS.md) 和 [BACKEND-PERFORMANCE-PLAN](docs/BACKEND-PERFORMANCE-PLAN.md)。
 

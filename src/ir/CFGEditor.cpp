@@ -44,7 +44,9 @@ bool CFGEditor::readPhis(BasicBlock* block, std::vector<Instruction*>& phis) con
         inst->numSuccs() != block->numPreds()) return false;
     for (size_t i = 0; i < block->numPreds(); ++i) {
       if (inst->succ(i) != block->pred(i) || inst->operand(i) == nullptr ||
-          inst->operand(i)->type() != inst->type()) return false;
+          inst->operand(i)->type() != inst->type() ||
+          !mutator_.valueAvailableInFunction(inst->operand(i), block->parent()))
+        return false;
       const Value* v = inst->operand(i);
       if (std::count_if(v->uses().begin(), v->uses().end(),
           [=](const Use& use) {
@@ -96,9 +98,10 @@ MutationResult CFGEditor::insertPhiBatch(
     const std::vector<std::pair<BasicBlock*, Instruction*>>& items) {
   if (items.empty()) return MutationResult::NoChange;
   Module& module = mutator_.module();
-  std::unordered_set<Instruction*> planned;
+  std::unordered_map<Instruction*, Function*> planned;
   for (const auto& item : items) {
-    if (item.second == nullptr || !planned.insert(item.second).second)
+    if (!mutator_.isLiveBlock(item.first) || item.second == nullptr ||
+        !planned.emplace(item.second, item.first->parent()).second)
       return MutationResult::Rejected;
   }
   std::vector<Function*> affected;
@@ -112,6 +115,7 @@ MutationResult CFGEditor::insertPhiBatch(
         phi->lifecycle() != InstructionLifecycle::Detached ||
         phi->numOperands() != block->numPreds() ||
         phi->numSuccs() != block->numPreds() ||
+        phi->ownerModule() != nullptr ||
         module.ownsInstruction(phi)) return MutationResult::Rejected;
     std::string error;
     if (!validateFlatInstruction(*phi, error)) return MutationResult::Rejected;
@@ -121,10 +125,12 @@ MutationResult CFGEditor::insertPhiBatch(
       if (value == phi) ++selfIncoming;
       if (phi->succ(i) != block->pred(i) || value == nullptr ||
           value->type() != phi->type()) return MutationResult::Rejected;
-      if (value->isInst() &&
-          !mutator_.isLive(static_cast<Instruction*>(value)) &&
-          !planned.count(static_cast<Instruction*>(value)))
+      if (value->isInst() && planned.count(static_cast<Instruction*>(value))) {
+        if (planned.at(static_cast<Instruction*>(value)) != block->parent())
+          return MutationResult::Rejected;
+      } else if (!mutator_.valueAvailableInFunction(value, block->parent())) {
         return MutationResult::Rejected;
+      }
       if (std::count_if(value->uses().begin(), value->uses().end(),
           [=](const Use& use) { return use.user == phi && use.operandIndex == i; }) != 1)
         return MutationResult::Rejected;
@@ -135,7 +141,8 @@ MutationResult CFGEditor::insertPhiBatch(
   for (const auto& item : items) {
     BasicBlock* block = item.first;
     Instruction* phi = item.second;
-    module.ownInst(phi);
+    // All ownership and provenance checks completed for the entire batch.
+    if (!module.ownInst(phi)) return MutationResult::Rejected;
     size_t index = 0;
     while (index < block->size() && block->at(index)->op() == Opcode::Phi) ++index;
     block->insertInst(index, phi);
@@ -183,7 +190,7 @@ MutationResult CFGEditor::redirectEdge(BasicBlock* from, size_t index,
     return MutationResult::Rejected;
   for (size_t i = 0; i < newValues.size(); ++i)
     if (newValues[i] == nullptr || newValues[i]->type() != newPhis[i]->type() ||
-        !mutator_.valueAvailable(newValues[i], true))
+        !mutator_.valueAvailableInFunction(newValues[i], from->parent()))
       return MutationResult::Rejected;
   for (Instruction* phi : oldPhis) {
     if (removeOld && std::count(phi->succs().begin(), phi->succs().end(), from) != 1)

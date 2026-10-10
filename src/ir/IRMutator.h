@@ -34,6 +34,7 @@ class IRMutator {
   bool operandLegal(const Instruction* user, size_t index, Value* value) const;
   bool validUses(const Value* value) const;
   bool valueAvailable(Value* value, bool forLive) const;
+  bool valueAvailableInFunction(Value* value, const Function* function) const;
   bool rawErase(Instruction* inst);
   void commit(MutationKind kinds, const std::vector<Function*>& functions);
   static MutationKind kindsFor(Opcode op);

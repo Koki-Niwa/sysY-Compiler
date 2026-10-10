@@ -306,10 +306,170 @@ void verifierLifecycles() {
   m.rawMarkLive(ret);
   valid(m,"live registry recovery verifier");
 }
+
+void provenanceMutations() {
+  const Type* t = typePool().i32();
+  Module source, target;
+  Function* sf=source.createFunction("source",t);
+  BasicBlock* sb=source.createBlock(sf);
+  Constant* foreign=source.getIntConst(t,77);
+  Argument* foreignArg=source.createArgument(t,{});
+  sf->addParam(foreignArg);
+  GlobalAddr* foreignGlobal=source.globalAddr(source.createGlobal("x",t));
+  BlockAddr* foreignBlock=source.createBlockAddr(typePool().ptrTo(t),sb);
+  Instruction* owned=createBin(Opcode::Add,foreign,foreign,{});
+  check(source.ownInst(owned) && owned->ownerModule()==&source,
+        "source adopts Detached instruction exactly once");
+  check(!target.ownInst(owned) && source.ownsInstruction(owned) &&
+        !target.ownsInstruction(owned), "foreign ownInst fails closed");
+
+  Function* f=target.createFunction("target",t);
+  Function* other=target.createFunction("other",t);
+  BasicBlock* b=target.createBlock(f);
+  BasicBlock* ob=target.createBlock(other);
+  Constant* local=target.getIntConst(t,77);
+  Constant* next=target.getIntConst(t,88);
+  Argument* sameModuleArg=target.createArgument(t,{});
+  other->addParam(sameModuleArg);
+  Instruction* cross=add(target,ob,createBin(Opcode::Add,local,local,{}));
+  add(target,ob,createRet(local,{}));
+  Instruction* def=add(target,b,createBin(Opcode::Add,local,local,{}));
+  Instruction* user=add(target,b,createBin(Opcode::Add,def,local,{}));
+  GlobalAddr* localGlobal=target.globalAddr(target.createGlobal("local",t));
+  Instruction* load=add(target,b,createLoad(t,localGlobal,{}));
+  Instruction* ret=add(target,b,createRet(user,{}));
+  (void)load;
+  target.rebuildCFG();
+  valid(target,"provenance initial target");
+  IRMutator mut(target);
+  const std::string before=dumpModule(target);
+  auto mr=target.revision().any, fr=f->revision().any, gr=other->revision().any;
+  check(mut.insertInstruction(b,0,owned)==MutationResult::Rejected &&
+        source.ownsInstruction(owned) && !target.ownsInstruction(owned) &&
+        !target.isLiveInstruction(owned) && owned->parent()==nullptr &&
+        dumpModule(target)==before && target.revision().any==mr,
+        "foreign-owned Detached insert rejects atomically");
+  check(mut.discardDetached({owned})==MutationResult::Rejected &&
+        owned->ownerModule()==&source && source.ownsInstruction(owned) &&
+        target.revision().any==mr, "foreign discardDetached preserves source lifetime");
+  auto stable=[&]() {
+    return target.revision().any==mr && f->revision().any==fr &&
+      other->revision().any==gr && dumpModule(target)==before &&
+      use(def,user,0) && use(local,user,1) && use(user,ret,0);
+  };
+  check(mut.rewriteOperand(user,1,foreign)==MutationResult::Rejected &&
+        stable(), "foreign Constant rewrite rejected without changes");
+  check(mut.rewriteOperand(user,1,foreignArg)==MutationResult::Rejected &&
+        stable(), "foreign Argument rewrite rejected atomically");
+  check(mut.rewriteOperand(user,1,sameModuleArg)==MutationResult::Rejected &&
+        stable(), "other Function Argument rewrite rejected atomically");
+  check(mut.rewriteOperand(user,1,cross)==MutationResult::Rejected &&
+        stable(), "other Function Instruction rewrite rejected atomically");
+  check(mut.rewriteOperand(user,1,owned)==MutationResult::Rejected &&
+        stable(), "foreign-owned Instruction rewrite rejected atomically");
+  check(mut.rewriteOperand(load,0,foreignGlobal)==MutationResult::Rejected &&
+        stable(), "foreign GlobalAddr rewrite rejected atomically");
+  check(mut.rewriteOperand(load,0,foreignBlock)==MutationResult::Rejected &&
+        stable(), "foreign BlockAddr rewrite rejected atomically");
+  check(mut.replaceUses(local,foreign)==MutationResult::Rejected && stable(),
+        "foreign Constant replaceUses rejects all users");
+  check(mut.replaceUses(local,sameModuleArg)==MutationResult::Rejected && stable(),
+        "multi-function replaceUses rejects partial rewrite");
+  check(mut.replaceAndErase(def,foreign)==MutationResult::Rejected &&
+        target.isLiveInstruction(def) && stable(),
+        "foreign Constant replaceAndErase preserves old instruction");
+  check(mut.replaceAndErase(def,cross)==MutationResult::Rejected &&
+        target.isLiveInstruction(def) && stable(),
+        "other Function replaceAndErase rejected atomically");
+  check(target.globalAddr(source.globals().front())==nullptr &&
+        target.createBlockAddr(typePool().ptrTo(t),sb)==nullptr,
+        "cross-module address factories fail closed");
+  size_t paramsBefore=f->numParams();
+  f->addParam(foreignArg);
+  f->addParam(sameModuleArg);
+  check(f->numParams()==paramsBefore && foreignArg->owner()==sf &&
+        sameModuleArg->owner()==other, "Function addParam refuses foreign/reused Arguments");
+  check(source.ownInst(owned) && source.ownedInstructions().size()==1,
+        "same-module ownInst remains idempotent");
+  check(stable() && verifyFlatModule(target).empty(), "rejected provenance mutations keep valid IR");
+  (void)next;
+}
+
+void provenanceCFG() {
+  const Type* t=typePool().i32();
+  Module m, foreign;
+  Function* f=m.createFunction("cfg",t);
+  Function* other=m.createFunction("other",t);
+  BasicBlock* a=m.createBlock(f), *b=m.createBlock(f);
+  BasicBlock* c=m.createBlock(f), *d=m.createBlock(f);
+  BasicBlock* ob=m.createBlock(other);
+  Constant* one=m.getIntConst(t,1);
+  Constant* outsider=foreign.getIntConst(t,1);
+  Argument* foreignArg=foreign.createArgument(t,{});
+  Function* foreignFn=foreign.createFunction("foreign",t);
+  foreign.createBlock(foreignFn);
+  foreignFn->addParam(foreignArg);
+  Argument* otherArg=m.createArgument(t,{});
+  other->addParam(otherArg);
+  Instruction* otherDef=add(m,ob,createBin(Opcode::Add,one,one,{}));
+  add(m,ob,createRet(one,{}));
+  add(m,a,createBr(b,{}));
+  add(m,b,createRet(one,{}));
+  add(m,c,createRet(one,{}));
+  add(m,d,createBr(c,{}));
+  m.rebuildCFG();
+  IRMutator mut(m);
+  CFGEditor cfg(mut);
+  const std::string before=dumpModule(m);
+  auto rev=m.revision().any, frev=f->revision().any;
+  auto stable=[&](){return m.revision().any==rev && f->revision().any==frev &&
+                               dumpModule(m)==before;};
+  auto checkPhi=[&](Value* value, const char* name) {
+    Instruction* phi=createPhi(t,{value},{a},{});
+    auto result=cfg.insertPhi(b,phi);
+    check(result==MutationResult::Rejected && stable() &&
+          !m.ownsInstruction(phi),name);
+    delete phi;
+  };
+  checkPhi(outsider,"insertPhi rejects foreign Constant");
+  checkPhi(foreignArg,"insertPhi rejects foreign Argument");
+  checkPhi(otherArg,"insertPhi rejects same-module other Function Argument");
+  checkPhi(otherDef,"insertPhi rejects same-module other Function Instruction");
+  Instruction* ownedPhi=createPhi(t,{one},{a},{});
+  foreign.ownInst(ownedPhi);
+  check(cfg.insertPhi(b,ownedPhi)==MutationResult::Rejected &&
+        foreign.ownsInstruction(ownedPhi) && !m.ownsInstruction(ownedPhi) &&
+        stable(), "insertPhi rejects foreign-owned detached Phi");
+  check(cfg.redirectEdge(a,0,c,{outsider})==MutationResult::Rejected &&
+        stable(),"redirectEdge rejects foreign Constant atomically");
+  check(cfg.redirectEdge(a,0,c,{otherArg})==MutationResult::Rejected &&
+        stable(),"redirectEdge rejects cross-function Argument atomically");
+  check(cfg.redirectEdge(a,0,c,{otherDef})==MutationResult::Rejected &&
+        stable(),"redirectEdge rejects cross-function Instruction atomically");
+  // A target with a Phi makes redirectEdge exercise incoming preflight.
+  Instruction* phi=add(m,c,createPhi(t,{one},{d},{}));
+  c->at(0); // Existing ret must follow the Phi for canonical ordering.
+  c->removeInst(phi);
+  c->insertInst(0,phi);
+  m.rebuildCFG();
+  const std::string withPhi=dumpModule(m);
+  rev=m.revision().any;
+  check(cfg.redirectEdge(a,0,c,{outsider})==MutationResult::Rejected &&
+        dumpModule(m)==withPhi && m.revision().any==rev,
+        "redirectEdge foreign Phi incoming rejected with no CFG edits");
+  check(cfg.rewritePhiValue(phi,d,outsider)==MutationResult::Rejected &&
+        dumpModule(m)==withPhi && m.revision().any==rev,
+        "rewritePhiValue foreign Constant rejected");
+  check(cfg.rewritePhiValue(phi,d,foreignArg)==MutationResult::Rejected &&
+        dumpModule(m)==withPhi && m.revision().any==rev,
+        "rewritePhiValue foreign Argument rejected");
+}
 } // namespace
 
 int main() {
   operandsAndLifecycle();
+  provenanceMutations();
+  provenanceCFG();
   verifierLifecycles();
   crossFunctionAndScratch();
   categories();

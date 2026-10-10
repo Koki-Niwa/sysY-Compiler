@@ -29,6 +29,8 @@ class Value {
 
   ValueKind kind() const { return kind_; }
   const Type* type() const { return type_; }
+  // Set exactly once by the owning Module; detached scratch has no owner.
+  Module* ownerModule() const { return ownerModule_; }
   void setType(const Type* type) { type_ = type; }
   bool isInst() const { return kind_ == ValueKind::Inst; }
   bool isArgument() const { return kind_ == ValueKind::Argument; }
@@ -53,6 +55,7 @@ class Value {
   void clearUses() { uses_.clear(); }
   ValueKind kind_;
   const Type* type_;
+  Module* ownerModule_ = nullptr;
   std::vector<Use> uses_;
   uint64_t id_ = 0;
 };

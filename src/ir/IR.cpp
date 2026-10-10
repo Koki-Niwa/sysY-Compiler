@@ -74,7 +74,8 @@ void BasicBlock::sortPreds() {
 // Function
 // ============================================================================
 void Function::addParam(Argument* p) {
-  if (p == nullptr) return;
+  if (p == nullptr || p->ownerModule() != parent_ || p->owner() != nullptr)
+    return;
   p->registerOwner(this, params_.size());
   params_.push_back(p);
   if (BasicBlock* e = entry()) e->addParam(p);
@@ -133,12 +134,18 @@ Instruction* Module::createInst(Opcode op, const Type* ty, SourceLoc loc) {
 
 Argument* Module::createArgument(const Type* ty, SourceLoc loc) {
   Argument* arg = new Argument(ty, loc);
+  arg->ownerModule_ = this;
   args_.push_back(arg);
   return arg;
 }
 
 BlockAddr* Module::createBlockAddr(const Type* ty, BasicBlock* block) {
+  if (block == nullptr || block->parent() == nullptr ||
+      block->parent()->parent() != this ||
+      std::find(blocks_.begin(), blocks_.end(), block) == blocks_.end())
+    return nullptr;
   BlockAddr* value = new BlockAddr(ty);
+  value->ownerModule_ = this;
   value->block = block;
   blockAddrs_.push_back(value);
   return value;
@@ -165,10 +172,13 @@ GlobalVariable* Module::createGlobal(const std::string& name, const Type* objTy)
 }
 
 GlobalAddr* Module::globalAddr(GlobalVariable* gv) {
-  if (gv == nullptr) return nullptr;
+  if (gv == nullptr ||
+      std::find(globals_.begin(), globals_.end(), gv) == globals_.end())
+    return nullptr;
   const auto it = addrOf_.find(gv);
   if (it != addrOf_.end()) return it->second;
   GlobalAddr* a = new GlobalAddr(gv, gv->addrType());
+  a->ownerModule_ = this;
   globalAddrs_.push_back(a);
   addrOf_[gv] = a;
   return a;
@@ -198,6 +208,7 @@ Constant* Module::getIntConst(const Type* ty, int64_t v) {
   auto it = constants_.find(key);
   if (it != constants_.end()) return it->second;
   Constant* c = new Constant(ty, bits);
+  c->ownerModule_ = this;
   consts_.push_back(c);
   constants_.emplace(key, c);
   return c;
@@ -208,6 +219,7 @@ Constant* Module::getFloatConst(uint32_t bits) {
   auto it = constants_.find(key);
   if (it != constants_.end()) return it->second;
   Constant* c = new Constant(key.type, bits);
+  c->ownerModule_ = this;
   consts_.push_back(c);
   constants_.emplace(key, c);
   return c;

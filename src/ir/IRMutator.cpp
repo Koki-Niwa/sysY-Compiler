@@ -41,16 +41,48 @@ bool IRMutator::isLive(const Instruction* inst) const {
 }
 bool IRMutator::valueAvailable(Value* value, bool forLive) const {
   if (value == nullptr) return !forLive;
+  if (value->ownerModule() != &module_) {
+    if (forLive || value->ownerModule() != nullptr || !value->isInst())
+      return false;
+  }
   if (!value->isInst()) return true;
   Instruction* inst = static_cast<Instruction*>(value);
   if (inst->lifecycle() == InstructionLifecycle::Tombstone) return false;
   return !forLive || isLive(inst);
 }
+// SSA instructions and arguments are Function-local; other Values are Module-local.
+bool IRMutator::valueAvailableInFunction(Value* value, const Function* function) const {
+  if (value == nullptr || function == nullptr || function->parent() != &module_ ||
+      value->ownerModule() != &module_) return false;
+  if (value->isInst()) {
+    auto* inst = static_cast<Instruction*>(value);
+    return isLive(inst) && inst->parent()->parent() == function;
+  }
+  if (value->isArgument()) {
+    auto* arg = static_cast<Argument*>(value);
+    return arg->owner() == function && arg->index() < function->numParams() &&
+           function->param(arg->index()) == arg;
+  }
+  if (value->isGlobalAddr()) {
+    GlobalVariable* global = static_cast<GlobalAddr*>(value)->global();
+    return global != nullptr && std::find(module_.globals().begin(),
+        module_.globals().end(), global) != module_.globals().end();
+  }
+  if (value->isBlockAddr())
+    return isLiveBlock(static_cast<BlockAddr*>(value)->block);
+  return value->isConstant();
+}
 bool IRMutator::operandLegal(const Instruction* user, size_t index,
                              Value* value) const {
-  if (user == nullptr || index >= user->numOperands()) return false;
-  if (!valueAvailable(value, user->lifecycle() == InstructionLifecycle::Live))
+  if (user == nullptr || index >= user->numOperands() ||
+      (user->ownerModule() != nullptr && user->ownerModule() != &module_))
     return false;
+  if (user->lifecycle() == InstructionLifecycle::Live) {
+    if (!isLive(user) || !valueAvailableInFunction(value, user->parent()->parent()))
+      return false;
+  } else if (!valueAvailable(value, false)) {
+    return false;
+  }
   if (value == nullptr) return true; // detached scratch only
   Value* previous = user->operand(index);
   if (previous != nullptr && previous->type() != value->type()) return false;
@@ -100,7 +132,9 @@ void IRMutator::commit(MutationKind kinds, const std::vector<Function*>& functio
 }
 MutationResult IRMutator::rewriteOperand(Instruction* user, size_t index,
                                      Value* replacement) {
-  if (user == nullptr || user->lifecycle() == InstructionLifecycle::Tombstone ||
+  if (user == nullptr || (user->ownerModule() != nullptr &&
+      user->ownerModule() != &module_) ||
+      user->lifecycle() == InstructionLifecycle::Tombstone ||
       (user->lifecycle() == InstructionLifecycle::Live && !isLive(user)) ||
       !operandLegal(user, index, replacement)) return MutationResult::Rejected;
   if (user->operand(index) == replacement) return MutationResult::NoChange;
@@ -116,7 +150,7 @@ MutationResult IRMutator::replaceUses(Value* oldValue, Value* replacement) {
       (oldValue->isInst() &&
        static_cast<Instruction*>(oldValue)->lifecycle() == InstructionLifecycle::Tombstone) ||
       oldValue->type() != replacement->type() ||
-      !valueAvailable(replacement, false) ||
+      !valueAvailable(oldValue, false) || !valueAvailable(replacement, false) ||
       !validUses(oldValue)) return MutationResult::Rejected;
   if (oldValue == replacement || oldValue->uses().empty())
     return MutationResult::NoChange;
@@ -139,6 +173,7 @@ MutationResult IRMutator::insertInstruction(BasicBlock* block, size_t index,
                                             Instruction* inst) {
   if (!isLiveBlock(block) || inst == nullptr ||
       inst->lifecycle() != InstructionLifecycle::Detached || inst->parent() != nullptr ||
+      (inst->ownerModule() != nullptr && inst->ownerModule() != &module_) ||
       inst->op() == Opcode::Phi || isTerminatorOpcode(inst->op()) ||
       index >= block->size() || block->terminator() == nullptr)
     return MutationResult::Rejected;
@@ -147,10 +182,10 @@ MutationResult IRMutator::insertInstruction(BasicBlock* block, size_t index,
   std::string error;
   if (!validateFlatInstruction(*inst, error)) return MutationResult::Rejected;
   for (size_t j = 0; j < inst->numOperands(); ++j)
-    if (!valueAvailable(inst->operand(j), true) ||
+    if (!valueAvailableInFunction(inst->operand(j), block->parent()) ||
         !hasEdge(inst->operand(j), inst, j)) return MutationResult::Rejected;
   if (inst->hasUses()) return MutationResult::Rejected;
-  module_.ownInst(inst);
+  if (!module_.ownInst(inst)) return MutationResult::Rejected;
   block->insertInst(index, inst);
   commit(kindsFor(inst->op()), {block->parent()});
   return MutationResult::Applied;
@@ -178,7 +213,8 @@ MutationResult IRMutator::replaceAndErase(Instruction* oldInst,
   if (!isLive(oldInst) || oldInst == replacement ||
       isTerminatorOpcode(oldInst->op()) || oldInst->op() == Opcode::Phi ||
       replacement == nullptr || replacement->type() != oldInst->type() ||
-      !valueAvailable(replacement, true) || !validUses(oldInst))
+      !valueAvailableInFunction(replacement, oldInst->parent()->parent()) ||
+      !validUses(oldInst))
     return MutationResult::Rejected;
   MutationKind kinds = kindsFor(oldInst->op());
   std::vector<Function*> affected{oldInst->parent()->parent()};
@@ -200,7 +236,8 @@ MutationResult IRMutator::discardDetached(const std::vector<Instruction*>& scrat
   std::unordered_set<Instruction*> set;
   for (Instruction* inst : scratch) {
     if (inst == nullptr || inst->lifecycle() != InstructionLifecycle::Detached ||
-        inst->parent() != nullptr || module_.ownsInstruction(inst) ||
+        inst->parent() != nullptr || inst->ownerModule() != nullptr ||
+        module_.ownsInstruction(inst) ||
         !set.insert(inst).second) return MutationResult::Rejected;
   }
   for (Instruction* inst : scratch)

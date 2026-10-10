@@ -135,7 +135,9 @@ void argumentsAndGlobals() {
   Function* foreign=m.createFunction("foreign",t);
   BasicBlock* fb=m.createBlock(foreign);
   foreign->addParam(arg);
-  own(m,fb,createRet(arg,{}));
+  check(foreign->numParams()==0 && arg->owner()==f,
+        "foreign Function addParam fails closed");
+  own(m,fb,createRet(arg,{})); // raw illegal operand for verifier negative
   m.rebuildCFG();
   m.rebuildUseDef();
   check(!verifyFlatModule(m).empty(), "foreign Argument rejected");
@@ -210,12 +212,55 @@ void canonicalAndRoundTrip() {
   check(m.functions().empty() && m.globals().empty(),
         "Module clear repeated safely");
 }
+
+void rawProvenanceVerifier() {
+  const Type* t=typePool().i32();
+  Module m, foreign;
+  Function* f=m.createFunction("raw",t);
+  Function* other=m.createFunction("other",t);
+  BasicBlock* b=m.createBlock(f), *ob=m.createBlock(other);
+  Constant* one=m.getIntConst(t,1);
+  Instruction* cross=own(m,ob,createBin(Opcode::Add,one,one,{}));
+  own(m,ob,createRet(one,{}));
+  Argument* otherArg=m.createArgument(t,{});
+  other->addParam(otherArg);
+  GlobalAddr* localAddr=m.globalAddr(m.createGlobal("local",t));
+  Instruction* valueUser=own(m,b,createBin(Opcode::Add,one,one,{}));
+  Instruction* addrUser=own(m,b,createLoad(t,localAddr,{}));
+  own(m,b,createRet(valueUser,{}));
+  m.rebuildCFG();
+  check(verifyFlatModule(m).empty(),"raw provenance initial valid module");
+  Function* ff=foreign.createFunction("foreign",t);
+  BasicBlock* fb=foreign.createBlock(ff);
+  Constant* fc=foreign.getIntConst(t,5);
+  Argument* fa=foreign.createArgument(t,{});
+  ff->addParam(fa);
+  GlobalAddr* fg=foreign.globalAddr(foreign.createGlobal("fg",t));
+  BlockAddr* fba=foreign.createBlockAddr(typePool().ptrTo(t),fb);
+  auto inject=[&](Instruction* user, size_t index, Value* bad,
+                  const char* label) {
+    Value* saved=user->operand(index);
+    user->setOperand(index,bad); // Raw builder bypasses IRMutator intentionally.
+    bool v1=false;
+    for (const Violation& violation : verifyFlatModule(m))
+      if (violation.invariant=="V1") v1=true;
+    user->setOperand(index,saved);
+    check(v1 && verifyFlatModule(m).empty(),label);
+  };
+  inject(valueUser,0,fc,"raw foreign Constant detected as V1");
+  inject(valueUser,0,fa,"raw foreign Argument detected as V1");
+  inject(valueUser,0,otherArg,"raw same-module cross-function Argument detected as V1");
+  inject(valueUser,0,cross,"raw same-module cross-function Instruction detected as V1");
+  inject(addrUser,0,fg,"raw foreign GlobalAddr detected as V1");
+  inject(addrUser,0,fba,"raw foreign BlockAddr detected as V1");
+}
 }
 int main() {
   valuesAndRAUW();
   argumentsAndGlobals();
   canonicalAndRoundTrip();
   unreferencedReverseEdge();
+  rawProvenanceVerifier();
   std::printf("VALUE_USE_FAILURES=%d\n",failures);
   return failures?1:0;
 }

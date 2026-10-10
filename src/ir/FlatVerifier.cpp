@@ -66,14 +66,16 @@ std::vector<Violation> verifyFlatModule(const Module& m) {
   }
   for (const auto& item : occurrences) {
     const Instruction* inst = item.first;
-    if (!m.ownsInstruction(inst) || !m.isLiveInstruction(inst) ||
+    if (inst->ownerModule() != &m || !m.ownsInstruction(inst) ||
+        !m.isLiveInstruction(inst) ||
         inst->lifecycle() != InstructionLifecycle::Live ||
         inst->parent() == nullptr || item.second != 1)
       add("V1", std::string(), inst->loc(),
           "live 指令的 ownership、registry 或 block membership 不一致");
   }
   for (Instruction* inst : m.liveInstructions()) {
-    if (inst == nullptr || !m.ownsInstruction(inst) ||
+    if (inst == nullptr || inst->ownerModule() != &m ||
+        !m.ownsInstruction(inst) ||
         inst->lifecycle() != InstructionLifecycle::Live ||
         occurrences[inst] != 1)
       add("V1", std::string(), SourceLoc(),
@@ -81,6 +83,8 @@ std::vector<Violation> verifyFlatModule(const Module& m) {
   }
   for (Instruction* inst : m.ownedInstructions()) {
     if (inst == nullptr) continue;
+    if (inst->ownerModule() != &m)
+      add("V1", std::string(), inst->loc(), "owned 指令记录了错误的 Module owner");
     if (inst->lifecycle() == InstructionLifecycle::Tombstone &&
         (inst->parent() != nullptr || m.isLiveInstruction(inst) ||
          inst->numOperands() != 0 || inst->numSuccs() != 0 || inst->hasUses()))
@@ -169,7 +173,8 @@ std::vector<Violation> verifyFlatModule(const Module& m) {
           add("V1", fname, instruction->loc(), "同一条指令重复出现在多个基本块中");
           structurallySafe = false;
         }
-        if (instruction->parent() != block || !m.ownsInstruction(instruction) ||
+        if (instruction->parent() != block || instruction->ownerModule() != &m ||
+            !m.ownsInstruction(instruction) ||
             !m.isLiveInstruction(instruction) ||
             instruction->lifecycle() != InstructionLifecycle::Live) {
           add("V1", fname, instruction->loc(), "指令归属、所有权或 live 状态不一致");
@@ -366,22 +371,42 @@ std::vector<Violation> verifyFlatModule(const Module& m) {
           }
           if (value->isInst()) {
             const auto* definition = static_cast<const Instruction*>(value);
-            if (definition->parent() == nullptr || definition->parent()->parent() != f)
-              add("V1", fname, instruction->loc(), "操作数引用了当前函数以外的指令");
+            if (definition->ownerModule() != &m || !m.ownsInstruction(definition) ||
+                !m.isLiveInstruction(definition) ||
+                definition->lifecycle() != InstructionLifecycle::Live ||
+                definition->parent() == nullptr || definition->parent()->parent() != f)
+              add("V1", fname, instruction->loc(), "操作数引用非本函数的 live 指令");
           } else if (value->isArgument()) {
             const auto* argument = static_cast<const Argument*>(value);
-            if (argument->owner() != f || argument->index() >= f->numParams() ||
+            if (argument->ownerModule() != &m ||
+                pointerCount(m.arguments(), argument) != 1 ||
+                argument->owner() != f || argument->index() >= f->numParams() ||
                 f->param(argument->index()) != argument) {
               add("V1", fname, instruction->loc(), "操作数引用未登记或错误归属的形参");
             }
           } else if (value->isGlobalAddr()) {
             const auto* address = static_cast<const GlobalAddr*>(value);
             GlobalVariable* global = address->global();
-            if (global == nullptr || moduleGlobals.count(global) == 0 ||
+            if (address->ownerModule() != &m ||
+                pointerCount(m.globalAddresses(), address) != 1 ||
+                global == nullptr || moduleGlobals.count(global) == 0 ||
                 global->objType() == nullptr || address->type() != global->addrType()) {
               add("V1", fname, instruction->loc(), "全局地址为空、外来或地址类型错误");
             }
-          } else if (!value->isConstant() && !value->isBlockAddr()) {
+          } else if (value->isConstant()) {
+            if (value->ownerModule() != &m ||
+                pointerCount(m.constants(), static_cast<Constant*>(value)) != 1)
+              add("V1", fname, instruction->loc(), "操作数引用 foreign Constant");
+          } else if (value->isBlockAddr()) {
+            const auto* address = static_cast<const BlockAddr*>(value);
+            BasicBlock* referenced = address->block;
+            if (address->ownerModule() != &m ||
+                pointerCount(m.blockAddresses(), address) != 1 ||
+                referenced == nullptr || referenced->parent() == nullptr ||
+                referenced->parent()->parent() != &m ||
+                pointerCount(referenced->parent()->blocks(), referenced) != 1)
+              add("V1", fname, instruction->loc(), "操作数引用 foreign BlockAddr");
+          } else {
             add("V1", fname, instruction->loc(), "操作数不是可用的值形态");
           }
         }
@@ -394,7 +419,8 @@ std::vector<Violation> verifyFlatModule(const Module& m) {
         continue;
       }
       observedValues.insert(arg);
-      if (arg->owner() != f || arg->index() != pi)
+      if (arg->ownerModule() != &m || pointerCount(m.arguments(), arg) != 1 ||
+          arg->owner() != f || arg->index() != pi)
         add("V1", fname, arg->loc(), "形参归属或索引错误");
       if (pointerCount(f->params(), arg) != 1)
         add("V1", fname, arg->loc(), "形参表重复登记同一个形参");

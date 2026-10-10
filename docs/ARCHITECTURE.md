@@ -151,6 +151,21 @@ Argument and canonical scalar Constant are independent Value kinds.
   owned scratch object. Formal erase makes a Tombstone with `parent=null`,
   not live, no operands, and no successor metadata; reinsertion is forbidden.
   Detached scratch edits do not count as live IR changes.
+- F02 pre-validation ownership hardening: every Flat `Value` exposes immutable
+  `ownerModule()` provenance. Newly allocated detached Instruction scratch has
+  null owner until the first successful `Module::ownInst()`; adoption is
+  idempotent in that Module and fails for a foreign-owned Instruction, even
+  when detached. `discardDetached()` may delete only genuinely unowned scratch.
+  `Argument`, canonical `Constant`, `GlobalAddr`, and `BlockAddr` acquire their
+  owner at their respective Module factories, which reject foreign referenced
+  globals/blocks and cross-Module/cross-Function parameter registration.
+- Live operand preflight is centralized in `IRMutator`: Instructions must be
+  owned, live, and defined in the user's Function; Arguments must be registered
+  in that Function; other Values must belong to the user's Module. RAUW and
+  CFG/Phi operations validate all inputs before making live changes. Rejected
+  edits preserve reverse Uses, dump and Module/Function revisions. Independent
+  FlatVerifier V1 checks operand provenance, including raw-injected foreign
+  Values and cross-Function Instruction uses.
 - `Module::revision()` and `Function::revision()` track **DataFlow, CFG,
   Memory, Calls, Globals, Interface** categories. F01 actively uses the first
   four; Globals and Interface are reserved fields without dedicated mutation

@@ -124,12 +124,15 @@ class Module {
   //   （工厂造好手动登记 / 走 `emit`），两者叠加时同一条会被登记两次，
   //   而重复登记 = 析构时二次 `delete`（实测 ASAN heap-use-after-free）。
   //   代价是一次哈希插入（构建期一次性开销，不在任何遍历热路径上）。
-  void ownInst(Instruction* i) {
-    if (i == nullptr) return;
-    if (!ownedSet_.insert(i).second) return;
+  bool ownInst(Instruction* i) {
+    if (i == nullptr || (i->ownerModule() != nullptr && i->ownerModule() != this))
+      return false;
+    if (!ownedSet_.insert(i).second) return true;
+    i->ownerModule_ = this;
     insts_.push_back(i);
     if (i->lifecycle() == InstructionLifecycle::Live && i->parent() != nullptr)
       liveSet_.insert(i);
+    return true;
   }
   bool ownsInstruction(const Instruction* i) const {
     return ownedSet_.count(const_cast<Instruction*>(i)) != 0;

@@ -182,10 +182,9 @@ std::vector<Violation> verifyFlatModule(const Module& m) {
         structurallySafe = false;
       }
       if (block->index() != bi) {
-        add("V1", fname, SourceLoc(),
+        add("V4", fname, SourceLoc(),
             "基本块下标不密集或与块表位置不一致：L" + std::to_string(block->index()) +
                 " 应为 L" + std::to_string(bi));
-        structurallySafe = false;
       }
       blocks.push_back(block);
     }

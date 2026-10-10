@@ -302,6 +302,17 @@ void blockOwnership() {
   check(!fb->addBlock(owned) && fb->blockCount() == before &&
         owned->index() == 0, "duplicate addBlock rejected without mutation");
 
+  owned->setIndex(7);
+  bool badIndexV1 = false, badIndexV4 = false;
+  for (const auto& error : verifyFlatModule(b)) {
+    badIndexV1 |= error.invariant == "V1";
+    badIndexV4 |= error.invariant == "V4";
+  }
+  check(badIndexV4 && !badIndexV1,
+        "pure block index corruption is V4 without V1 ownership failure");
+  owned->setIndex(0);
+  valid(b, "restored block index verifier");
+
   auto hasV1 = [&](const Module& module) {
     for (const auto& error : verifyFlatModule(module))
       if (error.invariant == "V1") return true;

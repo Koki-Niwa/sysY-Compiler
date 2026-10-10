@@ -82,17 +82,28 @@ The toy backend is a correctness-only protocol consumer, not the formal
 backend and not a performance backend.
 
 F00 is **CLOSED / PASS** on accepted compiler revision
-`f9425dc56b74b9312f6a336f334e5b347844e830`. Its first-class Value/Use model,
-independent Argument Values, canonical Constants, and exact operand/use
-maintenance preserve the frozen Flat text protocol byte-for-byte (490/490).
-The clean S09 gate passed with 0 observable differences; current-revision host
-execution passed x86 490/50/0/0 and no-structured 490/50/0/0 (PASS/SKIP/FAIL/
-TIMEOUT). The next active milestone is **F01 — IRMutator + CFGEditor +
-live/owned separation + revision**. The order remains F00 → F01 → F02 → F03 →
-F04 → F05 → S12+. B00 read-only target/ABI audit and B01 MIR design may
-interleave only within their documented boundaries; live Flat→formal backend
-integration must not bypass the foundation. S10b remains separately dependent
-on S10a, S11, and S11b evidence.
+`f9425dc56b74b9312f6a336f334e5b347844e830`: first-class Value/Use,
+independent Argument Values, canonical Constants, and frozen Flat text protocol.
+
+F01 is **CLOSED / PASS** on accepted validation revision
+`22eb7a66d6eb57073ecf904323cf10212fe2c247` (implementation/Fix1:
+`5f4173caeb8abf78d1ac56c129c9550985f48b0b`; the only difference is
+`README.md`). IRMutator/CFGEditor now own tracked optimizer and CFG changes,
+with Detached/Live/Tombstone ownership semantics, Module/Function revisions
+and MutationSummary; existing Mem2Reg consumes both editors. Acceptance:
+O1 Flat **490/490 byte-identical** (50/50 tensor rejects unchanged);
+current F01 S09 **54 PASS / 0 FAIL / 2 SKIP**, **0 observable differences**;
+full x86 O1 **490/50/0/0** and no-structured O1 **490/50/0/0**
+(PASS/SKIP/FAIL/TIMEOUT). The historical pre-F01 S09 total was 52/0/2;
+the two new architecture boundary gates account for 54.
+
+The active next milestone is **F02 — AnalysisManager**, consuming F01's
+revision facts to provide cached, dependency-aware, fail-closed analysis
+management. No AnalysisManager or analysis cache is implemented by F01.
+Order: F00 → F01 → F02 → F03 → F04 → F05 → S12+. B00 read-only target/ABI
+audit and B01 MIR design may interleave only within their documented boundaries;
+formal Flat→backend integration must not bypass the foundation. S10b remains
+separately dependent on S10a, S11, and S11b evidence.
 
 ## Validation ledger
 
@@ -152,13 +163,13 @@ differences, and 121 categorized skips. The S08 public-boundary matrix passed
 49/0/2 and 28/7/8 historical baseline for the current source. The gate also
 passed the dynamic remainder regressions and independent IRGen comparison.
 
-The post-fix S09 gate passed on the same clean source revision:
+The historical pre-F01 post-fix S09 gate passed on the same clean source revision:
 
 ```bash
 ulimit -v 8388608 && timeout 2400 bash compiler/tools/verify.sh --stage S09
 ```
 
-It reported **52 passed, 0 failed, 2 expected stage skips**. The promoted flat
+That pre-F01 run reported **52 passed, 0 failed, 2 expected stage skips**. The promoted flat
 path ran across 540 files: **357 identical complete trajectories, 62
 loop-count-only differences, 0 observable differences, and 121 categorized
 skips**. S08's public matrix again reported 28 invalid / 7 positive / 8 legacy

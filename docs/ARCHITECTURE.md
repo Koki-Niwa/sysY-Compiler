@@ -106,41 +106,122 @@ operand reverse uses stay exact and the predecessor cache needs no rebuilding. I
 worklists use finite CFG data and linear temporary storage in blocks, accesses,
 and phi inputs; the stage gate supplies the process timeout and memory limits.
 Candidate declines do not roll back earlier successful candidates. The API can
-be disabled and can capture before/after dumps. The current revision-bound S09 gate passed 52
-checks with 0 failures and 2 expected stage skips; the [dated report](../../docs/audit/S09-FRESH-2026-09-30.md)
-records corpus counts and limits. This validates interpreter-observed behavior,
+be disabled and can capture before/after dumps. The F01 current revision-bound S09 gate passed 54
+checks with 0 failures and 2 expected stage skips. The historical
+pre-F01 52/0/2 result and corpus limits remain in the
+[dated report](../../docs/audit/S09-FRESH-2026-09-30.md). This validates interpreter-observed behavior,
 not target runtime performance.
 
 Broad optimization and target backend consumption remain future work.
 
-The Flat IR foundation proceeds through the F00–F05 slices recorded in
-`../docs/handoff/SESSION-PLAN.md`. F00 is closed on accepted revision
-`f9425dc56b74b9312f6a336f334e5b347844e830`; F01 is active, with
-implementation present but not yet independently accepted.
-F00 establishes exact operand/use relationships: `Value` owns reverse
-`Use{Instruction*, operandIndex}` occurrences for Instructions, Arguments,
-Constants, GlobalAddr, and BlockAddr. `addOperand`, `setOperand`, and
-`clearOperands` maintain those edges incrementally and exactly. Argument and
-canonical scalar Constant are independent Value kinds, not Instructions.
-F00 closed with exact Value/Use tracking; F01 adds tracked mutation and
-separates Module ownership from live BasicBlock membership. Instructions move
-through Detached → Live → Tombstone, with tombstones never reinserted. Owned
-but detached scratch is excluded from live analysis. `Module::liveInstructions()`
-tracks live, owned instructions independently of the ownership inventory.
+The Flat IR foundation proceeds through F00–F05 in
+`../docs/handoff/SESSION-PLAN.md`. **F00 CLOSED** (accepted revision
+`f9425dc56b74b9312f6a336f334e5b347844e830`); **F01 CLOSED / PASS**
+(accepted validation revision `22eb7a66d6eb57073ecf904323cf10212fe2c247`,
+implementation/Fix1 revision `5f4173caeb8abf78d1ac56c129c9550985f48b0b`);
+**F02 — AnalysisManager is active next**. Only `README.md` differs between
+the F01 implementation and accepted validation revisions: product code,
+tools, and CMake are identical. No F02 implementation is included in F01.
 
-`IRMutator` is the normal optimizer authority for operands, RAUW, insert,
-safe erase and replace-and-erase. `CFGEditor` owns live Phi and CFG operations,
-including duplicate-successor-aware redirect/split, sorted predecessor caches,
-and matching sorted Phi incoming pairs with precise indexed Use edges. Each
-logical edit preflights the entire change, then commits one mutation fact; an
-unchanged/rejected operation never bumps a revision. `MutationSummary` derives
-operation counts, categories and affected Functions from successful edits only.
-`Module::revision()` and each `Function::revision()` carry monotonic category
-counters (DataFlow/CFG/Memory/Calls/Globals/Interface); shared Constant RAUW
-bumps all touched Functions without invalidating unrelated Functions. F02 will
-consume these facts but no analysis caches exist in F01. `rebuildUseDef()` and
-`rebuildCFG()` remain construction finalization, debug repair and negative-test
-recovery only, never normal optimizer mutation paths.
+F00 established exact `Value` reverse `Use{Instruction*, operandIndex}`
+occurrences across Instructions, Arguments, Constants, GlobalAddr and
+BlockAddr, maintained by `addOperand`, `setOperand` and `clearOperands`.
+Argument and canonical scalar Constant are independent Value kinds.
+
+### F01 frozen mutation and revision contract
+
+- `IRMutator` is the **normal optimizer data-flow/instruction mutation
+  authority**. Its tracked operations include `rewriteOperand`, `replaceUses`,
+  `insertInstruction`, `eraseInstruction`, and `replaceAndErase`.
+- `CFGEditor` is the **live Phi/CFG mutation authority**. Its operations
+  include `rewritePhiValue`, `insertPhi`, `erasePhi`, `redirectEdge`,
+  and `splitEdge`. It maintains the predecessor cache incrementally and
+  Phi `(pred,value)` pairs in sync with CFG edges, preserving canonical
+  predecessor ordering and exact indexed Uses. Duplicate successors have
+  explicit semantics: `redirectEdge` acts on a successor **index**;
+  redirecting to a target with Phi nodes requires explicit incoming values.
+  `splitEdge` handles ordinary and duplicate-target edges; composite
+  CFG edits preflight first and commit atomically. Optimizers never rely on
+  `rebuildCFG()` after live mutations.
+- An Instruction has lifecycle **Detached → Live → Tombstone**. **owned != live**:
+  `Module::ownInst()` manages lifetime ownership only; live registry membership
+  and BasicBlock membership are independent, verifiable facts.
+  `Module::liveInstructions()` enumerates live owned instructions, not every
+  owned scratch object. Formal erase makes a Tombstone with `parent=null`,
+  not live, no operands, and no successor metadata; reinsertion is forbidden.
+  Detached scratch edits do not count as live IR changes.
+- `Module::revision()` and `Function::revision()` track **DataFlow, CFG,
+  Memory, Calls, Globals, Interface** categories. F01 actively uses the first
+  four; Globals and Interface are reserved fields without dedicated mutation
+  APIs. **Applied** edits update actual mutation facts/revisions; **NoChange**
+  and **Rejected** do not increment revisions; Detached scratch editing does
+  not increment live revisions. Canonical Value RAUW spanning functions grows
+  the Module revision and every affected Function revision.
+- `MutationSummary` reports `changed`, successful operation count,
+  `MutationKind` union and affected Functions. All originate in actually
+  applied edits, never caller-declared change flags. They are authoritative
+  inputs for F02 analysis management and F03 pass orchestration.
+- Existing **Mem2Reg is F01's real tracked consumer**: it uses both
+  `IRMutator` and `CFGEditor`; `src/opt` raw mutation = **0**; Mem2Reg
+  `rebuildUseDef()` calls = **0** and `rebuildCFG()` calls = **0**.
+  Successful outputs pass the verifier directly, without optimizer rebuild.
+  `Mem2RegResult.changed` agrees with actual tracked live mutations.
+- The architecture-stage boundary gate includes
+  `tools/selftest/check_ir_mutation_boundary.py` and
+  `tools/selftest/test_ir_mutation_boundary.py`: **44 negative controls PASS**
+  and **4 positive controls PASS**. Independent manual negatives show
+  `ptr->rawMutation()`, `ref.rawMutation()`, and
+  `(*ptr).rawMutation()` cannot bypass the rule. The old tracked/raw
+  same-name ambiguity was removed by renaming `IRMutator::setOperand` to
+  `rewriteOperand`, and `IRMutator::replaceAllUsesWith` to `replaceUses`.
+  `rebuildUseDef()` / `rebuildCFG()` remain reader/builder finalization,
+  debug repair and negative-test recovery, never normal optimizer repair.
+
+### F01 frozen acceptance evidence
+
+- **Full O1 Flat textual protocol**: manifest 540; supported 490; **490/490
+  byte-identical**, 0 mismatch; tensor baseline rejects **50/50**, current
+  rejects **50/50**. Pre-F01 baseline source revision
+  `3da451f46bc0e92afe0df9008fbf30b827c7de0f` and compiler SHA256
+  `32f8b1dff0444b0cf6e24512edd50cf5695b01e1d4ce9a08a4ac1aba94af63ec`.
+  Mutation infrastructure changed; O1 Flat text did not.
+- **Current F01 S09**: **54 PASS / 0 FAIL / 2 SKIP** vs historical F00/pre-F01
+  **52/0/2**, exactly because `check_ir_mutation_boundary` and
+  `test_ir_mutation_boundary` added two architecture gates (52 + 2 = 54).
+  Flat-vs-structured: **357 exact**, **62 loop-count-only**, **0 observable
+  differences**, **121 categorized skips**. S08: **44 invalid / 7 positive /
+  8 legacy**. Mem2Reg structural fixture: **1 alloca / 1 load / 3 stores
+  → 0/0/0**, **phi=1**. Forged-stat negative control, `S08_OK` and
+  `MEM2REG_OK` all PASS. S09 LLVM: **490** supported modules PASS
+  `llvm-as`, **50** tensor frontend rejects, **0 failure / 0 timeout**.
+- **Full x86 O1 current-revision execution**:
+  **490 PASS / 50 SKIP / 0 FAIL / 0 TIMEOUT**, `mode.optimize=true`,
+  `boundary=source`, all **490/490** required compiler invocations include
+  `-O1`, revision `22eb7a66d6eb57073ecf904323cf10212fe2c247`,
+  `dirty=false`. Initial unsupported runner `--optimize` invocation
+  exited 2 (retained harness invocation evidence, **not** product failure);
+  rerun with supported `-O1` passed the full matrix.
+- **Full no-structured O1 current-revision execution**:
+  **490 PASS / 50 SKIP / 0 FAIL / 0 TIMEOUT**, `mode.optimize=true`,
+  `boundary=from-flat`. Every required case (490/490) uses
+  source → `--emit=flat-ir` → fresh compiler →
+  `--from-flat --emit=llvm-ir -O1`: second invocation
+  `--from-flat=490/490`, `-O1=490/490`, bad shape **0**. This is the
+  serialized Flat → tracked Mem2Reg end-to-end proof.
+- **Focused sanity only**: O0 normal **3/3**, O0 no-structured **3/3**,
+  AArch64 O1 **3/3**, RV64 O1 **3/3**, and self-built toy O1 **3/3** PASS.
+  AArch64/RV64 focused runs are **not** new full target acceptance;
+  toy focused is **not** new full 490-case S11b acceptance.
+- **Sanitizers**: implementation-stage ASAN **PASS** and UBSAN **PASS**
+  with `detect_leaks=0`; final independent F01 validation **did not rerun
+  sanitizers**. Known process-lifetime TypePool LSan allocation (~96 bytes)
+  remains; **do not claim LSan clean**.
+
+**Boundary**: F01 establishes authoritative, revision-producing IR mutation.
+F02 consumes these revisions for cached, dependency-aware, fail-closed
+analysis management. F01 did **not** implement `AnalysisManager`, an analysis
+cache, dependency invalidation, stale-analysis handles, `PreservedAnalyses`,
+`FlatPassManager`, `PassContext`, or `FunctionPass`.
 
 The canonical scalar Constant identity is `(type pointer, raw bits)`: i32 uses
 the low 32 bits, i64 the full 64 bits, and f32 the IEEE raw 32-bit pattern.
@@ -162,9 +243,10 @@ The Flat optimization contracts (F01 present; F02+ cache/pass pieces future) are
 - arena/central ownership is allowed for pointer stability, but owned objects
   and live IR membership are distinct; erased/tombstoned instructions are not
   traversed by normal analyses;
-- mutation records data-flow/CFG/memory/call/interface revisions. Analysis
-  cache validity is checked against those revisions; a pass's
-  `PreservedAnalyses` declaration cannot override a real incompatible mutation;
+- F01 records data-flow/CFG/memory/call revisions (Globals/Interface
+  fields reserved); F02 will validate analysis caches against revisions and
+  dependencies, and F03 `PreservedAnalyses` declarations cannot override
+  actual incompatible mutation facts;
 - `rebuildUseDef()` / `rebuildCFG()` remain reader/builder finalization and
   verifier/debug reconstruction tools, not the normal maintenance strategy for
   optimization passes;

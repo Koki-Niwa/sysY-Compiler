@@ -97,23 +97,60 @@ full x86 O1 **490/50/0/0** and no-structured O1 **490/50/0/0**
 (PASS/SKIP/FAIL/TIMEOUT). The historical pre-F01 S09 total was 52/0/2;
 the two new architecture boundary gates account for 54.
 
-**F02 implementation present / pending independent validation** (not CLOSED).
-`src/analysis/AnalysisManager` now binds one Module, caches typed immutable
-Module/Function results, checks all six declared revision categories and tracked
-analysis dependency generations, fails closed on cycles, failed dependencies,
-foreign Functions and stale handles, and lazily recomputes invalid entries.
-`ReachabilityAnalysis` is the first Function consumer (CFG-only); Mem2Reg now
-requests it per candidate, preserving the original worklist algorithm and
-declining conservatively when an analysis cannot be obtained. F00 and F01
-remain CLOSED; F03 has not started.
-F02 pre-validation Fix1 hardens the F01 Flat lifetime/value boundary: one
-Module owner per Instruction, explicit provenance for all Value kinds,
-Function-local SSA/Arguments, and atomic rejection in mutator/CFG editor with
-independent FlatVerifier negatives. Fix2 adds immutable BasicBlock Module lifetime
-provenance, rejects cross-Module/unregistered Function blocks before allocation,
-and independently verifies Module block inventory and unique Function membership.
-F02 remains pending independent validation;
-this short-gate fix does not close F02 or begin F03.
+**F02 CLOSED / PASS** on accepted compiler revision
+`7fdb9f33f254bc0219269cafdc8e0b5e36d2e6a9`, based on valid final
+validation 004 and independent evidence closeout 008. The implementation/fix
+chain, in order, is: initial AnalysisManager
+`459fe54f862bacd7974fa734e01e37f6982f96b2` → Fix1 ownership/value
+boundary `923482ebf62236a3c00260836048f7de1ff3e591` → Fix2 BasicBlock
+Module ownership `59885f9d29d9df3967cc5488cff997c68f0c7a60` → Fix3
+verifier classification contract `7fdb9f33f254bc0219269cafdc8e0b5e36d2e6a9`.
+Fix1 enforces Instruction/Value provenance, Function-local SSA/Arguments,
+and atomic fail-closed mutator/CFG edits; Fix2 enforces immutable BasicBlock
+Module provenance, registered Function membership, and independent inventory
+verification. Fix3 classifies pure `block_bad_index` as V4 rather than V1
+(ownership negatives remain V1).
+
+The final F02 `AnalysisManager` is Module-bound and revision-aware: it caches
+typed immutable Module/Function results, checks masks over all six revision
+categories (DataFlow, CFG, Memory, Calls, Globals, Interface), automatically
+tracks analysis dependency identities/generations including transitive
+dependencies, fails closed on cycles, failed dependencies, foreign Functions
+and stale handles, and lazily recomputes invalidated entries.
+`ReachabilityAnalysis` is CFG-only at Function scope; Mem2Reg consumes it per
+candidate but still builds `DominatorTree` directly through the legacy path.
+**F03 next / not started**: `FlatPassManager`/`PassManager`,
+`PreservedAnalyses`, `PassContext` and `FunctionPass` are not implemented.
+F00 and F01 stay CLOSED with their frozen acceptance records unchanged.
+
+F02 final acceptance (valid 004 + independent 008): accepted revision
+HEAD/clean/fingerprint stayed unchanged during validation and evidence review.
+Unit tests **PASS**, `VALUE_USE_FAILURES=0`,
+`ANALYSIS_MANAGER_FAILURES=0`. S08 **49 cases / 0 failures**; public matrix
+**44 invalid / 7 positive / 8 legacy**, `block_bad_index` **V4** and
+ownership negatives **V1**. Full S09 **54 PASS / 0 FAIL /
+2 expected SKIP**, `S08_OK=YES`, `MEM2REG_OK=YES`; trajectories
+**357 exact / 62 loop-count-only / 0 observable differences /
+121 categorized skips**. LLVM manifest **490 supported PASS /
+50 tensor expected reject / 0 failure / 0 timeout**. Full O1 Flat:
+**490/490 byte-identical**, **0 mismatch**, baseline and current each
+**50/50 tensor rejects**. Frozen pre-F02 baseline compiler SHA256:
+`15235a6fa38026df9b06dd21750f19e029b4c263dd97955a59c6754333cd7d06`;
+manifest SHA256:
+`143fdf139c21782575ab1899f312d82ca4b6ceace4a39329636f54035b443a35`.
+Ownership regressions fail closed. Architecture, mutation-boundary, line-budget,
+CLI, syntax and git-diff gates **PASS**. Independent web review 008 actually
+checked the original evidence and reported **PASS / 0 findings**.
+
+**REUSED FROM 59885f9 VALIDATION** (not rerun at `7fdb9f3`): full
+x86 O1 **490 PASS / 50 SKIP / 0 FAIL / 0 TIMEOUT**; full
+no-structured O1 **490/50/0/0**; focused O0 normal **3/3**, O0
+no-structured **3/3**, AArch64 O1 **3/3**, RV64 O1 **3/3** and
+toy O1 **3/3**. The exact Fix3 diff from `59885f9` changes only the
+FlatVerifier V1→V4 classification and its corresponding unit test; none of
+these target matrices was claimed as rerun on Fix3. Attempts 001/002/003 were
+**INVALID_TEST_STATE** due to validation environment/working-directory setup,
+not compiler failures and not stage acceptance evidence.
 Order: F00 → F01 → F02 → F03 → F04 → F05 → S12+. B00 read-only target/ABI
 audit and B01 MIR design may interleave only within their documented boundaries;
 formal Flat→backend integration must not bypass the foundation. S10b remains

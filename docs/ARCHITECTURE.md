@@ -120,9 +120,13 @@ The Flat IR foundation proceeds through F00–F05 in
 `f9425dc56b74b9312f6a336f334e5b347844e830`); **F01 CLOSED / PASS**
 (accepted validation revision `22eb7a66d6eb57073ecf904323cf10212fe2c247`,
 implementation/Fix1 revision `5f4173caeb8abf78d1ac56c129c9550985f48b0b`);
-**F02 implementation present / pending independent validation** (not CLOSED).
+**F02 CLOSED / PASS** (accepted revision
+`7fdb9f33f254bc0219269cafdc8e0b5e36d2e6a9`; valid 004 validation
+and independent 008 evidence review); **F03 next / not started**.
 F01 accepted implementation and validation revisions remain historical facts;
-F02 adds the new analysis foundation without changing F01 revision contracts.
+F02 adds the analysis foundation without changing F00/F01 frozen contracts.
+F03 `FlatPassManager`/`PassManager`, `PreservedAnalyses`,
+`PassContext` and `FunctionPass` have not been implemented.
 
 F00 established exact `Value` reverse `Use{Instruction*, operandIndex}`
 occurrences across Instructions, Arguments, Constants, GlobalAddr and
@@ -293,30 +297,74 @@ Its permitted imports are `ir/` and `support/` only; `opt/` may depend on
 `analysis/`, but `ir/` and `support/` cannot. `DominatorTree` stays a direct
 legacy construction in FlatVerifier and its tests until S14.
 
-## F02 AnalysisManager foundation (implementation pending independent validation)
+## F02 AnalysisManager foundation (CLOSED / PASS)
 
-A manager binds one `flat::Module` for its entire lifetime; it owns Module
-and Function cache entries, with type-index analysis identity. Function requests
-reject foreign parent modules. Results are immutable shared ownership held by
-typed handles; handles observe manager lifetime through a weak token and only
-return a `const Result*` when their generation remains current. Manager
-destruction and stale generations cause `get() == nullptr` without dangling
-pointers.
+F02 implementation and repair chain:
+`459fe54f862bacd7974fa734e01e37f6982f96b2` (initial AnalysisManager)
+→ `923482ebf62236a3c00260836048f7de1ff3e591` (Fix1 ownership/value
+boundary) → `59885f9d29d9df3967cc5488cff997c68f0c7a60` (Fix2 BasicBlock
+Module ownership) → `7fdb9f33f254bc0219269cafdc8e0b5e36d2e6a9`
+(Fix3 verifier classification contract). Fix1 gives every Flat Value
+immutable Module provenance, Function-local Instruction/Argument checks,
+and fail-closed atomic mutator/CFG preflight. Fix2 separates BasicBlock
+Module lifetime ownership from Function membership and makes the verifier
+audit Module block inventories and duplicate/orphan membership. Fix3 corrects
+pure `block_bad_index` to V4 without mislabeling it V1; true ownership
+negatives remain V1.
 
-Each analysis declares a dependency mask over F01 DataFlow, CFG, Memory,
-Calls, Globals, Interface revisions (None means no IR dependencies). Function
-entries observe Function revisions, Module entries observe Module revisions;
-unrelated categories and other Function edits leave caches intact. While
-computing, the manager automatically records each requested analysis identity
-and generation. Freshness recursively validates these dependencies, so
-transitive invalidation works even when a parent declares None. Cycles,
-failed dependencies, and failed computations never cache partial results.
-Revision mismatches invalidate logically; the next request lazily recomputes.
+An `AnalysisManager` binds one `flat::Module` for its entire lifetime;
+it owns Module and Function cache entries with type-index analysis identity.
+Function requests reject foreign parent modules. Typed handles hold immutable
+shared results and observe manager lifetime through a weak token, returning a
+`const Result*` only for the current generation. Manager destruction and
+stale generations cause `get() == nullptr` without dangling pointers.
 
-`ReachabilityAnalysis` is a pure read-only Function analysis depending on CFG
-only, using the original entry-based terminator-successor stack algorithm.
-Mem2Reg consumes it for each candidate before mutation. No mutation callback,
-PassManager, PreservedAnalyses or DominatorTree migration is part of F02.
+Each analysis declares a mask over the six F01 revision categories: DataFlow,
+CFG, Memory, Calls, Globals and Interface (None means no direct IR
+dependencies). Function entries observe Function revisions; Module entries
+observe Module revisions. Changes to unrelated categories or other Functions
+preserve compatible caches. While computing, the manager automatically tracks
+requested analysis identities and generations. Recursive dependency freshness
+catches transitive invalidation even for parents declaring None; cycles,
+failed dependencies and failed computations never cache partial results.
+Revision mismatches invalidate entries; the next request lazily recomputes.
+
+`ReachabilityAnalysis` is a CFG-only immutable Function result, using the
+original entry-based terminator-successor traversal. Mem2Reg consumes it per
+candidate before mutation and conservatively declines if unavailable, while
+`DominatorTree` remains a direct legacy construction (not manager-migrated).
+No mutation callbacks or F03 `FlatPassManager`/`PassManager`,
+`PreservedAnalyses`, `PassContext` or `FunctionPass` exist in F02:
+**F03 next / not started**.
+
+F02 acceptance: valid final 004 on unchanged clean
+`7fdb9f33f254bc0219269cafdc8e0b5e36d2e6a9` HEAD/fingerprint;
+unit **PASS** with `VALUE_USE_FAILURES=0` and
+`ANALYSIS_MANAGER_FAILURES=0`; S08 **49 cases / 0 failures**
+(44 invalid / 7 positive / 8 legacy, index V4 and ownership V1);
+complete S09 **54 PASS / 0 FAIL / 2 expected SKIP**
+(`S08_OK=YES`, `MEM2REG_OK=YES`); trajectories **357 exact /
+62 loop-count-only / 0 observable differences / 121 categorized skips**;
+LLVM **490 supported PASS / 50 tensor expected reject / 0 failure /
+0 timeout**. Full O1 Flat was **490/490 byte-identical**, 0 mismatch,
+with **50/50** tensor rejects on both baseline and current. Frozen pre-F02
+compiler SHA256 is
+`15235a6fa38026df9b06dd21750f19e029b4c263dd97955a59c6754333cd7d06`;
+manifest SHA256 is
+`143fdf139c21782575ab1899f312d82ca4b6ceace4a39329636f54035b443a35`.
+Ownership regression fail-closed and architecture, mutation-boundary,
+line-budget, CLI, syntax, git-diff gates **PASS**. Independent web review
+008 checked the original evidence: **PASS / 0 findings**. Attempts
+001/002/003 were environment/working-directory **INVALID_TEST_STATE**,
+not product failures or accepted proof.
+
+**REUSED FROM 59885f9 VALIDATION** (not rerun on Fix3): full x86 O1
+**490/50/0/0**, full no-structured O1 **490/50/0/0**
+(PASS/SKIP/FAIL/TIMEOUT); focused O0 normal **3/3**, O0 no-structured
+**3/3**, AArch64 O1 **3/3**, RV64 O1 **3/3**, toy O1 **3/3**.
+Exact diff `59885f9..7fdb9f3` touches only the verifier classification
+and corresponding unit test, so these target results remain explicitly
+reused evidence, not newly executed runs.
 
 ## Validation commands
 

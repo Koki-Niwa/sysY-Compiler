@@ -29,6 +29,7 @@ FRONTEND=("$SRC/frontend/Lexer.cpp" "$SRC/frontend/Parser.cpp" "$SRC/frontend/Pa
           "$SRC/ir/"*.cpp "$SRC/structured/Flatten"*.cpp)
 ANALYSIS=("$SRC/analysis/"*.cpp)
 OPT=("$SRC/opt/Mem2Reg.cpp" "$SRC/opt/Mem2RegAnalysis.cpp")
+PASS_MANAGER=("$SRC/opt/FlatPassManager.cpp")
 TESTS=(
   "test_runtime_catalog|$SRC/frontend/RuntimeLib.cpp"
   "test_sourcefile|${SUPPORT[*]}"
@@ -41,12 +42,11 @@ TESTS=(
   "test_structured|${SUPPORT[*]} ${FRONTEND[*]}" "test_loopnorm|${SUPPORT[*]} ${FRONTEND[*]}"
   "test_flat|${SUPPORT[*]} ${FRONTEND[*]}" "test_ir_mutation|${SUPPORT[*]} ${FRONTEND[*]}" "test_value_use|${SUPPORT[*]} ${FRONTEND[*]}" "test_flat_f2i|${SUPPORT[*]} ${FRONTEND[*]}" "test_flat_dead_phi|${SUPPORT[*]} ${FRONTEND[*]}" "test_llvm_emitter|${SUPPORT[*]} ${FRONTEND[*]}"
   "test_analysis_manager|${SUPPORT[*]} ${FRONTEND[*]} ${ANALYSIS[*]}"
+  "test_pass_manager|${SUPPORT[*]} ${FRONTEND[*]} ${ANALYSIS[*]} ${PASS_MANAGER[*]}"
   "test_mem2reg|${SUPPORT[*]} ${FRONTEND[*]} ${ANALYSIS[*]} ${OPT[*]}")
-
 BENCHES=(
   "bench_lexer|${SUPPORT[*]} ${FRONTEND[*]}"
 )
-
 echo "════════════════════════════════════════════════════════════"
 echo " 单元测试    $("$CXX" --version | head -1)"; echo " 工作目录: $WORK"
 echo "════════════════════════════════════════════════════════════"

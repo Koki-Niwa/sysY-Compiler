@@ -119,9 +119,16 @@ dependencies, fails closed on cycles, failed dependencies, foreign Functions
 and stale handles, and lazily recomputes invalidated entries.
 `ReachabilityAnalysis` is CFG-only at Function scope; Mem2Reg consumes it per
 candidate but still builds `DominatorTree` directly through the legacy path.
-**F03 next / not started**: `FlatPassManager`/`PassManager`,
-`PreservedAnalyses`, `PassContext` and `FunctionPass` are not implemented.
-F00 and F01 stay CLOSED with their frozen acceptance records unchanged.
+**F03 implementation present / pending independent validation** (not closed):
+`src/opt/FlatPassManager` now provides a minimal `FunctionPass` pipeline,
+invocation-scoped tracked `PassContext`, semantic `PassResult`, typed
+`PreservedAnalyses` declarations, deterministic `PassStats`, optional
+instrumentation/dumps/timing, verify-each, pass-name disable/ablation and
+fail-closed status/mutation checks. F02 revision-aware cache truth is unchanged;
+preserved declarations do not override it. Focused F03 unit and boundary checks
+are implementation self-tests, not independent acceptance. **F04 not started**:
+production Mem2Reg remains on its existing path. F00 and F01 stay CLOSED with
+their frozen acceptance records unchanged.
 
 F02 final acceptance (valid 004 + independent 008): accepted revision
 HEAD/clean/fingerprint stayed unchanged during validation and evidence review.

@@ -76,6 +76,8 @@ add_executable(compiler
   # ── F02：Flat IR analysis management 与 reachability ──────────────────
   src/analysis/AnalysisManager.cpp
   src/analysis/ReachabilityAnalysis.cpp
+  # ── F03：独立 Flat FunctionPass 基础设施；F04 才迁移 Mem2Reg ──────
+  src/opt/FlatPassManager.cpp
   # ── S09：平面标量 alloca → SSA promotion ────────────────────────────────
   src/opt/Mem2Reg.cpp
   src/opt/Mem2RegAnalysis.cpp

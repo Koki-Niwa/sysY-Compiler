@@ -122,11 +122,30 @@ The Flat IR foundation proceeds through F00–F05 in
 implementation/Fix1 revision `5f4173caeb8abf78d1ac56c129c9550985f48b0b`);
 **F02 CLOSED / PASS** (accepted revision
 `7fdb9f33f254bc0219269cafdc8e0b5e36d2e6a9`; valid 004 validation
-and independent 008 evidence review); **F03 next / not started**.
+and independent 008 evidence review); **F03 implementation present / pending
+independent validation** (not closed). F04 is not started.
 F01 accepted implementation and validation revisions remain historical facts;
 F02 adds the analysis foundation without changing F00/F01 frozen contracts.
-F03 `FlatPassManager`/`PassManager`, `PreservedAnalyses`,
-`PassContext` and `FunctionPass` have not been implemented.
+
+F03 `src/opt/FlatPassManager` executes each registered named `FunctionPass` once
+per non-declaration Function in pass-major / Module function order, without an
+implicit fixpoint or Module/CGSCC/Loop adaptor. One Module-bound F02
+`AnalysisManager` serves the pipeline; a fresh `IRMutator` and coupled
+`CFGEditor` serve each invocation through `PassContext`. Only the tracked
+`MutationSummary` determines changed; `NoChange`, `Declined` or `Failed`
+with live mutation and `Applied` without mutation are contract violations that
+stop the pipeline. `Failed` and `Declined` must be failure-atomic; pass failures
+stop execution, clean declines continue. `PreservedAnalyses` (all/none/typed)
+is declarative and never updates F02 cache state: CFG edits invalidate old
+CFG-only Reachability handles; unrelated DataFlow edits do not. Optional
+verify-each checks the entire Flat Module at entry and after every actual
+invocation, and fails closed on verifier errors. Opt-in per-invocation records
+carry stable pass/function identity, reported/final status, mutation summary,
+verification, sorted statistics, and optional Flat dumps/timing. Pass-name
+ablation records disabled/skipped distinctly from real `NoChange`. No target
+cost service is introduced; a future target cost service must be immutable and
+not an `AnalysisManager` analysis. Existing Mem2Reg remains the non-F03
+production path pending F04 migration; DominatorTree remains unmigrated.
 
 F00 established exact `Value` reverse `Use{Instruction*, operandIndex}`
 occurrences across Instructions, Arguments, Constants, GlobalAddr and
@@ -261,7 +280,7 @@ canonicalization. The former Nop-Instruction parameter model and
 `Opcode::ConstantInt` / `Opcode::ConstantFP` payload model have zero active
 product references.
 
-The Flat optimization contracts (F01 mutation, F02 cache present; F03+ future) are:
+The Flat optimization contracts (F01 mutation, F02 cache, F03 manager present) are:
 
 - every `Value` kind owns precise reverse `Use{user, operandIndex}` edges; a
   repeated operand is multiple uses even when it has one distinct user;
@@ -272,7 +291,7 @@ The Flat optimization contracts (F01 mutation, F02 cache present; F03+ future) a
   traversed by normal analyses;
 - F01 records data-flow/CFG/memory/call revisions (Globals/Interface
   fields reserved); F02 validates caches against declared revision categories
-  and dependencies; future F03 `PreservedAnalyses` cannot override
+  and dependencies; F03 `PreservedAnalyses` cannot override
   actual incompatible mutation facts;
 - `rebuildUseDef()` / `rebuildCFG()` remain reader/builder finalization and
   verifier/debug reconstruction tools, not the normal maintenance strategy for
@@ -284,7 +303,7 @@ The Flat optimization contracts (F01 mutation, F02 cache present; F03+ future) a
   source-location presentation.
 
 Future analyses are contracts, not empty framework classes. F02 establishes
-revision-aware `AnalysisManager`; F03 will establish `FlatPassManager` before S12.
+revision-aware `AnalysisManager`; F03 now implements `FlatPassManager` before S12.
 Module/Function scopes land first; CGSCC/Loop scopes are added only when S12/S14
 provide real consumers. Analyses state their dependencies and are immutable
 results; the first implementation uses invalidate-and-lazy-recompute rather
@@ -333,9 +352,10 @@ Revision mismatches invalidate entries; the next request lazily recomputes.
 original entry-based terminator-successor traversal. Mem2Reg consumes it per
 candidate before mutation and conservatively declines if unavailable, while
 `DominatorTree` remains a direct legacy construction (not manager-migrated).
-No mutation callbacks or F03 `FlatPassManager`/`PassManager`,
-`PreservedAnalyses`, `PassContext` or `FunctionPass` exist in F02:
-**F03 next / not started**.
+At the historical F02 acceptance revision, no mutation callbacks or F03
+`FlatPassManager`, `PreservedAnalyses`, `PassContext` or `FunctionPass` existed.
+F03 is now implemented separately but awaits independent validation; its code
+does not retroactively change the frozen F02 acceptance evidence.
 
 F02 acceptance: valid final 004 on unchanged clean
 `7fdb9f33f254bc0219269cafdc8e0b5e36d2e6a9` HEAD/fingerprint;

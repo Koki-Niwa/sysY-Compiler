@@ -122,8 +122,9 @@ The Flat IR foundation proceeds through F00–F05 in
 implementation/Fix1 revision `5f4173caeb8abf78d1ac56c129c9550985f48b0b`);
 **F02 CLOSED / PASS** (accepted revision
 `7fdb9f33f254bc0219269cafdc8e0b5e36d2e6a9`; valid 004 validation
-and independent 008 evidence review); **F03 implementation present / pending
-independent validation** (not closed). F04 is not started.
+and independent 008 evidence review); **F03 CLOSED / PASS** (014
+acceptance, implementation `b1c06bb936049fc713c0db16eef8015b7b3ab2ec`);
+**F04 next / not started**.
 F01 accepted implementation and validation revisions remain historical facts;
 F02 adds the analysis foundation without changing F00/F01 frozen contracts.
 
@@ -354,8 +355,9 @@ candidate before mutation and conservatively declines if unavailable, while
 `DominatorTree` remains a direct legacy construction (not manager-migrated).
 At the historical F02 acceptance revision, no mutation callbacks or F03
 `FlatPassManager`, `PreservedAnalyses`, `PassContext` or `FunctionPass` existed.
-F03 is now implemented separately but awaits independent validation; its code
-does not retroactively change the frozen F02 acceptance evidence.
+F03 was later accepted separately on 014 evidence and closed by its own
+implementation/documentation commits; this does not retroactively change the
+frozen F02 acceptance evidence.
 
 F02 acceptance: valid final 004 on unchanged clean
 `7fdb9f33f254bc0219269cafdc8e0b5e36d2e6a9` HEAD/fingerprint;
@@ -385,6 +387,75 @@ not product failures or accepted proof.
 Exact diff `59885f9..7fdb9f3` touches only the verifier classification
 and corresponding unit test, so these target results remain explicitly
 reused evidence, not newly executed runs.
+
+## F03 FlatPassManager foundation (CLOSED / PASS)
+
+F03 implementation commit:
+`b1c06bb936049fc713c0db16eef8015b7b3ab2ec`
+(`feat: add F03 flat pass manager foundation`), with parent/base
+`3f824833cb4d403c926f9f9f0ed2f2dd3a529e0a`. Implementation scope was
+exactly four modified tracked files (`CMakeLists.txt`,
+`docs/ARCHITECTURE.md`, `docs/CURRENT-STATE.md`,
+`tools/selftest/unit/run.sh`) plus three newly tracked files
+(`src/opt/FlatPassManager.cpp`, `src/opt/FlatPassManager.h`,
+`tools/selftest/unit/test_pass_manager.cpp`). F03 has **no Mem2Reg or
+DominatorTree migration**; **F04 next / not started**. No ModulePass,
+CGSCC/Loop adaptor, CallGraph, FunctionSummary, AliasAnalysis, LoopInfo,
+SCEV, target-cost, CompilationSession or backend exists from this stage;
+F05 and S12+ have not started.
+
+Each registered FunctionPass runs once per non-declaration Function in
+pass-major / Module Function order; no implicit fixpoint. The pipeline shares
+one Module-bound F02 AnalysisManager, while each actual invocation obtains
+fresh IRMutator, CFGEditor and PassContext. Changed/MutationSummary reflect
+only applied tracked live mutations, not pass-reported claims:
+NoChange/Declined/Failed + mutation and Applied + no mutation are
+fail-closed contract violations. F01 revisions and F02 dependency/cache
+invalidation remain authoritative over declarative PreservedAnalyses.
+Verify-each checks the Module at pipeline entry and after every actual
+invocation, including failure-atomic checks. Stable pass-name disable/ablation,
+optional before/after dump, per-invocation timing, deterministic ordered
+statistics and instrumentation are supported.
+
+014 candidate identity was **two-part**, not a whole-seven-file diff:
+the four originally tracked modifications yielded
+`git diff --binary HEAD -- <four tracked paths>` SHA256
+`ea5cc3da5de339310bfbe2800db2c6fa5abda7d654c3a11d7244cb201edf7d51`
+and byte-exactly matched 014 `before.diff`. The three then-untracked file
+SHA256 identities were `FlatPassManager.cpp`
+`29ac6199cc86de1e1335a7687d2df8cc9c38f91ae9579df7e8e934e9b55b05d6`,
+`FlatPassManager.h`
+`dc8a5c7a1540272fb8d20a421f063ae927c70e0edf292670ceb78ef97bf5652d`,
+and `test_pass_manager.cpp`
+`ac60e1abede1a2d26a8fcf8856603a16fe5dc4d446362c19bcce65509fc3fffe`.
+The 014 before-fingerprint
+`5c23f31c701cbc5435a67a8ed57c2411bdbe576445dbcebe5ae6907dde7c6a4b`
+is historical evidence only. The implementation commit's full patch includes
+the three additions and therefore need **not** equal the tracked-only patch:
+post-commit equivalence was established by four-file patch equality and
+all three committed new-file blob content SHA256 values.
+
+014 terminal acceptance: formal S09 **exit=0, 54 PASS / 0 FAIL /
+2 expected SKIP**; S08 public matrix **44 invalid / 7 positive / 8 legacy**
+and S08/Mem2Reg gates **PASS**; trajectories **357 exact /
+62 loop-count-only / 0 observable differences / 121 categorized skips**;
+LLVM **540 total / 490 supported PASS / 50 tensor frontend reject /
+0 FAIL / 0 TIMEOUT**; `test_pass_manager` **41 checks /
+8 negative controls / 0 failures**, unit runner **exit=0**.
+Full O1 Flat protocol: `IDENTITIES=540`, `SUPPORTED=490`,
+`BASELINE_TENSOR_REJECT=50`, `CURRENT_TENSOR_REJECT=50`,
+`MISMATCH=0`, `ERRORS=0`, `BYTE_IDENTICAL=490`, **exit=0**.
+Manifest SHA256
+`143fdf139c21782575ab1899f312d82ca4b6ceace4a39329636f54035b443a35`.
+014 confirmed unchanged HEAD/status/candidate identity across validation;
+fresh independent web review was **PASS / 0 findings**.
+011/012 produced no terminal long-validation evidence (not compiler
+failures); 013 was superseded by 014 and never started a WSL gate;
+015/016 were closeout identity-rule mistakes, made no project changes and
+are neither compiler failures nor acceptance evidence. 017 commits the
+unchanged validated implementation and closes documentation only; it does
+not rerun full S09/540/target matrices or start F04. Post-closeout
+independent review remains required.
 
 ## Validation commands
 

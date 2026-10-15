@@ -119,16 +119,71 @@ dependencies, fails closed on cycles, failed dependencies, foreign Functions
 and stale handles, and lazily recomputes invalidated entries.
 `ReachabilityAnalysis` is CFG-only at Function scope; Mem2Reg consumes it per
 candidate but still builds `DominatorTree` directly through the legacy path.
-**F03 implementation present / pending independent validation** (not closed):
-`src/opt/FlatPassManager` now provides a minimal `FunctionPass` pipeline,
-invocation-scoped tracked `PassContext`, semantic `PassResult`, typed
-`PreservedAnalyses` declarations, deterministic `PassStats`, optional
-instrumentation/dumps/timing, verify-each, pass-name disable/ablation and
-fail-closed status/mutation checks. F02 revision-aware cache truth is unchanged;
-preserved declarations do not override it. Focused F03 unit and boundary checks
-are implementation self-tests, not independent acceptance. **F04 not started**:
-production Mem2Reg remains on its existing path. F00 and F01 stay CLOSED with
-their frozen acceptance records unchanged.
+**F03 CLOSED / PASS** on final validation 014 and its independently
+reviewed evidence (review **PASS / 0 findings**). The validated implementation
+was committed unchanged as `b1c06bb936049fc713c0db16eef8015b7b3ab2ec`
+(`feat: add F03 flat pass manager foundation`), parent
+`3f824833cb4d403c926f9f9f0ed2f2dd3a529e0a`. **F04 next / not started**:
+production Mem2Reg and DominatorTree remain on their legacy paths; F05 and
+S12+ have not started. F00/F01/F02 frozen acceptance remains unchanged.
+
+F03 `FlatPassManager` runs each named `FunctionPass` exactly once on every
+non-declaration Function in **pass-major, Module Function order**, with one
+Module-scoped `AnalysisManager` shared by the entire pipeline and fresh
+`IRMutator`, `CFGEditor` and `PassContext` for each invocation. Only actual
+tracked edits determine `changed` and `MutationSummary`, never a pass's
+self-reported change flag. `NoChange`/`Declined`/`Failed` with mutation and
+`Applied` without mutation violate the contract and fail closed.
+`PreservedAnalyses` is declarative; it cannot override F01/F02 revision/cache
+facts. Optional verify-each runs on entry and after each actual invocation;
+stable pass-name disable/ablation, optional before/after Flat dumps, timing,
+ordered statistics and instrumentation are supported. There is **no implicit
+fixpoint**. This does not implement ModulePass, CGSCC/Loop adaptors,
+CallGraph, FunctionSummary, AliasAnalysis, LoopInfo, SCEV, target-cost,
+CompilationSession or backend integration.
+
+014 validated a **two-part candidate identity** against base
+`3f824833cb4d403c926f9f9f0ed2f2dd3a529e0a`: (1) the four original
+tracked files (`CMakeLists.txt`, `docs/ARCHITECTURE.md`,
+`docs/CURRENT-STATE.md`, `tools/selftest/unit/run.sh`) have binary patch
+SHA256 `ea5cc3da5de339310bfbe2800db2c6fa5abda7d654c3a11d7244cb201edf7d51`
+and byte-for-byte match 014 `before.diff`; (2) the three then-untracked files
+have content SHA256: `src/opt/FlatPassManager.cpp`
+`29ac6199cc86de1e1335a7687d2df8cc9c38f91ae9579df7e8e934e9b55b05d6`,
+`src/opt/FlatPassManager.h`
+`dc8a5c7a1540272fb8d20a421f063ae927c70e0edf292670ceb78ef97bf5652d`,
+and `tools/selftest/unit/test_pass_manager.cpp`
+`ac60e1abede1a2d26a8fcf8856603a16fe5dc4d446362c19bcce65509fc3fffe`.
+014's `before` source fingerprint
+`5c23f31c701cbc5435a67a8ed57c2411bdbe576445dbcebe5ae6907dde7c6a4b`
+is a **historical validation record**, not a recomputed commit identity.
+The seven-file implementation commit legitimately includes three additions,
+so its complete patch is **not** compared to the tracked-only `before.diff`.
+Post-commit verification instead matched the four-file tracked patch and
+all three committed file-content hashes.
+
+014 final acceptance: formal S09 terminal **exit=0, 54 PASS / 0 FAIL /
+2 expected SKIP**; S08 **44 invalid / 7 positive / 8 legacy**, S08 and
+Mem2Reg gates **PASS**; trajectory **357 exact / 62 loop-count-only /
+0 observable differences / 121 categorized skips**. LLVM manifest
+**540 total / 490 supported PASS / 50 tensor frontend reject /
+0 FAIL / 0 TIMEOUT**. `test_pass_manager` **41 checks /
+8 negative controls / 0 failures**; unit runner **exit=0**.
+Full O1 Flat protocol: `IDENTITIES=540`, `SUPPORTED=490`,
+`BASELINE_TENSOR_REJECT=50`, `CURRENT_TENSOR_REJECT=50`,
+`MISMATCH=0`, `ERRORS=0`, `BYTE_IDENTICAL=490`, **exit=0**.
+Manifest SHA256
+`143fdf139c21782575ab1899f312d82ca4b6ceace4a39329636f54035b443a35`.
+014 observed unchanged HEAD, status and candidate identity before/after
+validation, followed by fresh independent web review **PASS / 0 findings**.
+
+Historical task accounting: 011/012 long-validation lifecycles did not obtain
+terminal evidence (neither compiler failures nor acceptance); 013 was superseded
+by 014 without starting its WSL gate; 015/016 were closeout identity-rule design
+errors with **no project changes**, neither compiler failures nor acceptance
+evidence. The 017 local closeout does **not** rerun the full S09, 540-case O1
+protocol or target execution matrices; independent post-closeout review remains
+a separate required handoff.
 
 F02 final acceptance (valid 004 + independent 008): accepted revision
 HEAD/clean/fingerprint stayed unchanged during validation and evidence review.

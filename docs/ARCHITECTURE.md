@@ -203,6 +203,21 @@ not claim linear time for constructing all SCC summaries. The read-only
 `freshnessExpansionCount()` is a cumulative diagnostic of actual expansions;
 it does not participate in cache validity or invalidation decisions.
 
+## S19 GVN, DSE and DLE (CLOSED / PASS)
+
+`GVNPass` performs dominator-scoped value numbering for pure instructions
+(arithmetic, comparisons, select, casts, GEP). A scoped availability map is
+entered on the dominator-tree DFS and unwound on block exit, so a duplicate is
+replaced only by a value from a dominating block; sibling branches never merge.
+Commutative integer operations canonicalize their operand order. Loads and
+calls are not numbered.
+
+`DeadStoreEliminationPass` scans a block backwards and removes a store
+overwritten by a later store to the same pointer value. Any load or call clears
+all pending stores, so aliasing reads keep earlier stores. It does not cross
+block boundaries. `DeadLoadEliminationPass` removes unused loads.
+`--opt=s19` is an opt-in pipeline (rewrite, GVN, DSE, DLE) after mem2reg.
+
 ## S18 rewrite DSL and basic peephole rules (CLOSED / PASS)
 
 `src/opt/RewriteEngine.{h,cpp}` separates matching from rewriting. A `Pattern`

@@ -152,6 +152,16 @@ pure; read/write/external effects are a least fixed point. Dependencies:
 cache reuse, revision invalidation and stale-graph rejection (33 checks).
 F00/F01/F02/F03/F04/F05 frozen acceptance remains unchanged; **S13 is next**.
 
+**S19 CLOSED / PASS** (full S09 **57/0/2**, `test_s19` **6 checks**):
+`GVNPass` numbers pure instructions in dominator-tree scope (scoped
+availability, commutative operand canonicalization, no cross-sibling merge);
+`DeadStoreEliminationPass` removes an overwritten store in the same block and
+clears pending stores on any load/call; `DeadLoadEliminationPass` removes
+unused loads. `--opt=s19` runs rewrite → GVN → DSE → DLE after mem2reg.
+`test_s19` covers same-block GVN, sibling dominance, commutation, DSE with an
+intervening load and DLE (6 checks). Transpose: 220 → 214 instructions with
+S19, 220 → 191 with S17+S19. Behavior with `--mem2reg --opt=s17 --opt=s19`: 540 files, 357 exact + 62 loop-count-only + 0 observable differences + 121 skips, all pass.
+
 **S18 CLOSED / PASS** (full S09 **57/0/2**, `test_rewrite` **24 checks**):
 `opt/RewriteEngine` is a small peephole DSL: `Pattern` matches opcode,
 operand count, integer result and operand patterns (Any/Constant/ConstantInt/

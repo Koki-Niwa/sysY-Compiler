@@ -46,7 +46,9 @@ std::string renderFromFlat(const SourceFile& src, DiagnosticEngine& diags,
     diags.report(DiagLevel::Error, SourceLoc(0, 0), "E-FLAT-VERIFY",
                  "读回的平面 IR 违反不变量：\n" + flat::formatViolations(violations));
   }
-  if (!diags.hasError()) applyMem2Reg(module, diags, mem2reg, flatStats);
+  // A failed mem2reg may leave a partially rewritten module; never expose it.
+  if (!diags.hasError() && !applyMem2Reg(module, diags, mem2reg, flatStats))
+    return std::string();
   if (flatStats && !diags.hasError()) std::cerr << module.formatStats();
   return flat::dumpModule(module);
 }

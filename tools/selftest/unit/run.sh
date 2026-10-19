@@ -43,7 +43,7 @@ TESTS=(
   "test_flat|${SUPPORT[*]} ${FRONTEND[*]}" "test_ir_mutation|${SUPPORT[*]} ${FRONTEND[*]}" "test_value_use|${SUPPORT[*]} ${FRONTEND[*]}" "test_flat_f2i|${SUPPORT[*]} ${FRONTEND[*]}" "test_flat_dead_phi|${SUPPORT[*]} ${FRONTEND[*]}" "test_llvm_emitter|${SUPPORT[*]} ${FRONTEND[*]}"
   "test_analysis_manager|${SUPPORT[*]} ${FRONTEND[*]} ${ANALYSIS[*]}"
   "test_pass_manager|${SUPPORT[*]} ${FRONTEND[*]} ${ANALYSIS[*]} ${PASS_MANAGER[*]}"
-  "test_mem2reg|${SUPPORT[*]} ${FRONTEND[*]} ${ANALYSIS[*]} ${OPT[*]}")
+  "test_mem2reg|${SUPPORT[*]} ${FRONTEND[*]} ${ANALYSIS[*]} ${OPT[*]} ${PASS_MANAGER[*]}" "test_mem2reg_pass|${SUPPORT[*]} ${FRONTEND[*]} ${ANALYSIS[*]} ${OPT[*]} ${PASS_MANAGER[*]}")
 BENCHES=(
   "bench_lexer|${SUPPORT[*]} ${FRONTEND[*]}"
 )

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""架构与行数判据的正例/反例，全部在临时仓库中运行。"""
+"""架构负控使用临时仓库；F04 默认根另从 compiler/workspace 目录验证。"""
 from pathlib import Path
 import subprocess
 import sys
@@ -94,6 +94,91 @@ class ArchitectureTests(unittest.TestCase):
         self.put('src/ir/Module.h', '')
         self.put('src/support/Base.h', '#include "analysis/Manager.h"\n')
         self.assertTrue(any('support -> analysis' in e for e in check(self.root)[0]))
+
+    def mem2reg_boundary(self):
+        return subprocess.run(
+            [sys.executable, str(Path(__file__).with_name('check_mem2reg_pass_boundary.py')),
+             '--root', str(self.root)],
+            cwd=self.root, capture_output=True, text=True)
+
+    def test_f04_mem2reg_boundary_default_root_ignores_cwd(self):
+        checker = Path(__file__).with_name('check_mem2reg_pass_boundary.py').resolve()
+        compiler_root = checker.parents[2]
+        for cwd in (compiler_root, compiler_root.parent):
+            with self.subTest(cwd=cwd):
+                result = subprocess.run([sys.executable, str(checker)], cwd=cwd,
+                                        capture_output=True, text=True)
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                self.assertIn('F04 Mem2Reg pass boundary: PASS', result.stdout)
+
+    def test_f04_mem2reg_pass_boundary_and_negative_controls(self):
+        from check_mem2reg_pass_boundary import check as check_mem2reg
+        self.put('src/opt/Mem2Reg.h',
+                 'class Mem2RegPass : public FunctionPass { '
+                 'PassResult run(Function& f, PassContext& c); '
+                 'const Mem2RegResult& aggregate() const; };\n'
+                 'enum class Mem2RegStatus { Failed };')
+        self.put('src/main/FlatPipeline.cpp',
+                 'flat::runMem2Reg(module, options); return false;')
+        self.put('src/opt/Mem2RegAnalysis.cpp', '// analysis helper\n')
+        pass_region = (
+            'context.analyses().get<ReachabilityAnalysis>(function);\n'
+            'context.mutator(); context.cfg();\n'
+            'replaceUses(function, mutator, ssa);\n'
+            'detached;\n'
+            'context.mutator().summary().changed();\n'
+        )
+        wrapper = (
+            'Mem2RegResult runMem2Reg(Module& module, const Mem2RegOptions&) {\n'
+            'manager.run(module);\n'
+            'Mem2RegStatus::Failed; return {}; }\n'
+        )
+        baseline = pass_region + wrapper
+        self.put('src/opt/Mem2Reg.cpp', baseline)
+        self.assertEqual([], check_mem2reg(self.root))
+        self.assertEqual(0, self.mem2reg_boundary().returncode)
+        negatives = [
+            ('AnalysisManager rogue(module);', 'private stack'),
+            ('IRMutator rogue(module);', 'private stack'),
+            ('CFGEditor rogue(mutator);', 'private stack'),
+            ('auto rogue = AnalysisManager(module);', 'private constructed'),
+            ('auto rogue = new AnalysisManager(module);', 'private heap'),
+            ('auto rogue = std::make_unique<CFGEditor>(mutator);', 'smart-pointer'),
+            ('for (auto* f : module.functions()) {}', 'module-wide'),
+            ('FlatPassManager nested;', 'nested pass manager'),
+            ('verifyFlatModule(module);', 'internal per-invocation verification'),
+            ('dumpModule(module);', 'internal per-invocation dump'),
+            ('std::chrono::steady_clock::now();', 'internal per-invocation timing'),
+        ]
+        for injection, expected in negatives:
+            self.put('src/opt/Mem2Reg.cpp', pass_region + injection + wrapper)
+            self.assertTrue(any(expected in error for error in check_mem2reg(self.root)),
+                            injection)
+            cli = self.mem2reg_boundary()
+            self.assertEqual(1, cli.returncode, injection)
+            self.assertIn(expected, cli.stdout, injection)
+        self.put('src/opt/Mem2Reg.cpp',
+                 baseline.replace('manager.run(module);', 'legacyOptimize(module);'))
+        self.assertTrue(any('FlatPassManager' in error
+                            for error in check_mem2reg(self.root)))
+        self.assertEqual(1, self.mem2reg_boundary().returncode)
+        self.put('src/opt/Mem2Reg.cpp',
+                 baseline.replace('context.analyses().get<ReachabilityAnalysis>(function);',
+                                  'otherAnalyses.get<ReachabilityAnalysis>(function);'))
+        self.assertTrue(any('shared F02' in error
+                            for error in check_mem2reg(self.root)))
+        self.assertEqual(1, self.mem2reg_boundary().returncode)
+        self.put('src/opt/Mem2Reg.cpp', baseline)
+        self.put('src/opt/Mem2RegAnalysis.cpp',
+                 'AnalysisManager privateManager(module);')
+        self.assertTrue(any('private' in error
+                            for error in check_mem2reg(self.root)))
+        self.assertEqual(1, self.mem2reg_boundary().returncode)
+        self.put('src/opt/Mem2RegAnalysis.cpp', '// analysis helper\n')
+        self.put('src/main/FlatPipeline.cpp', 'legacyOptimize(module);')
+        self.assertTrue(any('production' in error
+                            for error in check_mem2reg(self.root)))
+        self.assertEqual(1, self.mem2reg_boundary().returncode)
 
     def budget(self):
         return subprocess.run([sys.executable, str(Path(__file__).with_name('check_line_budget.py')),

@@ -9,12 +9,15 @@
 #include "ir/FlatVerifier.h"
 #include "ir/IRMutator.h"
 #include "ir/CFGEditor.h"
-#include <cstdlib>
+#include <stdexcept>
 #include "opt/Mem2RegInternal.h"
 namespace sysy {
 namespace flat {
 namespace {
-void requireMutation(bool ok) { if (!ok) std::abort(); }
+// Fail closed through FlatPassManager's exception/contract boundary.
+void requireMutation(bool ok) {
+  if (!ok) throw std::runtime_error("mem2reg mutation rejected");
+}
 using mem2reg_detail::CandidatePlan;
 using mem2reg_detail::Reachability;
 using mem2reg_detail::computeNeedIn;
@@ -57,6 +60,25 @@ struct SSAPlan {
   std::unordered_map<Instruction*, Value*> foldedPhis;
   std::unordered_map<Instruction*, Value*> loadValues;
 };
+// A planning failure must not leave detached scratch phis behind. The guard
+// discards them during stack unwinding and never throws from its destructor;
+// the caller still owns cleanup for incomplete (but returned) plans.
+class DetachedScratch {
+ public:
+  DetachedScratch(IRMutator& mutator, std::vector<Instruction*>& scratch)
+      : mutator_(mutator), scratch_(scratch) {}
+  ~DetachedScratch() {
+    if (active_ && !scratch_.empty())
+      (void)mutator_.discardDetached(scratch_);
+  }
+  DetachedScratch(const DetachedScratch&) = delete;
+  DetachedScratch& operator=(const DetachedScratch&) = delete;
+  void dismiss() { active_ = false; }
+ private:
+  IRMutator& mutator_;
+  std::vector<Instruction*>& scratch_;
+  bool active_ = true;
+};
 SSAPlan constructSSA(Module& module, IRMutator& mutator, const CandidatePlan& plan,
                      const Reachability& reach, const std::vector<char>& needIn) {
   const Function& function = *plan.function;
@@ -65,6 +87,8 @@ SSAPlan constructSSA(Module& module, IRMutator& mutator, const CandidatePlan& pl
   std::vector<Value*> blockOut(count, nullptr);
   std::vector<Instruction*> phis(count, nullptr);
   std::vector<std::vector<BasicBlock*>> orderedPreds(count);
+  std::vector<Instruction*> detached;
+  DetachedScratch scratchGuard(mutator, detached);
   std::deque<size_t> work;
   std::vector<char> queued(count, 0);
   for (size_t i = 0; i < count; ++i) {
@@ -93,6 +117,7 @@ SSAPlan constructSSA(Module& module, IRMutator& mutator, const CandidatePlan& pl
     Instruction* phi = createPhi(plan.objectType, values, orderedPreds[index],
                                   plan.allocaInst->loc());
     phis[index] = phi;
+    detached.push_back(phi);
     blockIn[index] = phi;
   }
   std::unordered_map<Instruction*, Value*> resolvedLoads;
@@ -241,6 +266,7 @@ SSAPlan constructSSA(Module& module, IRMutator& mutator, const CandidatePlan& pl
       result.loadValues[instruction] = canonicalValue(it->second, result.foldedPhis);
     }
   }
+  scratchGuard.dismiss();  // The plan now owns cleanup via discardSSA/commit.
   return result;
 }
 void discardSSA(IRMutator& mutator, SSAPlan& ssa) {
@@ -254,26 +280,23 @@ void materializeSSA(CFGEditor& cfg, const SSAPlan& ssa) {
     inserts.emplace_back(ssa.phiBlocks[i], ssa.generatedPhis[i]);
   requireMutation(cfg.insertPhiBatch(inserts) != MutationResult::Rejected);
 }
-void replaceUses(Module& module, IRMutator& mutator, const SSAPlan& ssa) {
-  for (Function* function : module.functions()) {
-    if (function == nullptr || function->isDeclaration()) continue;
-    for (BasicBlock* block : function->blocks()) {
-      for (Instruction* instruction : block->insts()) {
-        for (size_t i = 0; i < instruction->numOperands(); ++i) {
-          Value* operand = instruction->operand(i);
-          if (operand != nullptr && operand->isInst()) {
-            Instruction* asInstruction = static_cast<Instruction*>(operand);
-            const auto loadIt = ssa.loadValues.find(asInstruction);
-            if (loadIt != ssa.loadValues.end()) {
-              requireMutation(mutator.rewriteOperand(instruction, i, loadIt->second) != MutationResult::Rejected);
-              continue;
-            }
-            const auto phiIt = ssa.foldedPhis.find(asInstruction);
-            if (phiIt != ssa.foldedPhis.end()) {
-              Value* replacement = canonicalValue(phiIt->second, ssa.foldedPhis);
-              if (replacement != nullptr)
-                requireMutation(mutator.rewriteOperand(instruction, i, replacement) != MutationResult::Rejected);
-            }
+void replaceUses(Function& function, IRMutator& mutator, const SSAPlan& ssa) {
+  for (BasicBlock* block : function.blocks()) {
+    for (Instruction* instruction : block->insts()) {
+      for (size_t i = 0; i < instruction->numOperands(); ++i) {
+        Value* operand = instruction->operand(i);
+        if (operand != nullptr && operand->isInst()) {
+          Instruction* asInstruction = static_cast<Instruction*>(operand);
+          const auto loadIt = ssa.loadValues.find(asInstruction);
+          if (loadIt != ssa.loadValues.end()) {
+            requireMutation(mutator.rewriteOperand(instruction, i, loadIt->second) != MutationResult::Rejected);
+            continue;
+          }
+          const auto phiIt = ssa.foldedPhis.find(asInstruction);
+          if (phiIt != ssa.foldedPhis.end()) {
+            Value* replacement = canonicalValue(phiIt->second, ssa.foldedPhis);
+            if (replacement != nullptr)
+              requireMutation(mutator.rewriteOperand(instruction, i, replacement) != MutationResult::Rejected);
           }
         }
       }
@@ -313,16 +336,90 @@ const char* mem2RegSkipReasonName(Mem2RegSkipReason reason) {
   }
   return "?";
 }
+namespace {
+// One invocation visits only the supplied Function. Detached SSA planning
+// precedes live mutation; every candidate requests a fresh F02 handle.
+Mem2RegResult promoteFunction(Function& function, PassContext& context) {
+  Mem2RegResult result;
+  Module& module = context.analyses().module();
+  IRMutator& mutator = context.mutator();
+  CFGEditor& cfg = context.cfg();
+  std::vector<Instruction*> allocas;
+  for (BasicBlock* block : function.blocks()) {
+    for (Instruction* instruction : block->insts()) {
+      if (instruction->op() == Opcode::Alloca) allocas.push_back(instruction);
+    }
+  }
+  for (Instruction* allocaInst : allocas) {
+    CandidatePlan plan;
+    Mem2RegSkipReason reason = Mem2RegSkipReason::NotEntryAlloca;
+    // Never use an old reachability pointer after materializing live phis.
+    auto reachHandle = context.analyses().get<ReachabilityAnalysis>(function);
+    const Reachability* reach = reachHandle.get();
+    if (reach == nullptr) reason = Mem2RegSkipReason::AnalysisUnavailable;
+    if (allocaInst->parent() != nullptr && reach != nullptr &&
+        prepareCandidate(&function, allocaInst, *reach, plan, reason)) {
+      const std::vector<char> needIn = computeNeedIn(plan, *reach);
+      SSAPlan ssa = constructSSA(module, mutator, plan, *reach, needIn);
+      if (!ssa.complete) {
+        discardSSA(mutator, ssa);
+        result.candidates.push_back(
+            Mem2RegCandidate{function.name(), allocaInst->loc(), false,
+                             Mem2RegSkipReason::UnresolvedDefinition});
+        continue;
+      }
+      materializeSSA(cfg, ssa);
+      replaceUses(function, mutator, ssa);
+      removePromotedInstructions(plan, ssa, mutator, cfg, result);
+      ++result.promotedAllocas;
+      result.candidates.push_back(
+          Mem2RegCandidate{function.name(), allocaInst->loc(), true,
+                           Mem2RegSkipReason::Count});
+      continue;
+    }
+    result.candidates.push_back(
+        Mem2RegCandidate{function.name(), allocaInst->loc(), false, reason});
+  }
+  return result;
+}
+
+}  // namespace
+
+Mem2RegPass::Mem2RegPass() : FunctionPass("mem2reg") {}
+
+PassResult Mem2RegPass::run(Function& function, PassContext& context) {
+  Mem2RegResult local = promoteFunction(function, context);
+  PassResult result;
+  result.status = context.mutator().summary().changed()
+                      ? PassStatus::Applied : PassStatus::NoChange;
+  result.stats.counters["candidates"] = local.candidates.size();
+  result.stats.counters["promoted-allocas"] = local.promotedAllocas;
+  result.stats.counters["removed-loads"] = local.removedLoads;
+  result.stats.counters["removed-stores"] = local.removedStores;
+  result.stats.counters["generated-phis"] = local.generatedPhis;
+  result.stats.counters["eliminated-phis"] = local.eliminatedPhis;
+  for (const auto& candidate : local.candidates) {
+    if (!candidate.promoted)
+      ++result.stats.counters[std::string("skipped-") +
+                              mem2RegSkipReasonName(candidate.reason)];
+  }
+  aggregate_.promotedAllocas += local.promotedAllocas;
+  aggregate_.removedLoads += local.removedLoads;
+  aggregate_.removedStores += local.removedStores;
+  aggregate_.generatedPhis += local.generatedPhis;
+  aggregate_.eliminatedPhis += local.eliminatedPhis;
+  aggregate_.candidates.insert(aggregate_.candidates.end(),
+                               local.candidates.begin(), local.candidates.end());
+  return result;
+}
+
 Mem2RegResult runMem2Reg(Module& module, const Mem2RegOptions& options) {
   Mem2RegResult result;
   if (options.captureDumps) result.beforeDump = dumpModule(module);
-
   const std::vector<Violation> violations = verifyFlatModule(module);
   if (!violations.empty()) {
     result.status = Mem2RegStatus::InvalidInput;
     result.diagnostic = formatViolations(violations);
-    result.inputValid = false;
-    result.success = false;
     if (options.captureDumps) result.afterDump = result.beforeDump;
     return result;
   }
@@ -333,55 +430,34 @@ Mem2RegResult runMem2Reg(Module& module, const Mem2RegOptions& options) {
     if (options.captureDumps) result.afterDump = result.beforeDump;
     return result;
   }
-
-  AnalysisManager analyses(module);
-  IRMutator mutator(module);
-  CFGEditor cfg(mutator);
-  std::vector<std::pair<Function*, Instruction*>> allocas;
-  for (Function* function : module.functions()) {
-    if (function == nullptr || function->isDeclaration()) continue;
-    for (BasicBlock* block : function->blocks()) {
-      for (Instruction* instruction : block->insts()) {
-        if (instruction->op() == Opcode::Alloca) allocas.emplace_back(function, instruction);
-      }
-    }
+  // The pass owns its aggregate, so the manager and the result cannot outlive
+  // each other; `observer` stays valid for exactly this manager's scope.
+  auto pass = std::make_unique<Mem2RegPass>();
+  const Mem2RegPass* observer = pass.get();
+  FlatPassManager manager;
+  if (!manager.addPass(std::move(pass))) {
+    result.success = false;
+    result.status = Mem2RegStatus::Failed;
+    result.diagnostic = "failed to register mem2reg pass";
+    if (options.captureDumps) result.afterDump = result.beforeDump;
+    return result;
   }
-
-  for (const auto& item : allocas) {
-    Function* function = item.first;
-    Instruction* allocaInst = item.second;
-    CandidatePlan plan;
-    Mem2RegSkipReason reason = Mem2RegSkipReason::NotEntryAlloca;
-    auto reachHandle = analyses.get<ReachabilityAnalysis>(*function);
-    const Reachability* reach = reachHandle.get();
-    if (reach == nullptr) reason = Mem2RegSkipReason::AnalysisUnavailable;
-    if (allocaInst->parent() != nullptr && reach != nullptr &&
-        prepareCandidate(function, allocaInst, *reach, plan, reason)) {
-      const std::vector<char> needIn = computeNeedIn(plan, *reach);
-      SSAPlan ssa = constructSSA(module, mutator, plan, *reach, needIn);
-      if (!ssa.complete) {
-        discardSSA(mutator, ssa);
-        result.candidates.push_back(
-            Mem2RegCandidate{function->name(), allocaInst->loc(), false,
-                             Mem2RegSkipReason::UnresolvedDefinition});
-        continue;
-      }
-      materializeSSA(cfg, ssa);
-      replaceUses(module, mutator, ssa);
-      removePromotedInstructions(plan, ssa, mutator, cfg, result);
-      ++result.promotedAllocas;
-      result.candidates.push_back(
-          Mem2RegCandidate{function->name(), allocaInst->loc(), true,
-                           Mem2RegSkipReason::Count});
-      continue;
-    }
-    result.candidates.push_back(
-        Mem2RegCandidate{function->name(), allocaInst->loc(), false, reason});
-  }
-
-  result.changed = mutator.summary().changed();
-  requireMutation(result.changed == (result.promotedAllocas != 0));
-  result.status = result.changed ? Mem2RegStatus::Changed : Mem2RegStatus::NoChange;
+  // No per-Function verify, dump, clock or instrumentation in production.
+  const PipelineResult pipeline = manager.run(module);
+  result.promotedAllocas = observer->aggregate().promotedAllocas;
+  result.removedLoads = observer->aggregate().removedLoads;
+  result.removedStores = observer->aggregate().removedStores;
+  result.generatedPhis = observer->aggregate().generatedPhis;
+  result.eliminatedPhis = observer->aggregate().eliminatedPhis;
+  result.candidates = observer->aggregate().candidates;
+  result.success = pipeline.ok();
+  result.changed = result.success && pipeline.changed;
+  // Never report Changed on a failed pipeline; counters may be partial.
+  result.status = !result.success
+                      ? Mem2RegStatus::Failed
+                      : (result.changed ? Mem2RegStatus::Changed
+                                        : Mem2RegStatus::NoChange);
+  if (!result.success) result.diagnostic = pipeline.diagnostic;
   if (options.captureDumps) result.afterDump = dumpModule(module);
   return result;
 }

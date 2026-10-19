@@ -122,7 +122,7 @@ bool parseCommandLine(int argc, char** argv, Options& opts) {
     }
     if (a == "-v" || a == "--version") {
       std::cout << "sysy-compiler " << SYSY_COMPILER_VERSION
-                << " (front/middle end; stage S07 — LLVM IR text emission)\n";
+                << " (front/middle end; F04 — Flat FunctionPass foundation)\n";
       return false;
     }
     if (a == "-o") {
@@ -441,7 +441,8 @@ std::string renderFlatIr(const SourceFile& src, DiagnosticEngine& diags, bool fr
                        sysy::flat::formatViolations(fvs));
     }
   }
-  if (pipelineClean) sysy::mainstage::applyMem2Reg(*fmod, diags, mem2reg, flatStats);
+  if (pipelineClean && !sysy::mainstage::applyMem2Reg(*fmod, diags, mem2reg, flatStats))
+    return std::string();  // Failed promotion may have partially rewritten the module.
   if (flatStats) {
     std::cerr << fmod->formatStats();
     std::cerr << "loopnorm rolled-back " << ls.rolledBack << " allocas-hoisted " << moved
@@ -464,8 +465,10 @@ std::string renderLlvmIr(const SourceFile& src, DiagnosticEngine& diags,
   std::unique_ptr<sysy::flat::Module> module;
   if (fromFlat) {
     module.reset(sysy::flat::parseFlatModule(src.text(), diags));
-    if (module && !diags.hasError())
-      sysy::mainstage::applyMem2Reg(*module, diags, mem2reg, flatStats);
+    if (module && !diags.hasError() &&
+        !sysy::mainstage::applyMem2Reg(*module, diags, mem2reg, flatStats)) {
+      module.reset();  // Never emit a partially promoted module.
+    }
     if (module && flatStats && !diags.hasError()) std::cerr << module->formatStats();
   } else {
     (void)renderFlatIr(src, diags, fromAst, normalize, flatStats, mem2reg, &module);
@@ -564,6 +567,11 @@ int main(int argc, char** argv) {
       }
       // 文本 dump 即使伴随诊断仍可定位；LLVM 产物必须完整才写入。
       if (opts.emit == EmitKind::LlvmIr && diags.hasError()) {
+        diags.printAll(std::cerr, false);
+        return kCompileError;
+      }
+      // A failed promotion refuses to expose a partially rewritten Flat module.
+      if (artifact.empty() && diags.hasError()) {
         diags.printAll(std::cerr, false);
         return kCompileError;
       }

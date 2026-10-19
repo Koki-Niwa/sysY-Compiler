@@ -77,6 +77,7 @@ PipelineResult FlatPassManager::run(Module& module, const PassManagerOptions& op
       item.diagnostic = std::move(passResult.diagnostic);
       item.mutation = mutator.summary();
       item.changed = item.mutation.changed();
+      result.changed |= item.changed;
       for (size_t i = 0; i < functions.size(); ++i)
         if (item.mutation.affectedFunctions.count(functions[i]))
           item.affectedFunctionIndices.push_back(i);

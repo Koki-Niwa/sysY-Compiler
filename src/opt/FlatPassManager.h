@@ -114,6 +114,7 @@ struct PassManagerOptions {
 
 struct PipelineResult {
   PipelineStatus status = PipelineStatus::Completed;
+  bool changed = false;  // Derived from tracked mutations even without instrumentation.
   std::string diagnostic;
   std::vector<InvocationRecord> invocations;
   bool ok() const { return status == PipelineStatus::Completed; }

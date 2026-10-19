@@ -164,14 +164,15 @@ reduction and both AddressPlan choices (11 checks). Transpose 220 → 202
 instructions; S20 corpus behavior 357 exact + 62 loop-count-only + 0
 observable differences + 121 skips, all pass.
 
-**S20b pending**: general (non-power-of-two) magic division, applying the
-AddressPlan to an actual induction rewrite, and AArch64/RV64 target-cost
-selection evidence. The magic-division prototype was reverted: Flat IR
-currently validates integer arithmetic/casts only for i32 (i64 is limited to
-loads/stores/GEP indices), so an i64 multiply-high sequence is rejected by
-`validateFlatInstruction`. The next step is either a 32-bit `mulhi` primitive
-(16-bit limb emulation) or an explicit i64 arithmetic extension; until then
-S20b stays open.
+**S20b CLOSED / PASS**: signed division by a non-power-of-two constant is
+now lowered with a 32-bit `mulhi` (16-bit limb emulation; Flat integer ops are
+i32-only), the magic reciprocal, a one-step remainder correction and an
+INT_MIN select. `test_s20` evaluates the transformed IR against C++ truncating
+division for 7 divisors and ~2,000 values each (including INT_MIN), and checks
+two legal target cost vectors choose opposite address strategies. Behavior
+with `--mem2reg --opt=s20`: 540 files, 357 exact + 62 loop-count-only + 0
+observable differences + 121 skips, all pass. AddressPlan remains a decision
+API (indexed/pointer) rather than an IR rewrite.
 
 **S19 CLOSED / PASS** (full S09 **57/0/2**, `test_s19` **6 checks**):
 `GVNPass` numbers pure instructions in dominator-tree scope (scoped

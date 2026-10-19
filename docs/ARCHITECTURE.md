@@ -203,7 +203,7 @@ not claim linear time for constructing all SCC summaries. The read-only
 `freshnessExpansionCount()` is a cumulative diagnostic of actual expansions;
 it does not participate in cache validity or invalidation decisions.
 
-## S20a SCEV, LICM, power-of-two strength reduction and AddressPlan (CLOSED / PASS; S20b pending)
+## S20 SCEV, LICM, strength reduction and AddressPlan (CLOSED / PASS)
 
 `ScalarEvolutionAnalysis` maps canonical loop phis to `{start,+,step}` AddRec
 expressions and folds constant add/mul derivatives. `LICMPass` hoists
@@ -213,10 +213,14 @@ the CFG, so no preheader means no hoist. Division/remainder, loads and calls
 stay in the loop.
 
 `StrengthReducePass` rewrites multiply by 2^k to `shl` and signed division by
-2^k to the bias-and-arithmetic-shift sequence. `AddressPlan` compares indexed
-and pointer-induction latencies from a `CostVector`; without target facts it
-falls back to indexed addressing. General magic division and the actual
-pointer-induction rewrite remain S20b.
+2^k to the bias-and-arithmetic-shift sequence. Division by other constants uses
+a 32-bit `mulhi` (16-bit limb emulation, since Flat integer ops are i32-only),
+the usual magic reciprocal, a remainder correction and an INT_MIN select; the
+unit test evaluates the transformed IR against C++ division across seven
+divisors and thousands of values. `AddressPlan` compares indexed and
+pointer-induction latencies from a `CostVector`; without target facts it falls
+back to indexed addressing, and two legal target cost vectors can select
+opposite strategies. The plan is a decision API, not yet an IR rewrite.
 
 ## S19 GVN, DSE and DLE (CLOSED / PASS)
 

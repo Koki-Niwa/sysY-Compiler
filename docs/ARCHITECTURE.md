@@ -203,6 +203,23 @@ not claim linear time for constructing all SCC summaries. The read-only
 `freshnessExpansionCount()` is a cumulative diagnostic of actual expansions;
 it does not participate in cache validity or invalidation decisions.
 
+## S13 alias analysis (CLOSED / PASS)
+
+`src/analysis/AliasAnalysis.{h,cpp}` is a Module-scope analysis with the
+dependency mask Memory|Calls|Globals|Interface. It consumes CallGraphAnalysis
+and keeps an immutable provenance map in its result: Alloca, Global, Param and
+Fresh bases, with constant byte offsets accumulated through GEP, BitCast and
+Phi. Distinct Alloca/Global/Fresh objects and distinct constant offsets of the
+same base are NoAlias; equal base and offset are MustAlias; anything unknown is
+MayAlias.
+
+Function return provenance is a bounded fixpoint over the call graph. A return
+of a parameter or global is exact only while no non-zero/dynamic GEP moved it;
+call sites substitute the actual argument for a parameter return. Interior
+returns keep an unknown offset, and unknown/external results stay MayAlias, so
+the analysis never proves NoAlias from missing information. The alias result is
+itself an AnalysisManager entry; it does not keep mutable cross-revision state.
+
 ## F05 CompilationSession and CMake components (CLOSED / PASS)
 
 Flat text value ids are translated only through the pre-scanned definition

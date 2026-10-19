@@ -152,6 +152,17 @@ pure; read/write/external effects are a least fixed point. Dependencies:
 cache reuse, revision invalidation and stale-graph rejection (33 checks).
 F00/F01/F02/F03/F04/F05 frozen acceptance remains unchanged; **S13 is next**.
 
+**S13 CLOSED / PASS** (full S09 **56/0/2**, `test_alias` **33 checks**): `AliasAnalysis`
+is a Module-scope consumer of `CallGraphAnalysis` (dependency mask
+Memory|Calls|Globals|Interface). It resolves pointer provenance to Alloca,
+Global, Param or Fresh bases with constant byte offsets through GEP/BitCast/Phi,
+and instantiates callee return summaries at call sites, so a call returning a
+parameter resolves to the caller's argument and a call returning a global keeps
+that global. Unknown/external results and return offsets that are not provably
+exact degrade to MayAlias. `test_alias` covers 33 checks including locals,
+globals, arguments, constant/dynamic GEP offsets, cross-function returns,
+interior-pointer unknowns and Memory/Calls invalidation.
+
 Post-S12 audit fixes (2026-10-20, full gate **56 PASS / 0 FAIL / 2 expected
 SKIP**): memory intrinsics are classified once for both `Call` and specialized
 opcode forms; `llvm.memset` is a writes-only effect, `llvm.memcpy` reads and

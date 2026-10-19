@@ -124,7 +124,7 @@ implementation/Fix1 revision `5f4173caeb8abf78d1ac56c129c9550985f48b0b`);
 `7fdb9f33f254bc0219269cafdc8e0b5e36d2e6a9`; valid 004 validation
 and independent 008 evidence review); **F03 CLOSED / PASS** (014
 acceptance, implementation `b1c06bb936049fc713c0db16eef8015b7b3ab2ec`);
-**F04 CLOSED / PASS** (commit `10a3cbd6`); **F05 not started**.
+**F04 CLOSED / PASS** (commit `10a3cbd6`); **F05 CLOSED / PASS** (commit `bbb9d23`).
 F01 accepted implementation and validation revisions remain historical facts;
 F02 adds the analysis foundation without changing F00/F01 frozen contracts.
 
@@ -158,7 +158,23 @@ emit an artifact; live commits are not rolled back, which is reachable only on
 an internal invariant violation. **F04 CLOSED / PASS** (commit `10a3cbd6`;
 independent review plus full S09 **55/0/2**, trajectories 357/62/0/121,
 Mem2Reg structure 1/1/3 → 0/0/0+1φ, F04 unit **20/0**); DominatorTree remains
-unmigrated, **F05 not started**.
+unmigrated.
+
+## F05 CompilationSession and CMake components (CLOSED / PASS)
+
+`src/main/CompilationSession` is the only stage materialization path. It lazily
+builds AST → Sema → InitPlan → Structured → Flat, caches each stage, and keeps
+`--from-ast` / `--from-structured` / `--from-flat` as input modes of the same
+session. `main.cpp` parses the command line, chooses the artifact and writes
+it; it no longer contains lexer/parser/sema/flatten calls.
+
+`CMakeLists.txt` defines static component libraries `sysy_support`,
+`sysy_frontend`, `sysy_ir`, `sysy_analysis`, `sysy_opt` and `sysy_structured`
+whose target dependencies encode the allowed include direction. Unit tests
+link those targets and are registered in CTest; `tools/selftest/unit/run.sh`
+only builds and runs them, so adding a source file no longer requires editing
+a second source list. `check_f05_session_boundary.py` enforces both invariants
+with negative controls. Full S09 gate after F05: **56 PASS / 0 FAIL / 2 expected SKIP**.
 
 F00 established exact `Value` reverse `Use{Instruction*, operandIndex}`
 occurrences across Instructions, Arguments, Constants, GlobalAddr and

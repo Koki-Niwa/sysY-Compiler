@@ -29,7 +29,9 @@ F01 已完成并正式验收（**CLOSED / PASS**；accepted validation revision 
 
 **F02 — AnalysisManager CLOSED / PASS**；**F03 — FlatPassManager CLOSED / PASS**；
 **F04 — Mem2Reg 正式 FunctionPass 迁移 CLOSED / PASS**（commit `10a3cbd6`；
-独立复核 + 全量 S09 55/0/2）。F05 与 S12+ 尚未开始。
+独立复核 + 全量 S09 55/0/2）。**F05 — CompilationSession + CMake 组件边界 CLOSED / PASS**
+（commit `bbb9d23`；全量 S09 56/0/2，20 个单元测试经 CTest 执行）。
+S12+ 是下一个里程碑。
 
 完整、最新的冻结事实以 [CURRENT-STATE](docs/CURRENT-STATE.md) 为准。路线和边界见 [ARCHITECTURE](docs/ARCHITECTURE.md)、[GOALS](docs/GOALS.md) 和 [BACKEND-PERFORMANCE-PLAN](docs/BACKEND-PERFORMANCE-PLAN.md)。
 

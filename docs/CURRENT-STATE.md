@@ -134,7 +134,13 @@ the module API is a FlatPassManager wrapper, the aggregate is pass-owned (no
 external pointer), detached scratch phis are discarded on a thrown plan, and
 a failed pipeline reports `Mem2RegStatus::Failed` with `success=false` and no
 artifact. DominatorTree remains unmigrated in `FlatVerifier`; no pass consumes
-it. **F05 and S12+ not started**. F00/F01/F02 frozen acceptance remains unchanged.
+it. **F05 CLOSED / PASS** (commit `bbb9d23`; full S09 gate **56 PASS / 0 FAIL /
+2 expected SKIP**, unit suite **20 tests via CTest**, F05 boundary checker
+**PASS**): `main.cpp` is CLI/artifact policy only, `CompilationSession` owns
+the single AST→Sema→InitPlan→Structured→Flat materialization path, CMake
+defines `sysy_*` component libraries, and unit tests link those targets
+instead of re-copying source lists. **S12+ is the next milestone**. F00/F01/
+F02/F03/F04 frozen acceptance remains unchanged.
 
 F04 validation (2026-10-19): clean-worktree full S09 gate **55 PASS / 0 FAIL /
 2 expected SKIP**; trajectories **357 exact / 62 loop-count-only /

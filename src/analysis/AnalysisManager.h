@@ -12,7 +12,7 @@ namespace sysy { namespace flat {
 struct CallGraphInfo;
 // CGSCC is keyed by the SCC index inside one CallGraphInfo result. Revisions
 // (Calls/Interface) decide freshness; the index is only the cache slot.
-enum class AnalysisScope { Module, Function, CGSCC };
+enum class AnalysisScope { Module, Function, CGSCC, Loop };
 struct RevisionSnapshot {
   MutationKind mask = MutationKind::None;
   IRRevision revision;
@@ -67,6 +67,19 @@ class AnalysisManager {
     return request<R>(typeid(A), &f, 0, nullptr, A::revisionDependencies(),
       [&]() -> std::shared_ptr<const void> {
         std::optional<R> result = A::run(f, *this);
+        return result ? std::make_shared<const R>(std::move(*result)) : nullptr;
+      });
+  }
+  // First real Loop scope: the loop index comes from LoopInfoAnalysis for the
+  // same Function; revisions decide freshness.
+  template <typename A> AnalysisHandle<typename A::Result> get(
+      const Function& function, size_t loopIndex) {
+    static_assert(A::scope == AnalysisScope::Loop, "Loop scope required");
+    using R = typename A::Result;
+    return request<R>(typeid(A), &function, static_cast<uint32_t>(loopIndex + 1),
+      nullptr, A::revisionDependencies(),
+      [&]() -> std::shared_ptr<const void> {
+        std::optional<R> result = A::run(function, loopIndex, *this);
         return result ? std::make_shared<const R>(std::move(*result)) : nullptr;
       });
   }

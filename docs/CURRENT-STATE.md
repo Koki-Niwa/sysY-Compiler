@@ -152,6 +152,16 @@ pure; read/write/external effects are a least fixed point. Dependencies:
 cache reuse, revision invalidation and stale-graph rejection (33 checks).
 F00/F01/F02/F03/F04/F05 frozen acceptance remains unchanged; **S13 is next**.
 
+**S14 CLOSED / PASS** (full S09 **56/0/2**, `test_cfg_analysis` **20 checks**):
+`DominatorAnalysis` wraps the single `ir/DominatorTree` (FlatVerifier's
+Cooper-Harvey-Kennedy implementation) at Function scope; `LoopInfoAnalysis`
+builds natural loops from dominator back edges with merged tails, sorted block
+sets and a parent/depth forest. The AnalysisManager now has a real Loop scope:
+`get<LoopViewAnalysis>(function, loopIndex)` caches per loop slot and invalidates
+on CFG revisions. `test_cfg_analysis` covers 12 hand CFGs for idom/dominance,
+single/nested/sequential/self/multi-backedge loops, an irreducible cycle,
+unreachable blocks, Loop-scope caching and CFG invalidation (20 checks).
+
 **S13 CLOSED / PASS** (full S09 **56/0/2**, `test_alias` **33 checks**): `AliasAnalysis`
 is a Module-scope consumer of `CallGraphAnalysis` (dependency mask
 Memory|Calls|Globals|Interface). It resolves pointer provenance to Alloca,

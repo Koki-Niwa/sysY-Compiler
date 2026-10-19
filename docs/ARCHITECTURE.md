@@ -203,6 +203,22 @@ not claim linear time for constructing all SCC summaries. The read-only
 `freshnessExpansionCount()` is a cumulative diagnostic of actual expansions;
 it does not participate in cache validity or invalidation decisions.
 
+## S14 CFG, dominators and loops (CLOSED / PASS)
+
+`src/analysis/DominatorAnalysis.{h,cpp}` is a Function-scope wrapper over the
+one `ir::DominatorTree` implementation shared with `FlatVerifier`; it copies the
+immutable idom/reachability/postorder facts and does not contain a second
+dominator algorithm. `src/analysis/LoopAnalysis.{h,cpp}` derives natural loops
+from dominator back edges: each header dominates its back-edge tails, reverse
+predecessor walks stop at the header, multiple tails merge into one loop, and
+block sets are sorted. Loops are ordered by header; `parent` is the smallest
+enclosing loop and `depth` follows the parent chain. Non-natural cycles (no
+header dominating its tail) produce no loop.
+
+The AnalysisManager's new Loop scope keys `get<LoopViewAnalysis>(function,
+loopIndex)` by Function and loop slot; freshness follows the CFG revision.
+Out-of-range slots and stale CFGs fail closed.
+
 ## S13 alias analysis (CLOSED / PASS)
 
 `src/analysis/AliasAnalysis.{h,cpp}` is a Module-scope analysis with the

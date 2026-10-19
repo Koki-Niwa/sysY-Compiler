@@ -152,6 +152,15 @@ pure; read/write/external effects are a least fixed point. Dependencies:
 cache reuse, revision invalidation and stale-graph rejection (33 checks).
 F00/F01/F02/F03/F04/F05 frozen acceptance remains unchanged; **S13 is next**.
 
+**S16 CLOSED / PASS** (full S09 **56/0/2**, `test_dependence` **13 checks**):
+`analysis/DependenceAnalysis` implements the affine dependence pipeline over
+one loop nest: GCD divisibility, a bounded Banerjee range test, and an exact
+distance vector when every dimension has a common coefficient. Independent
+dimensions fail closed; differing coefficients return `Possible` without a
+distance. `test_dependence` covers 13 hand-computed cases (distances 0/±1,
+2-D vectors, GCD/banerjee independence, constant subscripts, dimension
+mismatch).
+
 **S15 CLOSED / PASS** (full S09 **56/0/2**, `test_inline_v0` **8 checks**):
 `opt/CostModel.h` defines the immutable `TargetCostModel` service (call
 overhead, instruction cost, inline size cap) plus `CostContext` confidence and

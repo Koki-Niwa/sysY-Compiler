@@ -203,6 +203,18 @@ not claim linear time for constructing all SCC summaries. The read-only
 `freshnessExpansionCount()` is a cumulative diagnostic of actual expansions;
 it does not participate in cache validity or invalidation decisions.
 
+## S16 affine dependence analysis (CLOSED / PASS)
+
+`src/analysis/DependenceAnalysis.{h,cpp}` models an access as one affine
+subscript per loop dimension (`coeff * iv + constant`) with a bounded iteration
+domain. `testDependence` runs GCD divisibility first, then a Banerjee range
+test over the bounds, and returns an exact sink-minus-source distance vector
+only when every dimension has a common coefficient. Different coefficients can
+still be dependent but keep `distance` empty (`Possible`); any dimension with
+no integer solution, or a Banerjee range excluding zero, proves independence.
+Constant-only dimensions compare their constants and contribute distance 0 when
+equal. Malformed dimension counts fail closed.
+
 ## S15 cost protocol and inlining V0 (CLOSED / PASS)
 
 `src/opt/CostModel.h` defines an immutable `TargetCostModel` service and a

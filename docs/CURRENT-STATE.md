@@ -166,7 +166,12 @@ observable differences + 121 skips, all pass.
 
 **S20b pending**: general (non-power-of-two) magic division, applying the
 AddressPlan to an actual induction rewrite, and AArch64/RV64 target-cost
-selection evidence.
+selection evidence. The magic-division prototype was reverted: Flat IR
+currently validates integer arithmetic/casts only for i32 (i64 is limited to
+loads/stores/GEP indices), so an i64 multiply-high sequence is rejected by
+`validateFlatInstruction`. The next step is either a 32-bit `mulhi` primitive
+(16-bit limb emulation) or an explicit i64 arithmetic extension; until then
+S20b stays open.
 
 **S19 CLOSED / PASS** (full S09 **57/0/2**, `test_s19` **6 checks**):
 `GVNPass` numbers pure instructions in dominator-tree scope (scoped

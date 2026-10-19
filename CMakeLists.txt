@@ -94,7 +94,8 @@ add_library(sysy_analysis STATIC
   src/analysis/BranchProbabilityAnalysis.cpp
   src/analysis/BlockFrequencyAnalysis.cpp
   src/analysis/ValueFacts.cpp
-  src/analysis/DependenceAnalysis.cpp)
+  src/analysis/DependenceAnalysis.cpp
+  src/analysis/ScalarEvolution.cpp)
 target_include_directories(sysy_analysis PUBLIC src)
 target_link_libraries(sysy_analysis PUBLIC sysy_ir)
 
@@ -109,7 +110,10 @@ add_library(sysy_opt STATIC
   src/opt/RewriteEngine.cpp
   src/opt/GVN.cpp
   src/opt/DeadStoreElimination.cpp
-  src/opt/DeadLoadElimination.cpp)
+  src/opt/DeadLoadElimination.cpp
+  src/opt/LICM.cpp
+  src/opt/AddressPlan.cpp
+  src/opt/StrengthReduce.cpp)
 target_include_directories(sysy_opt PUBLIC src)
 target_link_libraries(sysy_opt PUBLIC sysy_analysis)
 
@@ -203,6 +207,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   sysy_unit_test(test_s17 sysy_opt)
   sysy_unit_test(test_rewrite sysy_opt)
   sysy_unit_test(test_s19 sysy_opt)
+  sysy_unit_test(test_s20 sysy_opt)
 
   add_executable(bench_lexer tools/selftest/unit/bench_lexer.cpp)
   target_include_directories(bench_lexer PRIVATE src)

@@ -81,6 +81,7 @@ struct Options {
   bool mem2reg = false;         // --mem2reg：显式开启 S09 标量提升
   bool s17 = false;             // --opt=s17：constprop + simplifycfg + dce
   bool s19 = false;             // --opt=s19：rewrite + gvn + dse + dle
+  bool s20 = false;             // --opt=s20：licm + strength-reduce + dce
   bool flatStats = false;       // --dump-flat-stats：把平面 IR 统计打到 stderr
   bool normalize = false;       // --normalize：跑 LoopNormalize + AllocaHoist（**默认关**）
   bool loopStats = false;       // --dump-loopnorm-stats：把规范化统计打到 stderr
@@ -154,6 +155,7 @@ bool parseCommandLine(int argc, char** argv, Options& opts) {
     if (a == "--mem2reg")       { opts.mem2reg = true; continue; }
     if (a == "--opt=s17")      { opts.s17 = true; continue; }
     if (a == "--opt=s19")      { opts.s19 = true; continue; }
+    if (a == "--opt=s20")      { opts.s20 = true; continue; }
     if (a == "--dump-flat-stats") { opts.flatStats = true; continue; }
     // ★ S05b：循环规范化开关（**默认关**：不带它时 `--emit=structured-ir` 的
     //   输出必须与 S05 的样例对逐字节相同 —— 那是冻结契约）。
@@ -183,6 +185,8 @@ bool parseCommandLine(int argc, char** argv, Options& opts) {
     throw UsageError("--opt=s17 requires --emit=flat-ir or --emit=llvm-ir");
   if (opts.s19 && opts.emit != EmitKind::FlatIr && opts.emit != EmitKind::LlvmIr)
     throw UsageError("--opt=s19 requires --emit=flat-ir or --emit=llvm-ir");
+  if (opts.s20 && opts.emit != EmitKind::FlatIr && opts.emit != EmitKind::LlvmIr)
+    throw UsageError("--opt=s20 requires --emit=flat-ir or --emit=llvm-ir");
 
   if (!opts.haveOutput) throw UsageError("missing required option '-o <file>'");
   return true;
@@ -224,10 +228,10 @@ std::string emitArtifact(CompilationSession& session, const Options& opts) {
       return session.structuredText(opts.normalize, opts.loopStats);
     case EmitKind::FlatIr:
       return session.flatText(opts.fromFlat, opts.normalize, opts.flatStats,
-                              opts.mem2reg, opts.s17, opts.s19);
+                              opts.mem2reg, opts.s17, opts.s19, opts.s20);
     case EmitKind::LlvmIr:
       return session.llvmIrText(opts.fromFlat, opts.normalize, opts.flatStats,
-                                opts.mem2reg || opts.optLevel >= 1, opts.s17, opts.s19);
+                                opts.mem2reg || opts.optLevel >= 1, opts.s17, opts.s19, opts.s20);
     case EmitKind::Nothing:
       break;
   }

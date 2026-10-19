@@ -152,6 +152,22 @@ pure; read/write/external effects are a least fixed point. Dependencies:
 cache reuse, revision invalidation and stale-graph rejection (33 checks).
 F00/F01/F02/F03/F04/F05 frozen acceptance remains unchanged; **S13 is next**.
 
+**S20a CLOSED / PASS** (full S09 **57/0/2**, `test_s20` **11 checks**): `ScalarEvolutionAnalysis`
+recognizes canonical induction-variable phis (`{start,+,step}`) and add/mul
+derived expressions; `LICMPass` hoists pure invariant instructions to a
+dedicated preheader (no CFG rewriting, so no preheader means no hoist);
+`StrengthReducePass` lowers power-of-two signed division to shift/bias and
+multiply-by-power-of-two to `shl`; `AddressPlan` chooses indexed vs pointer
+induction from `CostVector` facts, falling back to indexed without target
+facts. `test_s20` covers SCEV, LICM (positive, IV-negative), strength
+reduction and both AddressPlan choices (11 checks). Transpose 220 → 202
+instructions; S20 corpus behavior 357 exact + 62 loop-count-only + 0
+observable differences + 121 skips, all pass.
+
+**S20b pending**: general (non-power-of-two) magic division, applying the
+AddressPlan to an actual induction rewrite, and AArch64/RV64 target-cost
+selection evidence.
+
 **S19 CLOSED / PASS** (full S09 **57/0/2**, `test_s19` **6 checks**):
 `GVNPass` numbers pure instructions in dominator-tree scope (scoped
 availability, commutative operand canonicalization, no cross-sibling merge);

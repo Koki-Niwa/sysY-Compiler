@@ -203,6 +203,21 @@ not claim linear time for constructing all SCC summaries. The read-only
 `freshnessExpansionCount()` is a cumulative diagnostic of actual expansions;
 it does not participate in cache validity or invalidation decisions.
 
+## S20a SCEV, LICM, power-of-two strength reduction and AddressPlan (CLOSED / PASS; S20b pending)
+
+`ScalarEvolutionAnalysis` maps canonical loop phis to `{start,+,step}` AddRec
+expressions and folds constant add/mul derivatives. `LICMPass` hoists
+side-effect-free invariant instructions to a preheader only when the header
+already has exactly one outside predecessor dedicated to it; it never rewrites
+the CFG, so no preheader means no hoist. Division/remainder, loads and calls
+stay in the loop.
+
+`StrengthReducePass` rewrites multiply by 2^k to `shl` and signed division by
+2^k to the bias-and-arithmetic-shift sequence. `AddressPlan` compares indexed
+and pointer-induction latencies from a `CostVector`; without target facts it
+falls back to indexed addressing. General magic division and the actual
+pointer-induction rewrite remain S20b.
+
 ## S19 GVN, DSE and DLE (CLOSED / PASS)
 
 `GVNPass` performs dominator-scoped value numbering for pure instructions

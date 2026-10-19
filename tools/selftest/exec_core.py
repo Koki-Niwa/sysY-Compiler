@@ -246,6 +246,7 @@ class Machine(object):
                 return 0
             r = abs(a) % abs(b)
             return s32(r if a >= 0 else -r)
+        if k in ('ShlI', 'LshrI', 'AshrI', 'AndI', 'OrI', 'XorI'): return s32(a << (b & 31) if k == 'ShlI' else ((a & 0xffffffff) >> (b & 31) if k == 'LshrI' else (a >> (b & 31) if k == 'AshrI' else (a & b if k == 'AndI' else (a | b if k == 'OrI' else a ^ b)))))
         raise Unsupported(k)
 
     # ── 形状无关的单条指令语义（**两边共用**）───────────────────────────

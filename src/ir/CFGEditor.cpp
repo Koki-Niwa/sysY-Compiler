@@ -223,6 +223,54 @@ MutationResult CFGEditor::redirectEdge(BasicBlock* from, size_t index,
   return MutationResult::Applied;
 }
 
+MutationResult CFGEditor::replaceTerminator(BasicBlock* block,
+                                               Instruction* newTerminator) {
+  if (block == nullptr || newTerminator == nullptr ||
+      !mutator_.isLiveBlock(block) || newTerminator->parent() != nullptr ||
+      newTerminator->lifecycle() != InstructionLifecycle::Detached ||
+      !isTerminatorOpcode(newTerminator->op()))
+    return MutationResult::Rejected;
+  Instruction* old = block->terminator();
+  Function* function = block->parent();
+  if (old == nullptr || function == nullptr) return MutationResult::Rejected;
+  auto hasEdge = [](const Value* value, const Instruction* user, size_t index) {
+    if (value == nullptr) return false;
+    for (const Use& use : value->uses())
+      if (use.user == user && use.operandIndex == index) return true;
+    return false;
+  };
+  for (size_t i = 0; i < newTerminator->numOperands(); ++i)
+    if (!mutator_.valueAvailableInFunction(newTerminator->operand(i), function) ||
+        !hasEdge(newTerminator->operand(i), newTerminator, i))
+      return MutationResult::Rejected;
+  // Only edges may be dropped; adding a predecessor would require phi values.
+  for (size_t s = 0; s < newTerminator->numSuccs(); ++s) {
+    BasicBlock* target = newTerminator->succ(s);
+    if (target == nullptr || target->parent() != function) return MutationResult::Rejected;
+    if (!hasSuccessor(block, target, newTerminator->numSuccs())) return MutationResult::Rejected;
+  }
+  for (size_t s = 0; s < old->numSuccs(); ++s) {
+    BasicBlock* target = old->succ(s);
+    if (target == nullptr) continue;
+    size_t before = 0, after = 0;
+    for (size_t k = 0; k < old->numSuccs(); ++k)
+      if (old->succ(k) == target) ++before;
+    for (size_t k = 0; k < newTerminator->numSuccs(); ++k)
+      if (newTerminator->succ(k) == target) ++after;
+    if (after > before) return MutationResult::Rejected;   // would add an edge
+    if (after > 0) continue;                              // predecessor remains
+    for (Instruction* inst : target->insts())
+      if (inst != nullptr && inst->op() == Opcode::Phi)
+        return MutationResult::Rejected;
+    updatePreds(target, block, nullptr);
+  }
+  if (!mutator_.module().ownInst(newTerminator)) return MutationResult::Rejected;
+  if (!mutator_.rawErase(old)) return MutationResult::Rejected;
+  block->addInst(newTerminator);
+  mutator_.commit(MutationKind::CFG, {function});
+  return MutationResult::Applied;
+}
+
 CFGEditor::SplitResult CFGEditor::splitEdge(BasicBlock* from, size_t index) {
   if (!mutator_.isLiveBlock(from)) return {MutationResult::Rejected, nullptr};
   Instruction* term = from->terminator();

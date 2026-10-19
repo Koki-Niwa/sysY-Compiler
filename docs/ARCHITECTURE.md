@@ -203,6 +203,21 @@ not claim linear time for constructing all SCC summaries. The read-only
 `freshnessExpansionCount()` is a cumulative diagnostic of actual expansions;
 it does not participate in cache validity or invalidation decisions.
 
+## S17 constant propagation, DCE and CFG simplification (CLOSED / PASS)
+
+`ConstantPropagationPass` folds pure i32/i64 arithmetic, comparisons, select,
+extensions and truncations with canonical constants (signed overflow wraps;
+division by zero is not folded). `DeadCodeEliminationPass` removes unused
+pure instructions and unused phis through `IRMutator`/`CFGEditor`.
+`SimplifyCFGPass` folds a conditional branch with a constant condition or two
+identical targets into an unconditional branch. It uses the new
+`CFGEditor::replaceTerminator`, which requires the new successor set to be a
+subset of the old one and refuses to drop a predecessor from a phi-bearing
+target. The pass additionally refuses to drop the last predecessor of the
+unchosen successor, because that would make it unreachable and invalidate
+phi dominance downstream. `--opt=s17` is an explicit opt-in pipeline; default
+O1 remains mem2reg only.
+
 ## S16b foundation audit (CLOSED / PASS)
 
 `tools/selftest/check_foundation_audit.py` enforces the structural controls:

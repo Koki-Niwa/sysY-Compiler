@@ -152,6 +152,21 @@ pure; read/write/external effects are a least fixed point. Dependencies:
 cache reuse, revision invalidation and stale-graph rejection (33 checks).
 F00/F01/F02/F03/F04/F05 frozen acceptance remains unchanged; **S13 is next**.
 
+**S17 CLOSED / PASS**: `ConstantPropagationPass` folds i32/i64
+add/sub/mul/div/rem/shifts/bitwise/icmp/select/ext/trunc, `SimplifyCFGPass`
+folds constant conditional branches and duplicate targets through the new
+`CFGEditor::replaceTerminator` (dropping a predecessor is refused when it
+would make the other successor unreachable), and `DeadCodeEliminationPass`
+removes unused pure instructions and phis. `--opt=s17` runs the three passes
+after mem2reg; the pass set is opt-in, not part of default O1.
+
+Evidence: 490 supported files measured with `--mem2reg` vs `--mem2reg
+--opt=s17`: **244,649 → 217,027 instructions (−27,622, −11.3%)**, 378 cases
+reduced, 0 increased. Corpus behavior with `--mem2reg --opt=s17`: 540 files,
+**357 exact + 62 loop-count-only + 0 observable differences + 121 skips**,
+`全过`. `test_s17` covers folding, DCE, constant/duplicate branch folding, a
+phi-bearing join and the last-predecessor refusal (8 checks).
+
 **S16b CLOSED / PASS** (full S09 **57 PASS / 0 FAIL / 2 expected SKIP**):
 the foundation audit adds `check_foundation_audit.py` (single dominator
 implementation, no manual rebuilds in analyses/passes, no `ir -> analysis`

@@ -19,6 +19,10 @@
 #include "ir/FlatVerifier.h"
 #include "ir/LLVMTextEmitter.h"
 #include "main/FlatPipeline.h"
+#include "opt/ConstantPropagation.h"
+#include "opt/DeadCodeElimination.h"
+#include "opt/FlatPassManager.h"
+#include "opt/SimplifyCFG.h"
 #include "structured/AllocaHoist.h"
 #include "structured/FlattenCFG.h"
 #include "structured/IRGen.h"
@@ -34,6 +38,25 @@ namespace {
 std::string baseNameOf(const std::string& path) {
   const size_t p = path.find_last_of("/\\");
   return (p == std::string::npos) ? path : path.substr(p + 1);
+}
+
+bool runS17Pipeline(flat::Module& module, DiagnosticEngine& diags) {
+  flat::FlatPassManager manager;
+  manager.addPass(std::make_unique<flat::ConstantPropagationPass>());
+  manager.addPass(std::make_unique<flat::SimplifyCFGPass>());
+  manager.addPass(std::make_unique<flat::DeadCodeEliminationPass>());
+  const flat::PipelineResult result = manager.run(module);
+  if (!result.ok()) {
+    diags.report(DiagLevel::Error, SourceLoc(0, 0), "E-S17-OPT", result.diagnostic);
+    return false;
+  }
+  const std::vector<flat::Violation> violations = flat::verifyFlatModule(module);
+  if (!violations.empty()) {
+    diags.report(DiagLevel::Error, SourceLoc(0, 0), "E-S17-VERIFY",
+                 "S17 输出违反平面 IR 不变量：\n" + flat::formatViolations(violations));
+    return false;
+  }
+  return true;
 }
 
 void reportMem2RegStats(const flat::Mem2RegResult& result) {
@@ -182,15 +205,17 @@ std::string CompilationSession::structuredText(bool normalize, bool loopStats) {
 }
 
 const flat::Module* CompilationSession::flat(bool fromFlat, bool normalize,
-                                             bool flatStats, bool mem2reg) {
+                                             bool flatStats, bool mem2reg,
+                                             bool s17) {
   if (flat_.ready && flat_.fromFlat == fromFlat && flat_.normalize == normalize &&
-      flat_.flatStats == flatStats && flat_.mem2reg == mem2reg)
+      flat_.flatStats == flatStats && flat_.mem2reg == mem2reg && flat_.s17 == s17)
     return flat_.module.get();
   flat_.ready = true;
   flat_.fromFlat = fromFlat;
   flat_.normalize = normalize;
   flat_.flatStats = flatStats;
   flat_.mem2reg = mem2reg;
+  flat_.s17 = s17;
   flat_.module.reset();
   flat_.mem2RegResult = flat::Mem2RegResult{};
 
@@ -217,6 +242,7 @@ const flat::Module* CompilationSession::flat(bool fromFlat, bool normalize,
         return nullptr;
       }
       if (flatStats) reportMem2RegStats(flat_.mem2RegResult);
+      if (s17 && !runS17Pipeline(*holder, diags_)) return nullptr;
     }
     flat_.module = std::move(holder);
     return flat_.module.get();
@@ -263,6 +289,7 @@ const flat::Module* CompilationSession::flat(bool fromFlat, bool normalize,
     }
     if (flatStats) reportMem2RegStats(flat_.mem2RegResult);
   }
+  if (pipelineClean && s17 && !runS17Pipeline(*fmod, diags_)) return nullptr;
   flat_.module = std::move(fmod);
   return flat_.module.get();
 }
@@ -285,8 +312,8 @@ std::string CompilationSession::initPlanText() {
 }
 
 std::string CompilationSession::flatText(bool fromFlat, bool normalize,
-                                         bool flatStats, bool mem2reg) {
-  const flat::Module* module = flat(fromFlat, normalize, flatStats, mem2reg);
+                                         bool flatStats, bool mem2reg, bool s17) {
+  const flat::Module* module = flat(fromFlat, normalize, flatStats, mem2reg, s17);
   if (module == nullptr) return std::string();
   if (flatStats) {
     std::cerr << module->formatStats();
@@ -299,8 +326,8 @@ std::string CompilationSession::flatText(bool fromFlat, bool normalize,
 }
 
 std::string CompilationSession::llvmIrText(bool fromFlat, bool normalize,
-                                           bool flatStats, bool mem2reg) {
-  const flat::Module* module = flat(fromFlat, normalize, flatStats, mem2reg);
+                                           bool flatStats, bool mem2reg, bool s17) {
+  const flat::Module* module = flat(fromFlat, normalize, flatStats, mem2reg, s17);
   if (module == nullptr || diags_.hasError()) return std::string();
   const std::vector<flat::Violation> violations = flat::verifyFlatModule(*module);
   if (!violations.empty()) {

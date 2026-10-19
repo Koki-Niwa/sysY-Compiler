@@ -392,7 +392,7 @@ class FlatExec(C.Machine):
 
 
 # ── 单文件：跑两份 IR，比较轨迹 ──────────────────────────────────────────
-def one_file(compiler, sy, tmpdir, seed, mem2reg=False):
+def one_file(compiler, sy, tmpdir, seed, mem2reg=False, s17=False):
     # ⚠️ 键必须用**相对路径**（两条赛道有 240 个同名文件；用 basename 会让并发
     #    worker 读写同一对临时文件 ⇒ 凭空造出假差异。S05b 的教训）
     key = os.path.relpath(sy, ROOT).replace('/', '__')
@@ -400,8 +400,8 @@ def one_file(compiler, sy, tmpdir, seed, mem2reg=False):
     flt = os.path.join(tmpdir, key + '.flat')
     r1 = subprocess.run([compiler, sy, '--emit=structured-ir', '--normalize', '-o', sir],
                         capture_output=True)
-    r2 = subprocess.run([compiler, sy, '--emit=flat-ir'] +
-                        (['--mem2reg'] if mem2reg else []) + ['-o', flt],
+    flags = (['--mem2reg'] if mem2reg else []) + (['--opt=s17'] if s17 else [])
+    r2 = subprocess.run([compiler, sy, '--emit=flat-ir'] + flags + ['-o', flt],
                         capture_output=True)
     if r1.returncode != 0 or r2.returncode != 0:
         if r1.returncode != 0 and r2.returncode != 0:
@@ -453,7 +453,7 @@ def main():
     ap.add_argument('--limit', type=int, default=0)
     ap.add_argument('--min-files', type=int, default=400)
     ap.add_argument('--seed', type=int, default=1)
-    ap.add_argument('--mem2reg', action='store_true')
+    ap.add_argument('--mem2reg', action='store_true'); ap.add_argument('--s17', action='store_true')
     ap.add_argument('--show-trace', default='')
     ap.add_argument('--dump-traces', default='')
     ap.add_argument('--verbose', action='store_true')
@@ -470,7 +470,7 @@ def main():
 
     if args.show_trace or args.dump_traces:
         sy = os.path.abspath(args.show_trace or args.dump_traces)
-        st, msg, a, b = one_file(compiler, sy, tmp, args.seed, args.mem2reg)
+        st, msg, a, b = one_file(compiler, sy, tmp, args.seed, args.mem2reg, args.s17)
         print('状态: %s %s' % (st, msg))
         if a is not None:
             print('结构化 IR 轨迹: %s' % a)
@@ -497,7 +497,7 @@ def main():
 
     with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as ex:
         results = list(ex.map(lambda f: (f,) + one_file(
-            compiler, f, tmp, args.seed, args.mem2reg), files))
+            compiler, f, tmp, args.seed, args.mem2reg, args.s17), files))
 
     same, loop_only, diffs, skips = [], [], [], {}
     for f, st, msg, a, b in results:

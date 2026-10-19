@@ -152,6 +152,16 @@ pure; read/write/external effects are a least fixed point. Dependencies:
 cache reuse, revision invalidation and stale-graph rejection (33 checks).
 F00/F01/F02/F03/F04/F05 frozen acceptance remains unchanged; **S13 is next**.
 
+**S18 CLOSED / PASS** (full S09 **57/0/2**, `test_rewrite` **24 checks**):
+`opt/RewriteEngine` is a small peephole DSL: `Pattern` matches opcode,
+operand count, integer result and operand patterns (Any/Constant/ConstantInt/
+Capture/SameAs); `onlyIf` guards run after matching and are counted when they
+block a rule; builders return a replacement value. `installBasicRules` provides
+20 rules (add/sub/mul identities, x-x, select duplicate arms, self-comparison,
+bitwise/shift identities) and `RewritePass` applies them to a fixed point.
+`test_rewrite` exercises every rule, the guard negative control and the fixed
+point (24 checks).
+
 **S17 CLOSED / PASS**: `ConstantPropagationPass` folds i32/i64
 add/sub/mul/div/rem/shifts/bitwise/icmp/select/ext/trunc, `SimplifyCFGPass`
 folds constant conditional branches and duplicate targets through the new

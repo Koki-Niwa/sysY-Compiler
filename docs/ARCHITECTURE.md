@@ -203,6 +203,22 @@ not claim linear time for constructing all SCC summaries. The read-only
 `freshnessExpansionCount()` is a cumulative diagnostic of actual expansions;
 it does not participate in cache validity or invalidation decisions.
 
+## S18 rewrite DSL and basic peephole rules (CLOSED / PASS)
+
+`src/opt/RewriteEngine.{h,cpp}` separates matching from rewriting. A `Pattern`
+matches an opcode, exact operand count, optional integer result type, and
+operand patterns (`Any`, `Constant`, `ConstantInt`, `Capture`, `SameAs`);
+captures are name-keyed and repeated captures must bind the same value.
+`RewriteRule` adds an `onlyIf` guard evaluated after matching and a builder
+that returns the replacement value. The engine applies the first matching,
+guard-passing rule through `IRMutator::replaceAndErase`; guarded and declined
+attempts are counted by rule.
+
+`installBasicRules` covers 20 production peepholes: additive/multiplicative
+identities, `x-x`, duplicate `select` arms, self-comparison, and bitwise/shift
+identities. `RewritePass` applies them to a fixed point. The pass is not wired
+into the default pipeline yet; S19 builds the value-numbering layer on it.
+
 ## S17 constant propagation, DCE and CFG simplification (CLOSED / PASS)
 
 `ConstantPropagationPass` folds pure i32/i64 arithmetic, comparisons, select,

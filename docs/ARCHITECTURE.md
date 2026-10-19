@@ -160,6 +160,28 @@ independent review plus full S09 **55/0/2**, trajectories 357/62/0/121,
 Mem2Reg structure 1/1/3 → 0/0/0+1φ, F04 unit **20/0**); DominatorTree remains
 unmigrated.
 
+## S12 interprocedural analyses (CLOSED / PASS)
+
+`src/analysis/CallGraph.{h,cpp}` is a Module-scope analysis over non-declaration
+Functions. Nodes keep direct call edges (sorted unique), caller edges, and
+sorted external callee names (runtime library or unresolved declaration).
+Tarjan's iterative SCC pass emits components in bottom-up order; the analysis
+fails closed if a node belongs to no/duplicate component or an inter-SCC edge
+does not go from a higher slot to a lower one. The result records the Module
+pointer and the Calls/Interface revisions at build time so a stale graph cannot
+seed a CGSCC result.
+
+`src/analysis/FunctionSummary.{h,cpp}` defines the first real CGSCC scope.
+`AnalysisManager::get<SccSummaryAnalysis>(callGraph, scc)` keys the cache by
+`(analysis, SCC slot, call-graph identity)`; the slot alone is not enough
+because SCC numbering changes with the graph. Callee SCCs are fetched through
+the manager, so their generations are recorded as dependencies. Purity is a
+greatest fixed point: a member starts pure only with no local load/store and
+no external call, and is removed when any callee is impure; mutual recursion
+without effects therefore stays pure. Read/write/external effects are a least
+fixed point, so recursion alone never invents a write. The module-scope
+`FunctionSummaryAnalysis` aggregates the SCC results and shares the same cache.
+
 ## F05 CompilationSession and CMake components (CLOSED / PASS)
 
 Flat text value ids are translated only through the pre-scanned definition

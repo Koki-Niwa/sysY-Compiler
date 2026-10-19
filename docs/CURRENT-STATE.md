@@ -139,8 +139,18 @@ it. **F05 CLOSED / PASS** (commit `bbb9d23`; full S09 gate **56 PASS / 0 FAIL /
 **PASS**): `main.cpp` is CLI/artifact policy only, `CompilationSession` owns
 the single AST→Sema→InitPlan→Structured→Flat materialization path, CMake
 defines `sysy_*` component libraries, and unit tests link those targets
-instead of re-copying source lists. **S12+ is the next milestone**. F00/F01/
-F02/F03/F04 frozen acceptance remains unchanged.
+instead of re-copying source lists. **S12 CLOSED / PASS** (2026-10-19; full S09 **56/0/2**,
+`test_interprocedural` **33 checks**): `CallGraphAnalysis` builds the module call
+graph with SCC condensation in bottom-up order, external-call tracking, and
+call/interface provenance; `SccSummaryAnalysis` is the first real CGSCC scope
+(cache keyed by call-graph identity and SCC slot); `FunctionSummaryAnalysis`
+aggregates it. Purity is a greatest fixed point over the SCC (no load/store,
+no external call, all callees pure), so mutual recursion without effects stays
+pure; read/write/external effects are a least fixed point. Dependencies:
+`Calls|Interface` for the call graph, `Calls|Memory|Interface` for summaries.
+`test_interprocedural` covers SCC order, recursive purity, effect propagation,
+cache reuse, revision invalidation and stale-graph rejection (33 checks).
+F00/F01/F02/F03/F04/F05 frozen acceptance remains unchanged; **S13 is next**.
 
 Post-F05 review fixes (2026-10-19, full gate **56 PASS / 0 FAIL / 2 expected
 SKIP**): Mem2Reg's detached-scratch guard now hands incomplete plans to the

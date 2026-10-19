@@ -203,6 +203,22 @@ not claim linear time for constructing all SCC summaries. The read-only
 `freshnessExpansionCount()` is a cumulative diagnostic of actual expansions;
 it does not participate in cache validity or invalidation decisions.
 
+## S14b branch probabilities, frequencies and value facts (CLOSED / PASS)
+
+`BranchProbabilityAnalysis` is a Function-scope consumer of LoopInfoAnalysis.
+A loop header assigns 0.9 to successors inside the loop and 0.1 outside; a
+non-header branch whose successor is a loop header treats that edge as a rare
+back edge (0.1) and the others as 0.9; other branches split evenly. The
+probability source is therefore explainable from loop structure, not a hidden
+model.
+
+`BlockFrequencyAnalysis` consumes the probabilities and solves block flow with
+a bounded relaxation (entry 1e6, 4*blocks+32 rounds, values capped at 1e12).
+`ValueFactsAnalysis` is a conservative integer range analysis over
+constants/add/sub/mul/sdiv/srem/icmp/select/phi; i32 overflow, division by an
+unknown/zero divisor, loads, calls and casts stay unknown. Both invalidate on
+the revision facts they consume (CFG; DataFlow|CFG for value facts).
+
 ## S14 CFG, dominators and loops (CLOSED / PASS)
 
 `src/analysis/DominatorAnalysis.{h,cpp}` is a Function-scope wrapper over the

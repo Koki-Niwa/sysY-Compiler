@@ -152,6 +152,15 @@ pure; read/write/external effects are a least fixed point. Dependencies:
 cache reuse, revision invalidation and stale-graph rejection (33 checks).
 F00/F01/F02/F03/F04/F05 frozen acceptance remains unchanged; **S13 is next**.
 
+**S14b CLOSED / PASS** (full S09 **56/0/2**, `test_hotness` **19 checks**):
+`BranchProbabilityAnalysis` uses loop structure (header biases inside 0.9;
+back-edge targets 0.1; otherwise even) and is consumed by
+`BlockFrequencyAnalysis` with a bounded relaxation (entry 1e6, cap 1e12,
+4*blocks+32 rounds). `ValueFactsAnalysis` computes conservative i32 ranges for
+constants/add/sub/mul/sdiv/srem/icmp/select/phi; overflow, unknown operands,
+loads and calls stay unknown. `test_hotness` covers loop/latch probabilities,
+frequency ordering, exact and unknown ranges and CFG invalidation (19 checks).
+
 **S14 CLOSED / PASS** (full S09 **56/0/2**, `test_cfg_analysis` **20 checks**):
 `DominatorAnalysis` wraps the single `ir/DominatorTree` (FlatVerifier's
 Cooper-Harvey-Kennedy implementation) at Function scope; `LoopInfoAnalysis`

@@ -90,7 +90,10 @@ add_library(sysy_analysis STATIC
   src/analysis/FunctionSummary.cpp
   src/analysis/AliasAnalysis.cpp
   src/analysis/DominatorAnalysis.cpp
-  src/analysis/LoopAnalysis.cpp)
+  src/analysis/LoopAnalysis.cpp
+  src/analysis/BranchProbabilityAnalysis.cpp
+  src/analysis/BlockFrequencyAnalysis.cpp
+  src/analysis/ValueFacts.cpp)
 target_include_directories(sysy_analysis PUBLIC src)
 target_link_libraries(sysy_analysis PUBLIC sysy_ir)
 
@@ -181,6 +184,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   sysy_unit_test(test_interprocedural sysy_analysis)
   sysy_unit_test(test_alias sysy_analysis)
   sysy_unit_test(test_cfg_analysis sysy_analysis)
+  sysy_unit_test(test_hotness sysy_analysis)
   sysy_unit_test(test_pass_manager sysy_opt)
   sysy_unit_test(test_mem2reg sysy_opt)
   sysy_unit_test(test_mem2reg_pass sysy_opt)

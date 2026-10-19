@@ -165,6 +165,11 @@ unmigrated.
 `src/analysis/CallGraph.{h,cpp}` is a Module-scope analysis over non-declaration
 Functions. Nodes keep direct call edges (sorted unique), caller edges, and
 sorted external callee names (runtime library or unresolved declaration).
+Edges index `CallGraphInfo::nodes`, which omits declarations. The shared
+`classifyCallLike` recognizes ordinary calls and both specialized memory
+intrinsic opcodes. The exact Flat names `llvm.memset` and `llvm.memcpy` are
+external intrinsics in either representation; other spellings retain ordinary
+call resolution and conservative external effects when unresolved.
 Tarjan's iterative SCC pass emits components in bottom-up order; the analysis
 fails closed if a node belongs to no/duplicate component or an inter-SCC edge
 does not go from a higher slot to a lower one. The result records the Module
@@ -176,11 +181,27 @@ seed a CGSCC result.
 `(analysis, SCC slot, call-graph identity)`; the slot alone is not enough
 because SCC numbering changes with the graph. Callee SCCs are fetched through
 the manager, so their generations are recorded as dependencies. Purity is a
-greatest fixed point: a member starts pure only with no local load/store and
-no external call, and is removed when any callee is impure; mutual recursion
+greatest fixed point: a member starts pure only with no local memory read/write
+and no external call, and is removed when any callee is impure; mutual recursion
 without effects therefore stays pure. Read/write/external effects are a least
-fixed point, so recursion alone never invents a write. The module-scope
+fixed point, so recursion alone never invents a write. `readsMemory` and
+`writesMemory` are independent conservative may-effect flags: memset writes,
+memcpy reads and writes, and an unknown external call may do both. Effects
+propagate through internal calls, including recursive SCCs. `pure` describes
+these effects; it does not prove termination. The module-scope
 `FunctionSummaryAnalysis` aggregates the SCC results and shares the same cache.
+
+AnalysisManager freshness checks use a traversal-local active set to detect
+cycles and a completed map to reuse validated `(key, generation)` dependencies.
+Entry existence, generation and revision are checked before a completed result
+is reused. A completed entry is recorded only after all dependencies validate;
+the context is discarded after each top-level check, so mutations and lazy
+recomputation cannot reuse an earlier validation. Each individual check expands
+each dependency node once and examines its edges once, rather than enumerating
+all paths through shared dependencies. This bounds a check by O(V+E); it does
+not claim linear time for constructing all SCC summaries. The read-only
+`freshnessExpansionCount()` is a cumulative diagnostic of actual expansions;
+it does not participate in cache validity or invalidation decisions.
 
 ## F05 CompilationSession and CMake components (CLOSED / PASS)
 
@@ -189,7 +210,8 @@ table. An unregistered id is a diagnostic, never a fallback to the internal
 number; a legal forward reference (definition in a dominating block that is
 textually later) is created with a placeholder operand and bound at function
 end, followed by a per-function unresolved-id check. `dumpModule` output must
-round-trip byte-identically.
+round-trip byte-identically. Value ID zero is valid, including a forward call
+argument; parsing tracks whether an ID exists separately from its number.
 
 `src/main/CompilationSession` is the only stage materialization path. It lazily
 builds AST → Sema → InitPlan → Structured → Flat, caches each stage, and keeps

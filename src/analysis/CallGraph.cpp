@@ -20,6 +20,22 @@ void sortUnique(std::vector<std::string>& values) {
 }
 }  // namespace
 
+CallLikeKind classifyCallLike(const Instruction& instruction) {
+  const Opcode op = instruction.op();
+  if (op != Opcode::Call && op != Opcode::LLVMMemCpy &&
+      op != Opcode::LLVMMemSet)
+    return CallLikeKind::None;
+  // These are the only canonical Flat ABI spellings.  In particular, do not
+  // recognize LLVM's target-suffixed names by prefix.
+  if (instruction.callee() == "llvm.memcpy" &&
+      (op == Opcode::Call || op == Opcode::LLVMMemCpy))
+    return CallLikeKind::Memcpy;
+  if (instruction.callee() == "llvm.memset" &&
+      (op == Opcode::Call || op == Opcode::LLVMMemSet))
+    return CallLikeKind::Memset;
+  return CallLikeKind::Call;
+}
+
 std::optional<CallGraphInfo> CallGraphAnalysis::run(
     const Module& module, AnalysisManager&) {
   CallGraphInfo info;
@@ -43,7 +59,17 @@ std::optional<CallGraphInfo> CallGraphAnalysis::run(
     Function* function = info.nodes[index].function;
     for (BasicBlock* block : function->blocks()) {
       for (Instruction* inst : block->insts()) {
-        if (inst == nullptr || inst->op() != Opcode::Call) continue;
+        if (inst == nullptr) continue;
+        const CallLikeKind kind = classifyCallLike(*inst);
+        if (kind == CallLikeKind::None) continue;
+        // Intrinsic opcode forms are external by construction.  A malformed
+        // specialized form is still conservative and cannot become an
+        // internal edge merely because a same-named definition exists.
+        if (kind == CallLikeKind::Memcpy || kind == CallLikeKind::Memset ||
+            inst->op() != Opcode::Call) {
+          info.nodes[index].externalCallees.push_back(inst->callee());
+          continue;
+        }
         const auto found = byName.find(inst->callee());
         if (found == byName.end()) {
           info.nodes[index].externalCallees.push_back(inst->callee());

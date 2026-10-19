@@ -314,8 +314,9 @@ void Reader::parseInstLine(Module& m, Function& f, BasicBlock* bb, const std::st
         if (tok[k] == ")") break;
         const Type* aty = nullptr;
         uint32_t aid = 0;
-        Value* av = typed(k, &aty, &aid);
-        if (av == nullptr && aid == 0) {
+        bool haveArg = false;
+        Value* av = typed(k, &aty, &aid, &haveArg);
+        if (!haveArg) {
           err(lineNo, "call 的实参无法解析：" + tok[k]); return;
         }
         args.push_back(av);
@@ -464,5 +465,4 @@ void Reader::parseInstLine(Module& m, Function& f, BasicBlock* bb, const std::st
   bb->addInst(inst);
   if (hasResult) values_[mapId(resultId)] = inst;
 }
-
 

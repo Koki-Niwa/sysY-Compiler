@@ -48,6 +48,10 @@ struct Frame {
   std::vector<Dependency> dependencies;
   bool failed = false;
 };
+struct FreshnessContext {
+  std::unordered_set<Key, KeyHash> active;
+  std::unordered_map<Key, uint64_t, KeyHash> completed;
+};
 } // namespace
 
 struct AnalysisManager::State {
@@ -55,23 +59,32 @@ struct AnalysisManager::State {
   Module& module;
   std::unordered_map<Key, Entry, KeyHash> cache;
   std::vector<Frame> active;
+  mutable uint64_t freshnessExpansions = 0;
   const IRRevision& revision(const Key& k) const {
     return k.function ? k.function->revision() : module.revision();
   }
   bool current(const Key& k, uint64_t generation,
-               std::unordered_set<Key, KeyHash>& visiting) const {
+               FreshnessContext& context) const {
     auto it = cache.find(k);
     if (it == cache.end() || it->second.generation != generation ||
-        !matchesRevision(it->second.snapshot, revision(k)) ||
-        !visiting.insert(k).second) return false;
-    for (const Dependency& dep : it->second.dependencies)
-      if (!current(dep.key, dep.generation, visiting)) return false;
-    visiting.erase(k);
+        !matchesRevision(it->second.snapshot, revision(k))) return false;
+    const auto done = context.completed.find(k);
+    if (done != context.completed.end() && done->second == generation) return true;
+    if (!context.active.insert(k).second) return false;
+    ++freshnessExpansions;
+    for (const Dependency& dep : it->second.dependencies) {
+      if (!current(dep.key, dep.generation, context)) {
+        context.active.erase(k);
+        return false;
+      }
+    }
+    context.active.erase(k);
+    context.completed.insert_or_assign(k, generation);
     return true;
   }
   bool current(const Key& k, uint64_t generation) const {
-    std::unordered_set<Key, KeyHash> visiting;
-    return current(k, generation, visiting);
+    FreshnessContext context;
+    return current(k, generation, context);
   }
   void record(const Key& k, uint64_t generation) {
     if (!active.empty()) active.back().dependencies.push_back({k, generation});
@@ -84,6 +97,9 @@ struct AnalysisManager::State {
 AnalysisManager::AnalysisManager(Module& module)
   : module_(module), state_(std::make_shared<State>(module)) {}
 AnalysisManager::~AnalysisManager() = default;
+uint64_t AnalysisManager::freshnessExpansionCount() const {
+  return state_ ? state_->freshnessExpansions : 0;
+}
 bool AnalysisManager::current(const std::weak_ptr<State>& weak,
                               std::type_index type, const Function* function,
                               uint32_t tag, const void* graphKey,

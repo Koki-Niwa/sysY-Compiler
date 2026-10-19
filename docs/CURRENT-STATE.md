@@ -152,6 +152,19 @@ pure; read/write/external effects are a least fixed point. Dependencies:
 cache reuse, revision invalidation and stale-graph rejection (33 checks).
 F00/F01/F02/F03/F04/F05 frozen acceptance remains unchanged; **S13 is next**.
 
+Post-S12 audit fixes (2026-10-20, full gate **56 PASS / 0 FAIL / 2 expected
+SKIP**): memory intrinsics are classified once for both `Call` and specialized
+opcode forms; `llvm.memset` is a writes-only effect, `llvm.memcpy` reads and
+writes, and unknown/suffixed externals conservatively do both, propagating
+through internal and recursive calls; AnalysisManager freshness checks memoize
+validated dependencies within one traversal, so a shared DAG is expanded once
+per check (32-node DAG from ~5.25 s to <1 ms); FlatReader call arguments track
+ID presence separately from the number, so a forward `%0` argument is accepted
+while missing/undefined arguments are rejected. Evidence: `test_interprocedural`
+**51 checks**, `test_flat_reader` **14 checks**, `test_analysis_manager` DAG
+memo check, unit suite PASS.
+
+
 Post-F05 review fixes (2026-10-19, full gate **56 PASS / 0 FAIL / 2 expected
 SKIP**): Mem2Reg's detached-scratch guard now hands incomplete plans to the
 caller instead of double-discarding them; FlatReader rejects unregistered value

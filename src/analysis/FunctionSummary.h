@@ -9,11 +9,13 @@
 namespace sysy { namespace flat {
 class Function;
 
-// Conservative facts. `pure == true` is only possible when the function has
-// no store, no external call, and every reachable callee is pure. Purity is a
-// greatest fixed point inside a recursive SCC, so mutual recursion without
-// effects stays pure; effects are a least fixed point, so recursion alone
-// never invents a write.
+// Conservative, independent effect facts: readsMemory means the function may
+// observe mutable memory, writesMemory means it may modify memory, and
+// callsExternal means it invokes a callee without a module definition.
+// `pure == true` requires all three flags to be false, every reachable callee
+// to be pure, and makes no claim about termination. Purity is a greatest fixed
+// point inside a recursive SCC, so mutual recursion without effects stays
+// pure; effects are a least fixed point, so recursion alone never invents one.
 struct FunctionSummary {
   const Function* function = nullptr;
   size_t functionIndex = 0;

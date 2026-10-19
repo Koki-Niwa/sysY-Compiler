@@ -47,6 +47,10 @@ class AnalysisManager {
   AnalysisManager(const AnalysisManager&) = delete;
   AnalysisManager& operator=(const AnalysisManager&) = delete;
   Module& module() const { return module_; }
+  // Cumulative read-only diagnostic: each cache entry expanded during a
+  // top-level freshness check contributes once; memo hits do not.  It never
+  // affects cache decisions and is intended for bounded traversal tests.
+  uint64_t freshnessExpansionCount() const;
 
   template <typename A> AnalysisHandle<typename A::Result> get() {
     static_assert(A::scope == AnalysisScope::Module, "Module scope required");

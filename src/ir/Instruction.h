@@ -82,8 +82,8 @@ enum class Opcode : uint8_t {
   BitCast,      // ptr[A] → ptr[B]
   // ── 调用 / SSA ──────────────────────────────────────────────────────
   Call,         // call <retty> @f(args) | call void @f(args)
-  //   两个内建（`llvm.memcpy`/`llvm.memset`）**不是 opcode**，是 `Call` 的
-  //   被调名；但它们要能同"普通函数名"区分，所以单列两个 opcode 值。
+  //   两个内建（`llvm.memcpy`/`llvm.memset`）既可作为 `Call` 的被调名，
+  //   也有 Flat 专用 opcode 形式；两种表示共享同一 ABI 名称和语义。
   //   它们**同样不计入 35 个 opcode**（`iset.txt` 把它们列为 2 个 intrinsic）。
   LLVMMemCpy,
   LLVMMemSet,

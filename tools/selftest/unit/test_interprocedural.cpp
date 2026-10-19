@@ -22,6 +22,12 @@ Instruction* add(Module& m, BasicBlock* b, Instruction* i) {
   b->addInst(i);
   return i;
 }
+Instruction* addIntrinsic(Module& m, BasicBlock* b, Opcode op,
+                           const char* callee) {
+  Instruction* i = m.createInst(op, nullptr, {});
+  i->setCallee(callee);
+  return add(m, b, i);
+}
 const FunctionSummary* summaryOf(const FunctionSummaryInfo& info,
                                  const CallGraphInfo& graph, const char* name) {
   for (size_t i = 0; i < graph.nodes.size(); ++i)
@@ -148,6 +154,133 @@ void testPurityAndEffects() {
   check(recA != nullptr && recA->recursive && recA->scc ==
         summaryOf(info, graph, "rec_b")->scc, "recursive flag and SCC id");
 }
+void testIntrinsicEffects() {
+  Module m;
+  const Type* i32 = typePool().i32();
+  Value* zero = m.getIntConst(i32, 0);
+  auto def = [&](const char* name) {
+    Function* f = m.createFunction(name, i32);
+    return std::make_pair(f, m.createBlock(f));
+  };
+  auto finish = [&](BasicBlock* b) { add(m, b, createRet(zero, {})); };
+  { auto [f, b] = def("memset_call");
+    add(m, b, createCall("llvm.memset", nullptr, {}, {})); finish(b); }
+  { auto [f, b] = def("memset_opcode");
+    addIntrinsic(m, b, Opcode::LLVMMemSet, "llvm.memset"); finish(b); }
+  { auto [f, b] = def("memcpy_call");
+    add(m, b, createCall("llvm.memcpy", nullptr, {}, {})); finish(b); }
+  { auto [f, b] = def("memcpy_opcode");
+    addIntrinsic(m, b, Opcode::LLVMMemCpy, "llvm.memcpy"); finish(b); }
+  { auto [f, b] = def("suffixed_external");
+    add(m, b, createCall("llvm.memset.p0.i64", nullptr, {}, {})); finish(b); }
+  { auto [f, b] = def("unknown_external");
+    add(m, b, createCall("mystery_external", nullptr, {}, {})); finish(b); }
+  { auto [f, b] = def("caller_memset");
+    add(m, b, createCall("memset_call", i32, {}, {})); finish(b); }
+  { auto [f, b] = def("caller_memcpy");
+    add(m, b, createCall("memcpy_opcode", i32, {}, {})); finish(b); }
+  { auto [f, b] = def("caller_unknown");
+    add(m, b, createCall("unknown_external", i32, {}, {})); finish(b); }
+  { auto [f, b] = def("rec_intrinsic_a");
+    add(m, b, createCall("rec_intrinsic_b", i32, {}, {})); finish(b); }
+  { auto [f, b] = def("rec_intrinsic_b");
+    addIntrinsic(m, b, Opcode::LLVMMemSet, "llvm.memset");
+    add(m, b, createCall("rec_intrinsic_a", i32, {}, {})); finish(b); }
+  { auto [f, b] = def("pure_leaf"); finish(b); }
+  { auto [f, b] = def("pure_control");
+    add(m, b, createCall("pure_leaf", i32, {}, {})); finish(b); }
+  m.rebuildCFG();
+  m.rebuildUseDef();
+
+  AnalysisManager manager(m);
+  auto graphHandle = manager.get<CallGraphAnalysis>();
+  auto summaryHandle = manager.get<FunctionSummaryAnalysis>();
+  check(graphHandle.isCurrent() && summaryHandle.isCurrent(),
+        "intrinsic analyses are current");
+  const CallGraphInfo& graph = *graphHandle.get();
+  const FunctionSummaryInfo& info = *summaryHandle.get();
+  auto nodeOf = [&](const char* name) -> const CallGraphNode* {
+    for (const CallGraphNode& node : graph.nodes)
+      if (node.function->name() == name) return &node;
+    return nullptr;
+  };
+  auto effects = [&](const char* name, bool pure, bool reads, bool writes,
+                     bool external) {
+    const FunctionSummary* summary = summaryOf(info, graph, name);
+    return summary != nullptr && summary->pure == pure &&
+           summary->readsMemory == reads && summary->writesMemory == writes &&
+           summary->callsExternal == external;
+  };
+  check(nodeOf("memset_call") != nullptr &&
+            nodeOf("memset_call")->externalCallees ==
+                std::vector<std::string>{"llvm.memset"},
+        "Call-form memset remains an external graph edge");
+  check(nodeOf("memset_opcode") != nullptr &&
+            nodeOf("memset_opcode")->externalCallees ==
+                std::vector<std::string>{"llvm.memset"},
+        "specialized memset remains an external graph edge");
+  check(nodeOf("memcpy_call") != nullptr &&
+            nodeOf("memcpy_call")->externalCallees ==
+                std::vector<std::string>{"llvm.memcpy"},
+        "Call-form memcpy remains an external graph edge");
+  check(nodeOf("memcpy_opcode") != nullptr &&
+            nodeOf("memcpy_opcode")->externalCallees ==
+                std::vector<std::string>{"llvm.memcpy"},
+        "specialized memcpy remains an external graph edge");
+  check(effects("memset_call", false, false, true, true) &&
+            effects("memset_opcode", false, false, true, true),
+        "memset is an impure writes-only effect in both forms");
+  check(effects("memcpy_call", false, true, true, true) &&
+            effects("memcpy_opcode", false, true, true, true),
+        "memcpy is an impure reads-and-writes effect in both forms");
+  check(effects("suffixed_external", false, true, true, true) &&
+            effects("unknown_external", false, true, true, true),
+        "suffixed and unknown externals stay conservatively impure");
+  check(effects("caller_memset", false, false, true, true) &&
+            effects("caller_memcpy", false, true, true, true) &&
+            effects("caller_unknown", false, true, true, true),
+        "intrinsic and unknown effects propagate transitively");
+  check(effects("rec_intrinsic_a", false, false, true, true) &&
+            effects("rec_intrinsic_b", false, false, true, true),
+        "intrinsic effects propagate through a recursive SCC");
+  check(effects("pure_leaf", true, false, false, false) &&
+            effects("pure_control", true, false, false, false),
+        "control-only calls without effects remain pure");
+}
+void testTrackedIntrinsicMutation() {
+  Module m;
+  const Type* i32 = typePool().i32();
+  Value* zero = m.getIntConst(i32, 0);
+  Function* function = m.createFunction("tracked_intrinsic", i32);
+  BasicBlock* block = m.createBlock(function);
+  add(m, block, createRet(zero, {}));
+  m.rebuildCFG();
+  m.rebuildUseDef();
+  AnalysisManager manager(m);
+  auto graph = manager.get<CallGraphAnalysis>();
+  auto summary = manager.get<FunctionSummaryAnalysis>();
+  check(graph.isCurrent() && summary.isCurrent() &&
+            summary.get()->perFunction[0].pure,
+        "tracked intrinsic fixture starts pure");
+  IRMutator mutator(m);
+  Instruction* intrinsic = m.createInst(Opcode::LLVMMemSet, nullptr, {});
+  intrinsic->setCallee("llvm.memset");
+  check(mutator.insertInstruction(block, 0, intrinsic) == MutationResult::Applied,
+        "tracked intrinsic insertion");
+  check(!graph.isCurrent() && !summary.isCurrent(),
+        "intrinsic insertion invalidates call and summary handles");
+  auto afterInsert = manager.get<FunctionSummaryAnalysis>();
+  check(afterInsert.isCurrent() && !afterInsert.get()->perFunction[0].pure &&
+            afterInsert.get()->perFunction[0].writesMemory,
+        "recomputed summary sees inserted intrinsic");
+  check(mutator.eraseInstruction(intrinsic) == MutationResult::Applied,
+        "tracked intrinsic removal");
+  check(!afterInsert.isCurrent(), "intrinsic removal invalidates old summary");
+  auto afterErase = manager.get<FunctionSummaryAnalysis>();
+  check(afterErase.isCurrent() && afterErase.get()->perFunction[0].pure &&
+            !afterErase.get()->perFunction[0].writesMemory,
+        "recomputed summary forgets removed intrinsic");
+}
 void testCgsccCacheAndInvalidation() {
   Module m;
   const Type* i32 = typePool().i32();
@@ -205,6 +338,8 @@ void testCgsccCacheAndInvalidation() {
 int main() {
   testLinearScc();
   testPurityAndEffects();
+  testIntrinsicEffects();
+  testTrackedIntrinsicMutation();
   testCgsccCacheAndInvalidation();
   std::printf("S12_CHECKS=%d FAILURES=%d\n", checks, failures);
   return failures ? 1 : 0;

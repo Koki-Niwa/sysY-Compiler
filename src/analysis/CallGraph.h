@@ -9,10 +9,20 @@
 #include "analysis/AnalysisManager.h"
 namespace sysy { namespace flat {
 class Function;
+class Instruction;
 
-// One non-declaration Function. `callees`/`callers` are Module Function
-// indices. A call whose name has no definition is an external call (runtime
-// library, llvm.memcpy/memset, or an unresolved declaration).
+// The classifier recognizes Opcode::Call and both specialized intrinsic
+// opcodes. Exact Flat intrinsic names select the intrinsic kinds; `Call`
+// remains unresolved until the module graph checks whether its callee is
+// defined. Suffixed LLVM ABI spellings stay ordinary calls and are treated as
+// unknown external calls when no matching definition exists.
+enum class CallLikeKind : uint8_t { None, Call, Memcpy, Memset };
+CallLikeKind classifyCallLike(const Instruction&);
+
+// One non-declaration Function. `callees`/`callers` are indices into
+// CallGraphInfo::nodes (declarations are omitted). A call-like instruction
+// whose name has no definition is an external call (runtime library, exact
+// llvm.memcpy/memset intrinsic, or an unresolved declaration).
 struct CallGraphNode {
   Function* function = nullptr;
   std::vector<size_t> callees;

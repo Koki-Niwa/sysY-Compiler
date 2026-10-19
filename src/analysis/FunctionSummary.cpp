@@ -35,12 +35,28 @@ std::optional<SccSummary> SccSummaryAnalysis::run(
     const Function* function = graph.nodes[functionIndex].function;
     if (function == nullptr || function->isDeclaration()) return std::nullopt;
     localOf[functionIndex] = slot;
-    externalLocal[slot] = graph.nodes[functionIndex].externalCallees.empty() ? 0 : 1;
+    const auto& externalCallees = graph.nodes[functionIndex].externalCallees;
+    externalLocal[slot] = externalCallees.empty() ? 0 : 1;
     for (BasicBlock* block : function->blocks()) {
       for (Instruction* inst : block->insts()) {
         if (inst == nullptr) continue;
         if (inst->op() == Opcode::Store) writesLocal[slot] = 1;
         else if (inst->op() == Opcode::Load) readsLocal[slot] = 1;
+        const CallLikeKind callKind = classifyCallLike(*inst);
+        if (callKind == CallLikeKind::Memcpy) {
+          // memcpy may observe the source and modifies the destination.
+          readsLocal[slot] = 1;
+          writesLocal[slot] = 1;
+        } else if (callKind == CallLikeKind::Memset) {
+          writesLocal[slot] = 1;
+        } else if (callKind == CallLikeKind::Call &&
+                   std::binary_search(externalCallees.begin(),
+                                      externalCallees.end(), inst->callee())) {
+          // Unknown external calls are conservatively both reading and
+          // writing memory.  Exact intrinsic names were handled above.
+          readsLocal[slot] = 1;
+          writesLocal[slot] = 1;
+        }
       }
     }
   }
@@ -73,12 +89,12 @@ std::optional<SccSummary> SccSummaryAnalysis::run(
     return it == localOf.end() ? -1 : static_cast<long>(it->second);
   };
 
-  // Purity: greatest fixed point. A function starts pure only when it has no
-  // local load/store and no external call; it is removed when a callee is
-  // impure. Reads are excluded because a load may observe mutable memory
-  // (globals), which would make the function non-deterministic for CSE/DCE.
-  // Mutual recursion without effects therefore stays pure; no function is
-  // added back, so the number of rounds is bounded by `count`.
+  // Purity: greatest fixed point. A function starts pure only when its local
+  // reads, writes, and external calls are all absent; it is removed when a
+  // callee is impure. Reads are excluded because a load may observe mutable
+  // memory (globals), which would make the function non-deterministic for
+  // CSE/DCE. Mutual recursion without effects therefore stays pure; no
+  // function is added back, so the number of rounds is bounded by `count`.
   std::vector<char> pure(count, 0);
   for (size_t slot = 0; slot < count; ++slot)
     pure[slot] = (!readsLocal[slot] && !writesLocal[slot] && !externalLocal[slot])
@@ -103,7 +119,7 @@ std::optional<SccSummary> SccSummaryAnalysis::run(
     if (!changed) break;
   }
 
-  // Effects: least fixed point. Recursion alone never creates a write.
+  // Effects: least fixed point. Recursion alone never creates an effect.
   std::vector<char> reads = readsLocal, writes = writesLocal, external = externalLocal;
   for (size_t round = 0; round <= count; ++round) {
     bool changed = false;

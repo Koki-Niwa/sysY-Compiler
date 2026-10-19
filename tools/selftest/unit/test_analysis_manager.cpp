@@ -141,6 +141,22 @@ struct IgnoresFailure {
     return 42;
   }
 };
+struct FreshnessDagAnalysis {
+  using Result = int;
+  static constexpr AnalysisScope scope = AnalysisScope::Function;
+  static constexpr MutationKind revisionDependencies() { return MutationKind::None; }
+  static std::optional<int> run(const Function& f, AnalysisManager& manager) {
+    size_t index = manager.module().numFunctions();
+    for (size_t i = 0; i < manager.module().numFunctions(); ++i)
+      if (manager.module().function(i) == &f) { index = i; break; }
+    if (index == manager.module().numFunctions()) return std::nullopt;
+    if (index < 2) return 1;
+    auto left = manager.get<FreshnessDagAnalysis>(*manager.module().function(index - 1));
+    auto right = manager.get<FreshnessDagAnalysis>(*manager.module().function(index - 2));
+    if (!left.get() || !right.get()) return std::nullopt;
+    return *left.get() + *right.get();
+  }
+};
 void testSnapshots() {
   const MutationKind kinds[] = {MutationKind::DataFlow, MutationKind::CFG,
       MutationKind::Memory, MutationKind::Calls, MutationKind::Globals,
@@ -284,6 +300,26 @@ void testFailures() {
         before.any == f.m.revision().any,
         "foreign Function rejected without invoking analysis or mutating IR");
 }
+void testFreshnessDagMemo() {
+  Module m;
+  const Type* t = typePool().i32();
+  Constant* zero = m.getIntConst(t, 0);
+  constexpr size_t count = 20;
+  for (size_t i = 0; i < count; ++i) {
+    Function* f = m.createFunction("fib" + std::to_string(i), t);
+    BasicBlock* b = m.createBlock(f);
+    add(m, b, createRet(zero, {}));
+  }
+  m.rebuildCFG();
+  AnalysisManager manager(m);
+  auto root = manager.get<FreshnessDagAnalysis>(*m.function(count - 1));
+  check(root.get() != nullptr, "shared dependency DAG computes");
+  const uint64_t before = manager.freshnessExpansionCount();
+  const bool current = root.isCurrent();
+  const uint64_t expanded = manager.freshnessExpansionCount() - before;
+  check(current && expanded == count,
+        "one freshness check expands each shared DAG node once");
+}
 void testLifetime() {
   Fixture f;
   AnalysisHandle<int> handle;
@@ -347,6 +383,7 @@ int main() {
   testCross();
   testDependencies();
   testFailures();
+  testFreshnessDagMemo();
   testLifetime();
   testReachability();
   std::printf("ANALYSIS_MANAGER_FAILURES=%d\n", failures);

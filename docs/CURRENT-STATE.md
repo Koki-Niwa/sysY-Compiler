@@ -118,14 +118,32 @@ tracks analysis dependency identities/generations including transitive
 dependencies, fails closed on cycles, failed dependencies, foreign Functions
 and stale handles, and lazily recomputes invalidated entries.
 `ReachabilityAnalysis` is CFG-only at Function scope; Mem2Reg consumes it per
-candidate but still builds `DominatorTree` directly through the legacy path.
+candidate and requests a fresh handle after every live mutation. `DominatorTree`
+has no `src/opt/` consumer: it remains a direct construction inside
+`FlatVerifier` and its tests on the legacy path.
 **F03 CLOSED / PASS** on final validation 014 and its independently
 reviewed evidence (review **PASS / 0 findings**). The validated implementation
 was committed unchanged as `b1c06bb936049fc713c0db16eef8015b7b3ab2ec`
 (`feat: add F03 flat pass manager foundation`), parent
-`3f824833cb4d403c926f9f9f0ed2f2dd3a529e0a`. **F04 next / not started**:
-production Mem2Reg and DominatorTree remain on their legacy paths; F05 and
-S12+ have not started. F00/F01/F02 frozen acceptance remains unchanged.
+`3f824833cb4d403c926f9f9f0ed2f2dd3a529e0a`. **F04 CLOSED / PASS** on
+accepted commit `10a3cbd6` (`refactor: migrate Mem2Reg to the formal
+FunctionPass`) plus an independent review that found one blocker on the
+failure path (fixed before acceptance) and the full S09 gate: production and
+compatibility Mem2Reg now use the first formal FunctionPass (`Mem2RegPass`),
+the module API is a FlatPassManager wrapper, the aggregate is pass-owned (no
+external pointer), detached scratch phis are discarded on a thrown plan, and
+a failed pipeline reports `Mem2RegStatus::Failed` with `success=false` and no
+artifact. DominatorTree remains unmigrated in `FlatVerifier`; no pass consumes
+it. **F05 and S12+ not started**. F00/F01/F02 frozen acceptance remains unchanged.
+
+F04 validation (2026-10-19): clean-worktree full S09 gate **55 PASS / 0 FAIL /
+2 expected SKIP**; trajectories **357 exact / 62 loop-count-only /
+0 observable differences / 121 categorized skips**; Mem2Reg structure
+**1 alloca / 1 load / 3 stores → 0 / 0 / 0 + 1 phi**; forged-stat negative
+control **PASS**; unit suite **PASS** including `test_mem2reg_pass`
+**20 checks / 0 failures**; F04 boundary checker and architecture negative
+controls **PASS**. F04 did not rerun the 540-case O1 Flat protocol or target
+execution matrices; those remain F01/F03 historical evidence.
 
 F03 `FlatPassManager` runs each named `FunctionPass` exactly once on every
 non-declaration Function in **pass-major, Module Function order**, with one

@@ -124,7 +124,7 @@ implementation/Fix1 revision `5f4173caeb8abf78d1ac56c129c9550985f48b0b`);
 `7fdb9f33f254bc0219269cafdc8e0b5e36d2e6a9`; valid 004 validation
 and independent 008 evidence review); **F03 CLOSED / PASS** (014
 acceptance, implementation `b1c06bb936049fc713c0db16eef8015b7b3ab2ec`);
-**F04 next / not started**.
+**F04 CLOSED / PASS** (commit `10a3cbd6`); **F05 not started**.
 F01 accepted implementation and validation revisions remain historical facts;
 F02 adds the analysis foundation without changing F00/F01 frozen contracts.
 
@@ -145,8 +145,20 @@ carry stable pass/function identity, reported/final status, mutation summary,
 verification, sorted statistics, and optional Flat dumps/timing. Pass-name
 ablation records disabled/skipped distinctly from real `NoChange`. No target
 cost service is introduced; a future target cost service must be immutable and
-not an `AnalysisManager` analysis. Existing Mem2Reg remains the non-F03
-production path pending F04 migration; DominatorTree remains unmigrated.
+not an `AnalysisManager` analysis. F04 now routes Mem2Reg via formal
+`Mem2RegPass : FunctionPass` and `FlatPassManager`, including the preserved
+module compatibility API; per-candidate promotion uses the invocation's
+`PassContext` and a fresh F02 Reachability handle. Candidates are aggregated
+in Module Function order. The aggregate is pass-owned, so no external result
+can dangle. Only module before/final after dumps and existing entry/output
+verification remain enabled in production; per-invocation instrumentation is
+optional. A failed pipeline reports `Mem2RegStatus::Failed` with
+`success=false`, discards detached scratch, and the product path refuses to
+emit an artifact; live commits are not rolled back, which is reachable only on
+an internal invariant violation. **F04 CLOSED / PASS** (commit `10a3cbd6`;
+independent review plus full S09 **55/0/2**, trajectories 357/62/0/121,
+Mem2Reg structure 1/1/3 → 0/0/0+1φ, F04 unit **20/0**); DominatorTree remains
+unmigrated, **F05 not started**.
 
 F00 established exact `Value` reverse `Use{Instruction*, operandIndex}`
 occurrences across Instructions, Arguments, Constants, GlobalAddr and
@@ -398,8 +410,9 @@ exactly four modified tracked files (`CMakeLists.txt`,
 `docs/ARCHITECTURE.md`, `docs/CURRENT-STATE.md`,
 `tools/selftest/unit/run.sh`) plus three newly tracked files
 (`src/opt/FlatPassManager.cpp`, `src/opt/FlatPassManager.h`,
-`tools/selftest/unit/test_pass_manager.cpp`). F03 has **no Mem2Reg or
-DominatorTree migration**; **F04 next / not started**. No ModulePass,
+`tools/selftest/unit/test_pass_manager.cpp`). F03 itself has **no Mem2Reg or
+DominatorTree migration**; F04 later migrated Mem2Reg as recorded above, and
+DominatorTree remains unmigrated in `FlatVerifier`. No ModulePass,
 CGSCC/Loop adaptor, CallGraph, FunctionSummary, AliasAnalysis, LoopInfo,
 SCEV, target-cost, CompilationSession or backend exists from this stage;
 F05 and S12+ have not started.

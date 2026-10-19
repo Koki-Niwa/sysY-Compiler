@@ -27,7 +27,9 @@ F01 已完成并正式验收（**CLOSED / PASS**；accepted validation revision 
 - Mem2Reg 已迁移为上述 mutation layer 的 tracked mutation consumer。
 - optimizer raw-mutation architecture boundary gate 已收紧。
 
-**F02 — AnalysisManager 实现已落地，等待独立验收（pending independent validation）**。F00 / F01 仍为 CLOSED；F03 尚未开始。
+**F02 — AnalysisManager CLOSED / PASS**；**F03 — FlatPassManager CLOSED / PASS**；
+**F04 — Mem2Reg 正式 FunctionPass 迁移 CLOSED / PASS**（commit `10a3cbd6`；
+独立复核 + 全量 S09 55/0/2）。F05 与 S12+ 尚未开始。
 
 完整、最新的冻结事实以 [CURRENT-STATE](docs/CURRENT-STATE.md) 为准。路线和边界见 [ARCHITECTURE](docs/ARCHITECTURE.md)、[GOALS](docs/GOALS.md) 和 [BACKEND-PERFORMANCE-PLAN](docs/BACKEND-PERFORMANCE-PLAN.md)。
 

@@ -744,9 +744,9 @@ static bool fileExists(const std::string& p) {
 
 static void testCliRoundTrip(const std::string& compilerBin, const std::string& workDir) {
   std::cout << "\n── CLI 往返（--emit=ast → --from-ast --emit=ast）──\n";
-  if (compilerBin.empty() || !fileExists(compilerBin)) {
-    std::cout << "  − 跳过：找不到编译器二进制（先 cmake --build compiler/build）\n";
-    return;
+  if (!fileExists(compilerBin)) {
+    if (compilerBin.empty()) { std::cout << "  − 跳过：未提供编译器二进制\n"; return; }
+    check(false, std::string("找不到编译器二进制：") + compilerBin); return;
   }
   const std::string sy = workDir + "/cli_rt.sy";
   const std::string a1 = workDir + "/cli_rt1.ast";

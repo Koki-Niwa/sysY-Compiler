@@ -195,12 +195,14 @@ class Reader {
         finishFunction();
         resolvePhiBlockFixups();
         resolveForwardRefs();
+        reportUnresolvedRefs();
         pendingPhis_.clear();
-        // ⚠️ `fixups_` 里**非 φ** 的条目（`ret`/`br` 的前向引用）与 `deferred_`
-        //   **不能**在这里清：它们的回填/判定要等全部函数读完（值表齐全）。
-        fixups_.erase(std::remove_if(fixups_.begin(), fixups_.end(),
-                                     [](const OperandFixup& f) { return f.phiIdx >= 0; }),
-                      fixups_.end());
+        // 本函数的 non-φ fixup 已在 finishFunction/resolveForwardRefs 之后
+        // 按本函数的 values_ 回填；留到下个函数会拿错值表，必须清掉。
+        // 本函数的所有 fixup（含非 φ）都已解析；清掉避免下一个函数用
+        // 自己的 values_ 重新解释旧条目。
+        fixups_.clear();
+        deferred_.clear();
         return i + 1;
       }
       // 常量定义行（在第一条指令之前）：`%7 = i32 5 @line 3`
@@ -296,6 +298,16 @@ class Reader {
     }
   }
 
+  // 本函数读完后再判定：仍解析不到的值才是真正未定义。
+  //   `ref()` 当时只登记、不报错（前向引用可能是合法定义）。
+  void reportUnresolvedRefs() {
+    for (const DeferredRef& d : deferred_) {
+      const uint32_t id = mapId(d.id);
+      if (id != kNoValueId && values_.find(id) != values_.end()) continue;
+      err(d.lineNo, "引用了未定义的值 %" + std::to_string(d.id) + "（" + d.what + "）");
+    }
+  }
+
   void resolvePhiBlockFixups() {
     for (const OperandFixup& fx : fixups_) {
       if (fx.blockId < 0 || fx.phiIdx < 0) continue;
@@ -377,11 +389,11 @@ class Reader {
   // 【后置】把 `%N` 解析成值（常量在别处已建好；找不到则报错）。
   Value* ref(uint32_t textId, size_t lineNo, const char* what) {
     const uint32_t id = mapId(textId);
-    const auto it = values_.find(id);
+    const auto it = (id == kNoValueId) ? values_.end() : values_.find(id);
     if (it == values_.end()) {
       // ⚠️ **不在这里报错**：φ 的名字要等 `finish()` 才登记（见那里的说明），
       //   所以"读到 `ret` 时它引用的 φ 还没定义"是**正常的前向引用**。
-      //   这里只记下来，`run()` 末尾（finish 之后）统一判定 —— 那时还没定义
+      //   这里只记下来，本函数解析完（finish 之后）统一判定 —— 那时还没定义
       //   的才是真的未定义。
       // ⚠️ 记**文本号**，判定时再翻一次：预扫是**按函数**做的，读到这一行时
       //   后面函数的 `%N` 还没进 `idMap_` ⇒ 当场翻出来的号以后会变

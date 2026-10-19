@@ -27,13 +27,17 @@ if [ ! -f "$BUILD/CMakeCache.txt" ]; then
     echo "  ✘ CMake 配置失败"; exit 1; }
 fi
 
-if ! cmake --build "$BUILD" --target test_runtime_catalog test_sourcefile test_diagnostic \
-     test_lexer test_parser test_sema test_initlowering test_const_remainder \
+if ! cmake --build "$BUILD" --target compiler test_runtime_catalog test_sourcefile test_diagnostic \
+     test_lexer test_parser test_sema test_initlowering test_const_remainder test_flat_reader \
      test_structured test_loopnorm test_flat test_ir_mutation test_value_use \
      test_flat_f2i test_flat_dead_phi test_llvm_emitter test_analysis_manager \
      test_pass_manager test_mem2reg test_mem2reg_pass bench_lexer \
      >"$WORK/build.log" 2>&1; then
   echo "  ✘ 单元测试构建失败："; tail -30 "$WORK/build.log" | sed 's/^/    /'
+  exit 1
+fi
+if [ ! -x "$BUILD/compiler" ]; then
+  echo "  ✘ 构建后仍找不到 $BUILD/compiler（CLI 往返无法验证）"
   exit 1
 fi
 echo "  （构建通过：-Wall -Wextra -Wpedantic -Werror）"

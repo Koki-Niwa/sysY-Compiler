@@ -162,6 +162,13 @@ unmigrated.
 
 ## F05 CompilationSession and CMake components (CLOSED / PASS)
 
+Flat text value ids are translated only through the pre-scanned definition
+table. An unregistered id is a diagnostic, never a fallback to the internal
+number; a legal forward reference (definition in a dominating block that is
+textually later) is created with a placeholder operand and bound at function
+end, followed by a per-function unresolved-id check. `dumpModule` output must
+round-trip byte-identically.
+
 `src/main/CompilationSession` is the only stage materialization path. It lazily
 builds AST → Sema → InitPlan → Structured → Flat, caches each stage, and keeps
 `--from-ast` / `--from-structured` / `--from-flat` as input modes of the same
@@ -172,8 +179,9 @@ it; it no longer contains lexer/parser/sema/flatten calls.
 `sysy_frontend`, `sysy_ir`, `sysy_analysis`, `sysy_opt` and `sysy_structured`
 whose target dependencies encode the allowed include direction. Unit tests
 link those targets and are registered in CTest; `tools/selftest/unit/run.sh`
-only builds and runs them, so adding a source file no longer requires editing
-a second source list. `check_f05_session_boundary.py` enforces both invariants
+only builds and runs them (including the `compiler` target used by the CLI
+round-trip), so adding a source file no longer requires editing a second
+source list and a missing binary is a failure, not a skip. `check_f05_session_boundary.py` enforces both invariants
 with negative controls. Full S09 gate after F05: **56 PASS / 0 FAIL / 2 expected SKIP**.
 
 F00 established exact `Value` reverse `Use{Instruction*, operandIndex}`

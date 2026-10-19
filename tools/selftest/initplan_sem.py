@@ -20,7 +20,7 @@ initplan_sem.py —— **初始化语义的独立实现**（S04；被 check_init
 ★ 为什么"语义"必须自己写一遍：语法树可以复用 S02 的独立 parser（它已经在
   格式层与 C++ 逐字节一致），但**语义**一旦复用就等于"用编译器验证编译器"。
 """
-
+from initplan_sparse import make_flat   # noqa: E402
 import struct
 
 # ============================================================================
@@ -242,10 +242,10 @@ class FlatObj(object):
         self.elem = elem
         self.has_init = has_init
         self.global_ = global_
-        self.flat = [zero_of(elem)] * count_of(shape)
-        # 被"显式写到"的下标集合（**稀疏**）。检查器要按"期望非零的位置"做
-        # 覆盖性判据，而 `flat` 对 `int a[30000010]` 有 3×10^7 项 ——
-        # 逐项扫要十几秒（S04 实测），所以这里单独记一份小集合。
+        # 大对象用稀疏表（见 initplan_sparse.py）：600^3 的稠密 list 要 1.7 GB。
+        self.flat = make_flat(count_of(shape), zero_of(elem))
+        # 被"显式写到"的下标集合（**稀疏**）。检查器按"期望非零的位置"做
+        # 覆盖性判据，不能逐项扫 `flat`。
         self.assigned = set()
 
 
@@ -316,7 +316,7 @@ def fill(obj, init, scopes):
     r = len(obj.shape)
     if total <= 0:
         return
-    obj.flat = [zero_of(obj.elem)] * total
+    obj.flat = make_flat(total, zero_of(obj.elem))
     if init is None:
         return
 

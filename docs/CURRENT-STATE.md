@@ -142,6 +142,15 @@ defines `sysy_*` component libraries, and unit tests link those targets
 instead of re-copying source lists. **S12+ is the next milestone**. F00/F01/
 F02/F03/F04 frozen acceptance remains unchanged.
 
+Post-F05 review fixes (2026-10-19, full gate **56 PASS / 0 FAIL / 2 expected
+SKIP**): Mem2Reg's detached-scratch guard now hands incomplete plans to the
+caller instead of double-discarding them; FlatReader rejects unregistered value
+ids instead of falling back to internal ids, binds legal forward references
+through operand fixups, and reports unresolved ids per function; the unit
+runner builds the `compiler` target and fails when it is missing; the
+initializer checker uses a sparse expected-value table so `sl2.sy` no longer
+OOMs under the 8 GB gate limit.
+
 F04 validation (2026-10-19): clean-worktree full S09 gate **55 PASS / 0 FAIL /
 2 expected SKIP**; trajectories **357 exact / 62 loop-count-only /
 0 observable differences / 121 categorized skips**; Mem2Reg structure

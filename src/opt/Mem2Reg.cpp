@@ -203,14 +203,20 @@ SSAPlan constructSSA(Module& module, IRMutator& mutator, const CandidatePlan& pl
   }
   for (Instruction* load : plan.loads) {
     const auto it = resolvedLoads.find(load);
-    if (it == resolvedLoads.end() || it->second == nullptr) return result;
+    if (it == resolvedLoads.end() || it->second == nullptr) {
+      scratchGuard.dismiss();  // The caller owns discardSSA for this plan.
+      return result;
+    }
   }
   for (size_t i = 0; i < result.generatedPhis.size(); ++i) {
     Instruction* phi = result.generatedPhis[i];
     for (size_t j = 0; j < phi->numSuccs(); ++j) {
       BasicBlock* pred = phi->succ(j);
       if (pred != nullptr && pred->parent() == &function &&
-          reach.bits()[pred->index()] && phi->operand(j) == nullptr) return result;
+          reach.bits()[pred->index()] && phi->operand(j) == nullptr) {
+        scratchGuard.dismiss();
+        return result;
+      }
     }
   }
   // Delay constant interning until every reachable definition is resolved.

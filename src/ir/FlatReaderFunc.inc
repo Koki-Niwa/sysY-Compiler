@@ -60,10 +60,14 @@
     }
     nextReadId_ = next;
   }
-  // 【后置】把文本号翻成内部号（未登记 ⇒ 原样，`ref()` 会报未定义）。
+  // 【后置】把文本号翻成内部号；**未登记的文本号返回哨兵**。
+  //   ⚠️ 不能回退成 `textId`：内部号与文本号是两套命名空间，回退会
+  //   让未定义的 `%0` 撞上内部号 0 的其它值（实测：只定义 `%10 = i32 7`
+  //   的输入引用 `%0`，被成功编译成 `ret i32 7`）。
+  static constexpr uint32_t kNoValueId = 0xFFFFFFFFu;
   uint32_t mapId(uint32_t textId) const {
     const auto it = idMap_.find(textId);
-    return it == idMap_.end() ? textId : it->second;
+    return it == idMap_.end() ? kNoValueId : it->second;
   }
 
   // 【后置】按**标签顺序**把本函数的块一次建好。

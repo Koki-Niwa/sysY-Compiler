@@ -39,7 +39,8 @@ void Reader::parseInstLine(Module& m, Function& f, BasicBlock* bb, const std::st
   //   操作数前**都打一个类型，所以"第几个记号"随 opcode 变化，一律用
   //   `nthVal(from, n)`（"从 from 起的第 n 个 `%N`"）。留着未使用的 lambda
   //   会被 `-Werror=unused-but-set-variable` 拦下（实测）。
-  auto typed = [&](size_t idx, const Type** ty) -> Value* {
+  auto typed = [&](size_t idx, const Type** ty, uint32_t* outId = nullptr,
+                   bool* found = nullptr) -> Value* {
     if (idx >= tok.size()) return nullptr;
     size_t p = 0;
     const Type* t = parseTypeText(tok[idx], p);
@@ -48,9 +49,25 @@ void Reader::parseInstLine(Module& m, Function& f, BasicBlock* bb, const std::st
     // 类型之后的**下一个 `%N`** 就是值（打印器在值与逗号之间还会打类型）
     for (size_t j = idx + 1; j < tok.size(); ++j) {
       uint32_t id = 0;
-      if (detail::parseValueRef(tok[j], id)) return ref(id, lineNo, opName.c_str());
+      if (detail::parseValueRef(tok[j], id)) {
+        if (outId != nullptr) *outId = id;
+        if (found != nullptr) *found = true;
+        return ref(id, lineNo, opName.c_str());
+      }
     }
     return nullptr;
+  };
+  // 前向引用的操作数：先建成 nullptr，函数读完后按**操作数下标**回填。
+  //   指令顺序保持不变（与"延后整行"不同），所以 dump 往返仍逐字节一致。
+  auto deferOperand = [&](Instruction* inst, size_t operandIdx, uint32_t textId,
+                          const char* what) {
+    OperandFixup fx;
+    fx.inst = inst;
+    fx.id = textId;
+    fx.lineNo = lineNo;
+    fx.what = what;
+    fx.operandIdx = operandIdx;
+    fixups_.push_back(fx);
   };
 
   auto typeAt = [&](size_t idx, const Type** ty) -> bool {
@@ -74,30 +91,8 @@ void Reader::parseInstLine(Module& m, Function& f, BasicBlock* bb, const std::st
   //   于是"下一个操作数在第几个记号"随 opcode 变化。第一版用 `after(k+N)`
   //   硬算，结果 `store` 把**类型记号**当成了指针操作数 ——
   //   这正是"记号已经正确、却仍报操作数无法解析"的最后一层。
-  //   ⇒ 规则改成：**操作数就是 `%N` 记号**，从当前位置往后找到第一个 `%N`
-  //     就是下一个操作数（类型/逗号/`label` 一律跳过）。
-  auto nextVal = [&](size_t from) -> Value* {
-    for (size_t j = from; j < tok.size(); ++j) {
-      uint32_t id = 0;
-      if (detail::parseValueRef(tok[j], id)) return ref(id, lineNo, opName.c_str());
-    }
-    return nullptr;
-  };
-
-  // 【后置】从 `from` 起第 `n` 个（1 基）`%N` 的值；不足 ⇒ nullptr。
-  //   ⚠️ 不能用 `nextVal(k+1)` 取"第二个操作数"：那只是把**搜索起点**后移一位，
-  //   而 `nextVal` 找的是"从起点起的**第一个**" ⇒ 两次调用会返回**同一个值**
-  //   （实测：`%12 = icmp eq i32 %11, %10` 读回来变成 `%11, %11`）。
-  auto nthVal = [&](size_t from, int n) -> Value* {
-    int seen = 0;
-    for (size_t j = from; j < tok.size(); ++j) {
-      uint32_t id = 0;
-      if (!detail::parseValueRef(tok[j], id)) continue;
-      if (++seen == n) return ref(id, lineNo, opName.c_str());
-    }
-    return nullptr;
-  };
-
+  //   ⇒ 规则改成：**操作数就是 `%N` 记号**，按文本顺序逐个识别
+  //     （类型/逗号/`label` 一律跳过）；无法立刻解析的记账到 fixups_。
   Instruction* inst = nullptr;
   switch (op) {
     case Opcode::Ret:
@@ -135,7 +130,11 @@ void Reader::parseInstLine(Module& m, Function& f, BasicBlock* bb, const std::st
         // ⚠️ 条件值要按**"找下一个 `%N`"**取：`val(k+1)` 写死了下标，
         //   而 k+1 未必正好是那个值记号 ⇒ 条件读成 nullptr ⇒ 报
         //   "条件 br 的分支无法解析"。`nextVal` 是全文件统一的取值口径。
-        Value* c = nthVal(k, 1);
+        uint32_t cid = 0;
+        Value* c = nullptr;
+        for (size_t j = k; j < tok.size(); ++j) {
+          if (detail::parseValueRef(tok[j], cid)) { c = ref(cid, lineNo, opName.c_str()); break; }
+        }
         // `br i1 %c, label L1, label L2`。
         // ★★ `k` 是**操作数起点**（`br` 的 `i1` 就在 k），**不是** opcode 下标
         //   —— 第一版按"opcode 在 k-1"写成 `k+2`，于是 j 落到 `L1` 上：
@@ -150,11 +149,12 @@ void Reader::parseInstLine(Module& m, Function& f, BasicBlock* bb, const std::st
         while (j < tok.size() && tok[j] != ",") ++j;
         if (j < tok.size()) ++j;                // 跳过 ","
         BasicBlock* e = label(j);
-        if (c == nullptr || t == nullptr || e == nullptr) {
+        if (t == nullptr || e == nullptr) {
           err(lineNo, "条件 br 的分支无法解析");
           return;
         }
         inst = createCondBr(c, t, e, loc);
+        if (c == nullptr) deferOperand(inst, 0, cid, "br");
       } else {
         BasicBlock* t = label(k);   // 单向 `br L3`：标签就在 k
         if (t == nullptr) { err(lineNo, "br 的目标块无法解析"); return; }
@@ -172,53 +172,68 @@ void Reader::parseInstLine(Module& m, Function& f, BasicBlock* bb, const std::st
     }
     case Opcode::Load: {
       const Type* ty = nullptr;
-      Value* p = typed(k, &ty);
-      if (p == nullptr) { err(lineNo, "load 的操作数无法解析"); return; }
+      uint32_t pid = 0;
+      bool haveP = false;
+      Value* p = typed(k, &ty, &pid, &haveP);
+      if (!haveP) { err(lineNo, "load 的操作数无法解析"); return; }
       inst = createLoad(ty, p, loc);
+      if (p == nullptr) deferOperand(inst, 0, pid, "load");
       break;
     }
     case Opcode::Store: {
       const Type* ty = nullptr;
-      Value* v = typed(k, &ty);
+      uint32_t vid = 0, pid = 0;
+      bool haveV = false;
+      Value* v = typed(k, &ty, &vid, &haveV);
       Value* p = nullptr;
+      bool haveP = false;
       int seen = 0;
       for (size_t j = k; j < tok.size(); ++j) {
         uint32_t id = 0;
         if (!detail::parseValueRef(tok[j], id)) continue;
-        if (++seen == 2) { p = ref(id, lineNo, opName.c_str()); break; }
+        if (++seen == 2) { pid = id; p = ref(id, lineNo, opName.c_str()); haveP = true; break; }
       }
-      if (v == nullptr || p == nullptr) { err(lineNo, "store 的操作数无法解析"); return; }
+      if (!haveV || !haveP) { err(lineNo, "store 的操作数无法解析"); return; }
       inst = createStore(ty, v, p, loc);
+      if (v == nullptr) deferOperand(inst, 0, vid, "store");
+      if (p == nullptr) deferOperand(inst, 1, pid, "store");
       break;
     }
     case Opcode::GEP: {
       const Type* ety = nullptr;
       if (!typeAt(k, &ety)) { err(lineNo, "getelementptr 的元素类型无法解析"); return; }
-      Value* base = nextVal(k);
+      uint32_t baseId = 0, idxId = 0;
+      Value* base = nullptr;
       Value* idx = nullptr;
-      {   // base 之后的**下一个** `%N` 就是下标
+      bool haveBase = false, haveIdx = false;
+      {
         bool seenBase = false;
         for (size_t j = k; j < tok.size(); ++j) {
           uint32_t id = 0;
           if (!detail::parseValueRef(tok[j], id)) continue;
-          if (!seenBase) { seenBase = true; continue; }
-          idx = ref(id, lineNo, opName.c_str());
+          if (!seenBase) { seenBase = true; haveBase = true; baseId = id;
+                           base = ref(id, lineNo, opName.c_str()); continue; }
+          haveIdx = true; idxId = id; idx = ref(id, lineNo, opName.c_str());
           break;
         }
       }
-      if (base == nullptr || idx == nullptr) {
+      if (!haveBase || !haveIdx) {
         err(lineNo, "getelementptr 的操作数无法解析");
         return;
       }
       inst = createGEP(ety, base, idx, loc);
+      if (base == nullptr) deferOperand(inst, 0, baseId, "getelementptr");
+      if (idx == nullptr) deferOperand(inst, 1, idxId, "getelementptr");
       break;
     }
     case Opcode::BitCast: {
       const Type* sty = nullptr;
-      Value* v = typed(k, &sty);
+      uint32_t vid = 0;
+      bool haveV = false;
+      Value* v = typed(k, &sty, &vid, &haveV);
       size_t toIdx = k + 2;                     // `k+1` 是值 `%v`
       while (toIdx < tok.size() && tok[toIdx] != "to") ++toIdx;
-      if (v == nullptr || toIdx + 1 >= tok.size() || tok[toIdx] != "to") {
+      if (!haveV || toIdx + 1 >= tok.size() || tok[toIdx] != "to") {
         err(lineNo, "bitcast 缺少 `to <类型>`");
         return;
       }
@@ -229,6 +244,7 @@ void Reader::parseInstLine(Module& m, Function& f, BasicBlock* bb, const std::st
         return;
       }
       inst = createBitCast(dst, v, loc);
+      if (v == nullptr) deferOperand(inst, 0, vid, "bitcast");
       break;
     }
     case Opcode::ICmp:
@@ -238,10 +254,21 @@ void Reader::parseInstLine(Module& m, Function& f, BasicBlock* bb, const std::st
       const bool ok = (op == Opcode::ICmp) ? ipredFromName(tok[k], ip)
                                            : fpredFromName(tok[k], fp);
       if (!ok) { err(lineNo, "比较谓词无法识别：" + tok[k]); return; }
-      Value* a = nthVal(k, 1);
-      Value* b = nthVal(k, 2);
-      if (a == nullptr || b == nullptr) { err(lineNo, "比较的操作数无法解析"); return; }
+      uint32_t aid = 0, bid = 0;
+      Value* a = nullptr;
+      Value* b = nullptr;
+      bool haveA = false, haveB = false;
+      { int seen = 0;
+        for (size_t j = k; j < tok.size(); ++j) {
+          uint32_t id = 0;
+          if (!detail::parseValueRef(tok[j], id)) continue;
+          if (++seen == 1) { aid = id; haveA = true; a = ref(id, lineNo, opName.c_str()); }
+          else if (seen == 2) { bid = id; haveB = true; b = ref(id, lineNo, opName.c_str()); break; }
+        } }
+      if (!haveA || !haveB) { err(lineNo, "比较的操作数无法解析"); return; }
       inst = (op == Opcode::ICmp) ? createICmp(ip, a, b, loc) : createFCmp(fp, a, b, loc);
+      if (a == nullptr) deferOperand(inst, 0, aid, "cmp");
+      if (b == nullptr) deferOperand(inst, 1, bid, "cmp");
       break;
     }
     case Opcode::SIToFP:
@@ -251,9 +278,12 @@ void Reader::parseInstLine(Module& m, Function& f, BasicBlock* bb, const std::st
     case Opcode::ZExt:
     case Opcode::Trunc: {
       const Type* sty = nullptr;
-      Value* v = typed(k, &sty);
-      if (v == nullptr) { err(lineNo, "转换的操作数无法解析"); return; }
+      uint32_t vid = 0;
+      bool haveV = false;
+      Value* v = typed(k, &sty, &vid, &haveV);
+      if (!haveV) { err(lineNo, "转换的操作数无法解析"); return; }
       inst = createCast(op, v, loc);
+      if (v == nullptr) deferOperand(inst, 0, vid, "cast");
       break;
     }
     case Opcode::Call:
@@ -278,16 +308,23 @@ void Reader::parseInstLine(Module& m, Function& f, BasicBlock* bb, const std::st
       const std::string callee = tok[k].substr(1);
       ++k;
       std::vector<Value*> args;
+      std::vector<uint32_t> argIds;
       while (k < tok.size()) {
         if (tok[k] == "(" || tok[k] == ",") { ++k; continue; }
         if (tok[k] == ")") break;
         const Type* aty = nullptr;
-        Value* av = typed(k, &aty);
-        if (av == nullptr) { err(lineNo, "call 的实参无法解析：" + tok[k]); return; }
+        uint32_t aid = 0;
+        Value* av = typed(k, &aty, &aid);
+        if (av == nullptr && aid == 0) {
+          err(lineNo, "call 的实参无法解析：" + tok[k]); return;
+        }
         args.push_back(av);
+        argIds.push_back(aid);
         k += 2;
       }
       inst = createCall(callee, retTy, args, loc);
+      for (size_t ai = 0; ai < args.size(); ++ai)
+        if (args[ai] == nullptr) deferOperand(inst, ai, argIds[ai], "call");
       break;
     }
     case Opcode::Phi: {
@@ -374,38 +411,49 @@ void Reader::parseInstLine(Module& m, Function& f, BasicBlock* bb, const std::st
       //   （`++k` 之后 `tok[k]` 才是第一个记号），所以 `val(k)` 恒为 nullptr。
       //   第一版写的就是 `val(k)` —— 于是**每一条 `select` 都读不回来**
       //   （实测 22 个文件报"select 的操作数无法解析"，全是带浮点/矩阵的）。
-      Value* c = nthVal(k, 1);
-      Value* a = nthVal(k, 2);
-      Value* b = nthVal(k, 3);
-      if (c == nullptr || a == nullptr || b == nullptr) {
+      uint32_t ids[3] = {0, 0, 0};
+      Value* vals[3] = {nullptr, nullptr, nullptr};
+      bool have[3] = {false, false, false};
+      { int seen = 0;
+        for (size_t j = k; j < tok.size() && seen < 3; ++j) {
+          uint32_t id = 0;
+          if (!detail::parseValueRef(tok[j], id)) continue;
+          ids[seen] = id;
+          have[seen] = true;
+          vals[seen] = ref(id, lineNo, opName.c_str());
+          ++seen;
+        } }
+      if (!have[0] || !have[1] || !have[2]) {
         err(lineNo, "select 的操作数无法解析");
         return;
       }
-      inst = createSelect(c, a, b, loc);
+      inst = createSelect(vals[0], vals[1], vals[2], loc);
+      for (size_t si = 0; si < 3; ++si)
+        if (vals[si] == nullptr) deferOperand(inst, si, ids[si], "select");
       break;
     }
     default: {
       const Type* ty = nullptr;
       if (!typeAt(k, &ty)) { err(lineNo, "指令的类型无法解析"); return; }
-      Value* a = nextVal(k);
-      if (a == nullptr) { err(lineNo, "指令的操作数无法解析"); return; }
+      uint32_t aId = 0, bId = 0;
+      Value* a = nullptr;
       Value* b = nullptr;
-      {   // 第二个 `%N` 存在 ⇒ 二元运算
-        int seen = 0;
+      bool haveA = false, haveB = false;
+      { int seen = 0;
         for (size_t j = k; j < tok.size(); ++j) {
           uint32_t id = 0;
           if (!detail::parseValueRef(tok[j], id)) continue;
-          if (++seen == 2) { b = ref(id, lineNo, opName.c_str()); break; }
-        }
-      }
-      if (b != nullptr) {
-        inst = createBin(op, a, b, loc);
-        m.ownInst(inst);
-      } else {
-        inst = createInst(op, ty, loc);
-        m.ownInst(inst);
-        inst->addOperand(a);
-      }
+          if (++seen == 1) { aId = id; haveA = true; a = ref(id, lineNo, opName.c_str()); }
+          else if (seen == 2) { bId = id; b = ref(id, lineNo, opName.c_str());
+                                haveB = true; break; }
+        } }
+      if (!haveA) { err(lineNo, "指令的操作数无法解析"); return; }
+      inst = createInst(op, ty, loc);
+      m.ownInst(inst);
+      inst->addOperand(a);
+      if (haveB) inst->addOperand(b);
+      if (a == nullptr) deferOperand(inst, 0, aId, "bin");
+      if (haveB && b == nullptr) deferOperand(inst, 1, bId, "bin");
       break;
     }
   }

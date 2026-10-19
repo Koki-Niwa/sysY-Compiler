@@ -9,7 +9,10 @@
 #include <utility>
 #include "ir/Module.h"
 namespace sysy { namespace flat {
-enum class AnalysisScope { Module, Function };
+struct CallGraphInfo;
+// CGSCC is keyed by the SCC index inside one CallGraphInfo result. Revisions
+// (Calls/Interface) decide freshness; the index is only the cache slot.
+enum class AnalysisScope { Module, Function, CGSCC };
 struct RevisionSnapshot {
   MutationKind mask = MutationKind::None;
   IRRevision revision;
@@ -48,7 +51,7 @@ class AnalysisManager {
   template <typename A> AnalysisHandle<typename A::Result> get() {
     static_assert(A::scope == AnalysisScope::Module, "Module scope required");
     using R = typename A::Result;
-    return request<R>(typeid(A), nullptr, A::revisionDependencies(),
+    return request<R>(typeid(A), nullptr, 0, nullptr, A::revisionDependencies(),
       [&]() -> std::shared_ptr<const void> {
         std::optional<R> result = A::run(static_cast<const Module&>(module_), *this);
         return result ? std::make_shared<const R>(std::move(*result)) : nullptr;
@@ -57,9 +60,23 @@ class AnalysisManager {
   template <typename A> AnalysisHandle<typename A::Result> get(const Function& f) {
     static_assert(A::scope == AnalysisScope::Function, "Function scope required");
     using R = typename A::Result;
-    return request<R>(typeid(A), &f, A::revisionDependencies(),
+    return request<R>(typeid(A), &f, 0, nullptr, A::revisionDependencies(),
       [&]() -> std::shared_ptr<const void> {
         std::optional<R> result = A::run(f, *this);
+        return result ? std::make_shared<const R>(std::move(*result)) : nullptr;
+      });
+  }
+  // First real CGSCC adaptor: the call graph owns the SCC numbering, so the
+  // cache key includes the graph object identity. A stale graph therefore
+  // cannot read a fresh SCC slot; its own entry fails the revision check.
+  template <typename A> AnalysisHandle<typename A::Result> get(
+      const CallGraphInfo& callGraph, size_t sccIndex) {
+    static_assert(A::scope == AnalysisScope::CGSCC, "CGSCC scope required");
+    using R = typename A::Result;
+    return request<R>(typeid(A), nullptr, static_cast<uint32_t>(sccIndex + 1),
+      &callGraph, A::revisionDependencies(),
+      [&]() -> std::shared_ptr<const void> {
+        std::optional<R> result = A::run(callGraph, sccIndex, *this);
         return result ? std::make_shared<const R>(std::move(*result)) : nullptr;
       });
   }
@@ -69,19 +86,22 @@ class AnalysisManager {
     std::shared_ptr<const void> storage;
     uint64_t generation = 0;
   };
-  Response fetch(std::type_index, const Function*, MutationKind,
+  Response fetch(std::type_index, const Function*, uint32_t tag,
+                 const void* graphKey, MutationKind,
                  const std::function<std::shared_ptr<const void>()>&);
   static bool current(const std::weak_ptr<State>&, std::type_index,
-                      const Function*, uint64_t);
+                      const Function*, uint32_t tag, const void* graphKey,
+                      uint64_t);
   template <typename R> AnalysisHandle<R> request(
-      std::type_index type, const Function* function, MutationKind mask,
+      std::type_index type, const Function* function, uint32_t tag,
+      const void* graphKey, MutationKind mask,
       const std::function<std::shared_ptr<const void>()>& compute) {
-    Response r = fetch(type, function, mask, compute);
+    Response r = fetch(type, function, tag, graphKey, mask, compute);
     if (!r.storage) return {};
     std::weak_ptr<State> weak = state_;
     return AnalysisHandle<R>(state_, std::static_pointer_cast<const R>(r.storage),
-      [weak, type, function](uint64_t generation) {
-        return current(weak, type, function, generation);
+      [weak, type, function, tag, graphKey](uint64_t generation) {
+        return current(weak, type, function, tag, graphKey, generation);
       }, r.generation);
   }
   Module& module_;

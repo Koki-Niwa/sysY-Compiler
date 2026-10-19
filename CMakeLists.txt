@@ -85,7 +85,9 @@ target_link_libraries(sysy_ir PUBLIC sysy_support)
 
 add_library(sysy_analysis STATIC
   src/analysis/AnalysisManager.cpp
-  src/analysis/ReachabilityAnalysis.cpp)
+  src/analysis/ReachabilityAnalysis.cpp
+  src/analysis/CallGraph.cpp
+  src/analysis/FunctionSummary.cpp)
 target_include_directories(sysy_analysis PUBLIC src)
 target_link_libraries(sysy_analysis PUBLIC sysy_ir)
 
@@ -173,6 +175,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   sysy_unit_test(test_flat_dead_phi sysy_structured sysy_ir)
   sysy_unit_test(test_llvm_emitter sysy_ir)
   sysy_unit_test(test_analysis_manager sysy_analysis)
+  sysy_unit_test(test_interprocedural sysy_analysis)
   sysy_unit_test(test_pass_manager sysy_opt)
   sysy_unit_test(test_mem2reg sysy_opt)
   sysy_unit_test(test_mem2reg_pass sysy_opt)

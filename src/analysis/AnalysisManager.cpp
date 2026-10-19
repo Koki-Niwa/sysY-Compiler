@@ -22,13 +22,18 @@ namespace {
 struct Key {
   std::type_index type;
   const Function* function;
+  uint32_t tag;        // 0 = Module/Function; sccIndex+1 = CGSCC slot
+  const void* graph;   // CGSCC: identity of the CallGraphInfo result
   bool operator==(const Key& o) const {
-    return type == o.type && function == o.function;
+    return type == o.type && function == o.function && tag == o.tag &&
+           graph == o.graph;
   }
 };
 struct KeyHash {
   size_t operator()(const Key& k) const {
-    return k.type.hash_code() ^ (std::hash<const Function*>{}(k.function) << 1);
+    return k.type.hash_code() ^ (std::hash<const Function*>{}(k.function) << 1) ^
+           (std::hash<uint32_t>{}(k.tag) << 2) ^
+           (std::hash<const void*>{}(k.graph) << 3);
   }
 };
 struct Dependency { Key key; uint64_t generation; };
@@ -81,15 +86,17 @@ AnalysisManager::AnalysisManager(Module& module)
 AnalysisManager::~AnalysisManager() = default;
 bool AnalysisManager::current(const std::weak_ptr<State>& weak,
                               std::type_index type, const Function* function,
+                              uint32_t tag, const void* graphKey,
                               uint64_t generation) {
   auto state = weak.lock();
-  return state && state->current(Key{type, function}, generation);
+  return state && state->current(Key{type, function, tag, graphKey}, generation);
 }
 AnalysisManager::Response AnalysisManager::fetch(
-    std::type_index type, const Function* function, MutationKind mask,
+    std::type_index type, const Function* function, uint32_t tag,
+    const void* graphKey, MutationKind mask,
     const std::function<std::shared_ptr<const void>()>& compute) {
   State& state = *state_;
-  Key key{type, function};
+  Key key{type, function, tag, graphKey};
   if ((function && function->parent() != &module_) ||
       std::any_of(state.active.begin(), state.active.end(),
         [&](const Frame& f) { return f.key == key; })) {

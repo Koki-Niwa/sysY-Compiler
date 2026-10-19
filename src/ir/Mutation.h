@@ -12,13 +12,13 @@ enum class MutationKind : uint32_t {
   None = 0, DataFlow = 1u, CFG = 2u, Memory = 4u,
   Calls = 8u, Globals = 16u, Interface = 32u
 };
-inline MutationKind operator|(MutationKind a, MutationKind b) {
+constexpr MutationKind operator|(MutationKind a, MutationKind b) {
   return static_cast<MutationKind>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
 }
 inline MutationKind& operator|=(MutationKind& a, MutationKind b) {
   return a = a | b;
 }
-inline bool hasMutation(MutationKind kinds, MutationKind bit) {
+constexpr bool hasMutation(MutationKind kinds, MutationKind bit) {
   return (static_cast<uint32_t>(kinds) & static_cast<uint32_t>(bit)) != 0;
 }
 struct IRRevision {

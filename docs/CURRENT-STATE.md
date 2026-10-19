@@ -152,6 +152,18 @@ pure; read/write/external effects are a least fixed point. Dependencies:
 cache reuse, revision invalidation and stale-graph rejection (33 checks).
 F00/F01/F02/F03/F04/F05 frozen acceptance remains unchanged; **S13 is next**.
 
+**S15 CLOSED / PASS** (full S09 **56/0/2**, `test_inline_v0` **8 checks**):
+`opt/CostModel.h` defines the immutable `TargetCostModel` service (call
+overhead, instruction cost, inline size cap) plus `CostContext` confidence and
+a `ConservativeCostModel` used when no target facts exist. `InlineV0Pass`
+consumes block frequencies and function summaries: only hot calls (>= 0.5 of
+entry frequency) to single-block, non-recursive callees without phi/alloca are
+cloned; cost/size caps come from the model. Cold, multi-block, alloca,
+recursive and over-budget sites are declined with counters. The pass is not
+wired into the default O1 pipeline until a measured benefit exists.
+`test_inline_v0` covers hot inline, cold decline, each unsupported class and a
+custom model cap (8 checks).
+
 **S14b CLOSED / PASS** (full S09 **56/0/2**, `test_hotness` **19 checks**):
 `BranchProbabilityAnalysis` uses loop structure (header biases inside 0.9;
 back-edge targets 0.1; otherwise even) and is consumed by

@@ -203,6 +203,24 @@ not claim linear time for constructing all SCC summaries. The read-only
 `freshnessExpansionCount()` is a cumulative diagnostic of actual expansions;
 it does not participate in cache validity or invalidation decisions.
 
+## S15 cost protocol and inlining V0 (CLOSED / PASS)
+
+`src/opt/CostModel.h` defines an immutable `TargetCostModel` service and a
+`CostContext` with confidence; it is deliberately not an AnalysisManager
+analysis, so target facts are not invalidated by IR mutations. The
+`ConservativeCostModel` charges a fixed call overhead, one unit per
+instruction, and allows at most two instructions without target facts (eight
+when facts exist).
+
+`InlineV0Pass` is a FunctionPass that consumes `BlockFrequencyAnalysis` and
+`FunctionSummaryAnalysis`. It only clones a callee that is single-block,
+non-recursive, free of phi/alloca, hot (call-block frequency at least half of
+the entry), and within the model's size and cost caps. Cloned operands map
+arguments to call operands and instruction results to clones; the call is
+replaced by the returned value or erased for void. Every declined site is
+counted. The pass is not part of the default pipeline and must prove measured
+benefit before enabling.
+
 ## S14b branch probabilities, frequencies and value facts (CLOSED / PASS)
 
 `BranchProbabilityAnalysis` is a Function-scope consumer of LoopInfoAnalysis.

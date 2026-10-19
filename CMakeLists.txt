@@ -100,7 +100,8 @@ target_link_libraries(sysy_analysis PUBLIC sysy_ir)
 add_library(sysy_opt STATIC
   src/opt/FlatPassManager.cpp
   src/opt/Mem2Reg.cpp
-  src/opt/Mem2RegAnalysis.cpp)
+  src/opt/Mem2RegAnalysis.cpp
+  src/opt/InlineV0.cpp)
 target_include_directories(sysy_opt PUBLIC src)
 target_link_libraries(sysy_opt PUBLIC sysy_analysis)
 
@@ -188,6 +189,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   sysy_unit_test(test_pass_manager sysy_opt)
   sysy_unit_test(test_mem2reg sysy_opt)
   sysy_unit_test(test_mem2reg_pass sysy_opt)
+  sysy_unit_test(test_inline_v0 sysy_opt)
 
   add_executable(bench_lexer tools/selftest/unit/bench_lexer.cpp)
   target_include_directories(bench_lexer PRIVATE src)

@@ -9,6 +9,10 @@
 #   * 零第三方依赖（解析器生成器也不用，词法/语法全部手写）
 #   * 零警告是硬要求（-Wall -Wextra，verify.sh 会 grep 构建日志）
 #
+# F05：源码清单只在这里维护一次。组件 OBJECT 库表达
+#   support / frontend / ir / analysis / opt / structured 的依赖方向；
+#   单元测试同样链接这些目标，不再由 run.sh 手抄 SOURCES。
+#
 # 静态链接（默认开，见文末 SYSY_STATIC）：比赛是"每个用例起一个编译器进程"，
 # 动态链接的加载器开销在 540 次调用里累积成主要成本（实测 0.854 s → 0.485 s）。
 # 探测失败会自动回退到动态链接，不影响可移植性。
@@ -24,7 +28,7 @@ include(CheckCXXSourceCompiles)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)          # 禁用 GCC 专有扩展
+set(CMAKE_CXX_EXTENSIONS OFF)          # 禁用 GNU 专有扩展
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
@@ -34,15 +38,18 @@ endif()
 add_compile_options(-Wall -Wextra -Wpedantic)
 
 # 零警告是硬门禁：开发期把警告直接升级为错误，防止"警告悄悄漂移"。
-# 若某个第三方头文件逼出无法消除的警告，用 SYSTEM 包含目录而不是关掉这个开关。
 add_compile_options(-Werror)
 
-add_executable(compiler
-  src/main/main.cpp
-  src/main/EmitText.cpp
-  src/main/FlatPipeline.cpp
+# ── 组件边界（F05）──────────────────────────────────────────────────────────
+# 每个组件是一个 STATIC 库：目标依赖就是允许的 include 方向，新增文件只改
+# 对应组件一处，链接时按 PUBLIC 依赖传递。解释器是独立自测目标（S10a），不进入
+# 产品链接。
+add_library(sysy_support STATIC
   src/support/Diagnostic.cpp
-  src/support/SourceFile.cpp
+  src/support/SourceFile.cpp)
+target_include_directories(sysy_support PUBLIC src)
+
+add_library(sysy_frontend STATIC
   src/frontend/Lexer.cpp
   src/frontend/Parser.cpp
   src/frontend/ParserStmtExpr.cpp
@@ -56,8 +63,11 @@ add_executable(compiler
   src/frontend/SemaDecl.cpp
   src/frontend/SemaDump.cpp
   src/frontend/InitLowering.cpp
-  src/frontend/InitLoweringDump.cpp
-  # ── S06：平面 IR 的容器（类型 / 值 / 指令 / 块 / 函数 / 模块 + dump + 读回）
+  src/frontend/InitLoweringDump.cpp)
+target_include_directories(sysy_frontend PUBLIC src)
+target_link_libraries(sysy_frontend PUBLIC sysy_support)
+
+add_library(sysy_ir STATIC
   src/ir/Type.cpp
   src/ir/Instruction.cpp
   src/ir/Value.cpp
@@ -67,65 +77,116 @@ add_executable(compiler
   src/ir/FlatDump.cpp
   src/ir/FlatReader.cpp
   src/ir/LLVMTextEmitter.cpp
-  # 显式列出文本包含片段便于导航；编译器 depfile 同样追踪这些 include。
-  src/ir/FlatReaderInst.inc
-  src/ir/FlatReaderFunc.inc
   src/ir/DominatorTree.cpp
   src/ir/FlatSemantics.cpp
-  src/ir/FlatVerifier.cpp
-  # ── F02：Flat IR analysis management 与 reachability ──────────────────
+  src/ir/FlatVerifier.cpp)
+target_include_directories(sysy_ir PUBLIC src)
+target_link_libraries(sysy_ir PUBLIC sysy_support)
+
+add_library(sysy_analysis STATIC
   src/analysis/AnalysisManager.cpp
-  src/analysis/ReachabilityAnalysis.cpp
-  # ── F03：独立 Flat FunctionPass 基础设施；F04 已迁移 Mem2Reg ──────
+  src/analysis/ReachabilityAnalysis.cpp)
+target_include_directories(sysy_analysis PUBLIC src)
+target_link_libraries(sysy_analysis PUBLIC sysy_ir)
+
+add_library(sysy_opt STATIC
   src/opt/FlatPassManager.cpp
-  # ── S09：平面标量 alloca → SSA promotion ────────────────────────────────
   src/opt/Mem2Reg.cpp
-  src/opt/Mem2RegAnalysis.cpp
-  # ── S05：两层 IR 的第一层（结构化 IR）────────────────────────────────────
+  src/opt/Mem2RegAnalysis.cpp)
+target_include_directories(sysy_opt PUBLIC src)
+target_link_libraries(sysy_opt PUBLIC sysy_analysis)
+
+add_library(sysy_structured STATIC
   src/structured/StructuredIR.cpp
   src/structured/StructuredDump.cpp
   src/structured/StructuredReader.cpp
   src/structured/StructuredVerifier.cpp
   src/structured/IRGenTypes.cpp
   src/structured/IRGen.cpp
-  # ── S05b：第一个**变换**（LoopNormalize）+ alloca 提升 ────────────────────
+  src/structured/IRGenStmt.cpp
   src/structured/LoopNormalize.cpp
   src/structured/LoopAnalysis.cpp
   src/structured/LoopRewrite.cpp
   src/structured/AllocaHoist.cpp
-  src/structured/IRGenStmt.cpp
-  # ── S06：层边界（结构化 → 平面）──────────────────────────────────────────
   src/structured/FlattenCFG.cpp
   src/structured/FlattenLower.cpp
-  src/structured/FlattenLoops.cpp
-)
+  src/structured/FlattenLoops.cpp)
+target_include_directories(sysy_structured PUBLIC src)
+target_link_libraries(sysy_structured PUBLIC sysy_frontend sysy_ir)
+
+# ── 产品可执行文件 ─────────────────────────────────────────────────────────
+add_executable(compiler
+  src/main/main.cpp
+  src/main/CompilationSession.cpp
+  src/main/FlatPipeline.cpp
+  src/main/EmitText.cpp)
+target_include_directories(compiler PRIVATE src)
+target_link_libraries(compiler PRIVATE
+  sysy_support sysy_frontend sysy_ir sysy_analysis sysy_opt sysy_structured)
+
+# 版本字符串（--version 用）
+target_compile_definitions(compiler PRIVATE
+  SYSY_COMPILER_VERSION="${PROJECT_VERSION}")
+
+# 保证产物落在 compiler/build/compiler（verify.sh 与 run_tests.sh 的默认路径）
+set_target_properties(compiler PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+  OUTPUT_NAME "compiler")
 
 add_executable(toy_backend
   tools/toy_backend/main.cpp
   tools/toy_backend/ToyIR.cpp
   tools/toy_backend/ToyParser.cpp
   tools/toy_backend/X86Lowering.cpp
-  tools/toy_backend/X86Ops.cpp
-)
+  tools/toy_backend/X86Ops.cpp)
+target_include_directories(toy_backend PRIVATE src)
 set_target_properties(toy_backend PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 
-target_include_directories(compiler PRIVATE src)
+# ── 单元测试（F05：链接组件目标，不复制 SOURCES）──────────────────────────
+# 只有顶层构建才注册测试；作为子目录嵌入时不污染宿主工程。
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  enable_testing()
+  function(sysy_unit_test name)
+    add_executable(${name} tools/selftest/unit/${name}.cpp)
+    target_include_directories(${name} PRIVATE src)
+    target_link_libraries(${name} PRIVATE ${ARGN})
+    set_target_properties(${name} PROPERTIES
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/unit")
+    add_test(NAME ${name} COMMAND ${name})
+  endfunction()
 
-# 版本字符串（--version 用）
-target_compile_definitions(compiler PRIVATE
-  SYSY_COMPILER_VERSION="${PROJECT_VERSION}"
-)
+  sysy_unit_test(test_runtime_catalog sysy_frontend)
+  sysy_unit_test(test_sourcefile sysy_support)
+  sysy_unit_test(test_diagnostic sysy_support)
+  sysy_unit_test(test_lexer sysy_frontend)
+  sysy_unit_test(test_parser sysy_frontend)
+  sysy_unit_test(test_sema sysy_frontend)
+  sysy_unit_test(test_initlowering sysy_structured)
+  sysy_unit_test(test_const_remainder sysy_structured)
+  sysy_unit_test(test_structured sysy_structured)
+  sysy_unit_test(test_loopnorm sysy_structured)
+  sysy_unit_test(test_flat sysy_structured sysy_ir)
+  sysy_unit_test(test_ir_mutation sysy_ir)
+  sysy_unit_test(test_value_use sysy_ir)
+  sysy_unit_test(test_flat_f2i sysy_structured sysy_ir)
+  sysy_unit_test(test_flat_dead_phi sysy_structured sysy_ir)
+  sysy_unit_test(test_llvm_emitter sysy_ir)
+  sysy_unit_test(test_analysis_manager sysy_analysis)
+  sysy_unit_test(test_pass_manager sysy_opt)
+  sysy_unit_test(test_mem2reg sysy_opt)
+  sysy_unit_test(test_mem2reg_pass sysy_opt)
 
-# 保证产物落在 compiler/build/compiler（verify.sh 与 run_tests.sh 的默认路径）
-set_target_properties(compiler PROPERTIES
-  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
-  OUTPUT_NAME "compiler"
-)
+  add_executable(bench_lexer tools/selftest/unit/bench_lexer.cpp)
+  target_include_directories(bench_lexer PRIVATE src)
+  target_link_libraries(bench_lexer PRIVATE sysy_frontend)
+  set_target_properties(bench_lexer PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/unit")
+endif()
 
 # ── 静态链接（默认开；探测失败自动回退）─────────────────────────────────────
 # 为什么值得做：评测对每个用例都起一个新进程，动态加载器 + libstdc++ 的重定位
 # 是纯固定成本。实测 540 个文件串行 token 化：
-#     动态链接 1.046 s   →   静态链接 0.647 s（S01 要求 < 1 s）
+#     动态链接 1.046 s   → 静态链接 0.647 s（S01 要求 < 1 s）
 # 关掉的方式：-DSYSY_STATIC=OFF
 option(SYSY_STATIC "静态链接编译器（减少每次进程启动的加载器开销）" ON)
 if(SYSY_STATIC)
@@ -139,12 +200,3 @@ if(SYSY_STATIC)
     message(STATUS "SYSY_STATIC=ON 但本机不支持静态链接 → 回退为动态链接")
   endif()
 endif()
-
-# 本阶段没有 CMake 测试目标：验证靠 compiler/tools/ 下的脚本
-#   * tools/selftest/unit/run.sh          单元测试（含 S01 的 test_lexer、S02 的 test_parser）
-#   * tools/selftest/check_lexer.py       ★★ 词法自校验（490 个用例的拼接不变式）
-#   * tools/selftest/check_tokens_meta.py 逐 token 的 loc+length 反查原文（540 个）
-#   * tools/selftest/check_crlf.py        CRLF 与 LF 词法结果一致性
-#   * tools/selftest/check_parser.py      ★★ 语法往返验证（490 个用例，S02）
-#   * tools/selftest/perf_tokens.py       性能实测（比赛调用口径）
-#   * tools/selftest/run.sh               三种 target 的端到端链路自检

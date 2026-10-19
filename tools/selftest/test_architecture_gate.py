@@ -180,6 +180,46 @@ class ArchitectureTests(unittest.TestCase):
                             for error in check_mem2reg(self.root)))
         self.assertEqual(1, self.mem2reg_boundary().returncode)
 
+    def test_f05_session_and_source_list_boundaries(self):
+        from check_f05_session_boundary import check as check_f05
+        self.put('src/main/CompilationSession.h',
+                 'class CompilationSession { const CompUnit* ast(); '
+                 'const Sema* sema(); const InitPlan* initPlan(); '
+                 'const sir::Op* structured(; const flat::Module* flat(; };')
+        self.put('src/main/CompilationSession.cpp',
+                 'bool CompilationSession::materializeAst() {}\n'
+                 'bool CompilationSession::materializeSema() {}\n'
+                 'bool CompilationSession::materializeInitPlan() {}\n'
+                 'sir::buildModule(structured_.arena; flat::flattenModule(mod;')
+        self.put('src/main/main.cpp',
+                 'CompilationSession session(src, diags); emitArtifact(session, opts);')
+        self.put('CMakeLists.txt',
+                 'add_library(sysy_support\nadd_library(sysy_frontend\n'
+                 'add_library(sysy_ir\nadd_library(sysy_analysis\n'
+                 'add_library(sysy_opt\nadd_library(sysy_structured\n'
+                 'sysy_unit_test(test_mem2reg_pass sysy_opt)')
+        self.put('tools/selftest/unit/run.sh',
+                 '#!/bin/bash\ncmake --build build\nctest\n')
+        self.assertEqual([], check_f05(self.root))
+        self.put('src/main/main.cpp',
+                 'CompilationSession session(src, diags);\n'
+                 'Lexer lexer(src, diags); emitArtifact(session, opts);')
+        self.assertTrue(any('stage parsers' in error
+                            for error in check_f05(self.root)))
+        self.put('src/main/main.cpp',
+                 'CompilationSession session(src, diags); emitArtifact(session, opts);')
+        self.put('tools/selftest/unit/run.sh',
+                 '#!/bin/bash\nSUPPORT=(src/support/SourceFile.cpp)\nctest\n')
+        self.assertTrue(any('hand-copy' in error for error in check_f05(self.root)))
+        self.put('tools/selftest/unit/run.sh',
+                 '#!/bin/bash\ncmake --build build\nctest\n')
+        self.put('CMakeLists.txt',
+                 'add_library(sysy_support\nadd_library(sysy_frontend\n'
+                 'add_library(sysy_ir\nadd_library(sysy_analysis\n'
+                 'add_library(sysy_opt\n')
+        self.assertTrue(any('structured component' in error
+                            for error in check_f05(self.root)))
+
     def budget(self):
         return subprocess.run([sys.executable, str(Path(__file__).with_name('check_line_budget.py')),
                                '--root', str(self.root)], capture_output=True, text=True)

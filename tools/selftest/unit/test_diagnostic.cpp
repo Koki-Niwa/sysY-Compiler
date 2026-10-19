@@ -75,7 +75,7 @@ static std::string withSnippet(const std::string& path, unsigned line, unsigned 
                                const std::string& sourceLine) {
   std::string s = hdr(path, line, col, level, msg) + "\n";
   s += kIndent + sourceLine + "\n";
-  s += kIndent + ind(col - 1 >= 0 ? col - 1 : 0) + "^\n";
+  s += kIndent + ind(col > 1 ? col - 1 : 0) + "^\n";
   return s;
 }
 

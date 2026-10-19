@@ -10,28 +10,9 @@
 #include <string_view>
 #include <vector>
 
+#include "main/CompilationSession.h"
 #include "main/EmitText.h"
-#include "main/FlatPipeline.h"
 
-#include "frontend/Ast.h"
-#include "frontend/AstPrinter.h"
-#include "frontend/InitLowering.h"
-#include "frontend/InitLoweringDump.h"
-#include "frontend/Lexer.h"
-#include "frontend/Parser.h"
-#include "frontend/Sema.h"
-#include "frontend/SemaDump.h"
-#include "ir/FlatDump.h"
-#include "ir/FlatVerifier.h"
-#include "ir/LLVMTextEmitter.h"
-#include "structured/AllocaHoist.h"
-#include "structured/FlattenCFG.h"
-#include "structured/IRGen.h"
-#include "structured/LoopNormalize.h"
-#include "structured/StructuredDump.h"
-#include "structured/StructuredReader.h"
-#include "structured/StructuredVerifier.h"
-#include "frontend/Token.h"
 #include "support/Diagnostic.h"
 #include "support/Errors.h"
 #include "support/SourceFile.h"
@@ -42,17 +23,13 @@
 
 namespace {
 
-using sysy::CompUnit;
 using sysy::DiagnosticEngine;
 using sysy::DiagLevel;
 using sysy::IOError;
-using sysy::Lexer;
-using sysy::Parser;
 using sysy::SourceFile;
 using sysy::SourceLoc;
-using sysy::Token;
-using sysy::TokKind;
 using sysy::UsageError;
+using sysy::mainstage::CompilationSession;
 
 // 退出码约定（run_tests.sh 依赖 0/非 0 区分；1 专指"编译错误"）
 enum ExitCode {
@@ -217,281 +194,38 @@ void writeWholeFile(const std::string& path, const std::string& content) {
 // --emit=tokens 的转储格式（phases/S01-lexer.md §4，**机器可校验，必须严格**）
 //   …（此处原有 13 行说明，已并入 S06 报告与设计文档）
 // ============================================================================
-std::string renderTokens(const SourceFile& src, DiagnosticEngine& diags) {
-  Lexer lexer(src, diags);
-  const std::vector<Token> tokens = lexer.tokenize();
-
-  std::string out;
-  // 粗估：平均每行 24 字节（86 KB 单行也不会有几万 token 以外的意外）
-  out.reserve(tokens.size() * 24 + 16);
-  char buf[32];
-  for (const Token& tok : tokens) {
-    // 行号
-    std::snprintf(buf, sizeof(buf), "%u", tok.loc.line);
-    out += buf;
-    out += '\t';
-    // 列号
-    std::snprintf(buf, sizeof(buf), "%u", tok.loc.col);
-    out += buf;
-    out += '\t';
-    // 种类
-    out += tokKindDumpName(tok.kind);
-    out += '\t';
-    // 原文
-    if (tok.kind == TokKind::EndOfFile) {
-      out += '-';
-    } else {
-      const std::string_view text = tokenText(tok, src);
-      out.append(text.data(), text.size());
-    }
-    out += '\n';
-  }
-  return out;
-}
-
-// ============================================================================
-// --emit=ast 的真实实现（S02）
-//   …（此处原有 5 行说明，已并入 S06 报告与设计文档）
-// ============================================================================
-std::string renderAst(const SourceFile& src, DiagnosticEngine& diags, bool fromAst) {
-  std::unique_ptr<CompUnit> unit;
-  if (fromAst) {
-    // 输入是 S-表达式文本。**不经过 Lexer**：AST 文本不是 SysY（prompt §6.1）。
-    // ⚠️ SourceFile 的生命期由 main 持有并覆盖整个 emit 过程，所以字面量节点里
-    //    指向 src.text() 的 string_view 一直有效。
-    unit = sysy::parseAstText(src.text(), diags);
-  } else {
-    Lexer lexer(src, diags);
-    Parser parser(lexer, diags);
-    unit = parser.parseCompUnit();
-  }
-  if (unit == nullptr) return std::string();   // 契约上不会发生（Parser 保证非空）
-  return sysy::printAst(*unit);
-}
-
-// ============================================================================
-// --emit=sema 的真实实现（S03）
-//   …（此处原有 8 行说明，已并入 S06 报告与设计文档）
-// ============================================================================
-std::string renderSema(const SourceFile& src, DiagnosticEngine& diags, bool fromAst) {
-  std::unique_ptr<CompUnit> unit;
-  if (fromAst) {
-    unit = sysy::parseAstText(src.text(), diags);
-  } else {
-    Lexer lexer(src, diags);
-    Parser parser(lexer, diags);
-    unit = parser.parseCompUnit();
-  }
-  if (unit == nullptr) return std::string();   // 契约上不会发生（Parser 保证非空）
-  sysy::runSema(*unit, diags);
-  return sysy::printSemaDump(*unit);
-}
-
-// ============================================================================
-// --emit=initplan 的真实实现（S04）
-//   …（此处原有 11 行说明，已并入 S06 报告与设计文档）
-// ============================================================================
-std::string renderInitPlan(const SourceFile& src, DiagnosticEngine& diags, bool fromAst) {
-  std::unique_ptr<CompUnit> unit;
-  if (fromAst) {
-    unit = sysy::parseAstText(src.text(), diags);
-  } else {
-    Lexer lexer(src, diags);
-    Parser parser(lexer, diags);
-    unit = parser.parseCompUnit();
-  }
-  if (unit == nullptr) return std::string();   // 契约上不会发生（Parser 保证非空）
-  sysy::Sema sema(diags);
-  sema.run(*unit);
-  const sysy::InitPlan plan = sysy::runInitLowering(*unit, sema);
-  return sysy::printInitPlanDump(plan);
-}
-
-// ============================================================================
-// --emit=structured-ir 的真实实现（S05）
-//   …（此处原有 10 行说明，已并入 S06 报告与设计文档）
-// ===========================================================================
-std::string baseNameOf(const std::string& path) {
-  const size_t p = path.find_last_of("/\\");
-  return (p == std::string::npos) ? path : path.substr(p + 1);
-}
-
-std::string renderStructuredIr(const SourceFile& src, DiagnosticEngine& diags, bool fromAst,
-                               bool normalize, bool loopStats) {
-  std::unique_ptr<CompUnit> unit;
-  if (fromAst) {
-    unit = sysy::parseAstText(src.text(), diags);
-  } else {
-    Lexer lexer(src, diags);
-    Parser parser(lexer, diags);
-    unit = parser.parseCompUnit();
-  }
-  if (unit == nullptr) return std::string();   // 契约上不会发生（Parser 保证非空）
-  sysy::Sema sema(diags);
-  sema.run(*unit);
-  const sysy::InitPlan plan = sysy::runInitLowering(*unit, sema);
-  sysy::sir::Arena arena;
-  // ⚠️ Sema 的生命期必须覆盖 IRGen（IRGen 要用 `Cast`/类型注解，但不再查符号表）
-  sysy::sir::Op* mod = sysy::sir::buildModule(arena, *unit, plan, baseNameOf(src.path()), diags);
-  // ★ S05b：`--normalize` 的两件事（**验收口径不同**，prompt §二）：
-  //   ① 循环规范化 —— 只对满足成功条件的 `while` 生效；**不触发的循环零改动**；
-  //   ② `alloca` 提升 —— 每个函数都做（它是后端不变量 2 的前提）。
-  //   顺序：先规范化（它会改写体），再提升（只动入口 Region 的顺序）。
-  std::string statsText;
-  if (normalize) {
-    sysy::sir::LoopNormStats ls;
-    mod = sysy::sir::normalizeLoops(mod, arena, ls);
-    const size_t moved = sysy::sir::hoistAllocas(mod);
-    statsText = sysy::sir::formatLoopNormStats(ls);
-    statsText += "rolled-back " + std::to_string(ls.rolledBack) + "\n";
-    statsText += "allocas-hoisted " + std::to_string(moved) + "\n";
-  }
-  // ★ 自查：结构化 IR 生成后立刻验六条不变式（I1–I6 + use-def + 指令集封闭/
-  //   终结符匹配/GEP 标记）。**失败即报 error 并退出码 1**（prompt §九.6：
-  //   不允许"静默产出坏 IR"）。这就是"IRGen 直接产出合法 IR"的落地保证。
-  //   ★ S05b 起 I1/I2/I3 **不再平凡**（IR 里真的有 `ForOp` 了）。
-  const std::vector<sysy::sir::Violation> vs = sysy::sir::verifyModule(mod);
-  if (!vs.empty()) {
-    std::string msg = "结构化 IR 违反不变量（" + std::to_string(vs.size()) + " 条）：\n";
-    for (size_t i = 0; i < vs.size() && i < 10; ++i) {
-      msg += "  [";
-      msg += vs[i].invariant;
-      msg += "] ";
-      if (vs[i].loc.line != 0) msg += "line " + std::to_string(vs[i].loc.line) + ": ";
-      msg += vs[i].message;
-      msg += '\n';
-    }
-    diags.report(DiagLevel::Error, sysy::SourceLoc(0, 0), "E-STRUCT-VERIFY", msg);
-  }
-  // ★ S05b：统计**绝不进 dump**（dump 是与 S05 样例对的冻结契约），
-  //   走 stderr。放在最后：即使不变量报红，统计照样打出来（可定位）。
-  if (loopStats && normalize) std::cerr << statsText;
-  return sysy::sir::dumpModule(mod);
-}
-
-// ============================================================================
-// --from-structured 的真实实现（S05 轨 A）
-//   …（此处原有 5 行说明，已并入 S06 报告与设计文档）
-// ============================================================================
-std::string renderFromStructured(const SourceFile& src, DiagnosticEngine& diags, bool normalize,
-                                 bool loopStats) {
-  sysy::sir::Arena arena;
-  sysy::sir::Op* mod = sysy::sir::parseStructuredModule(src.text(), arena, diags);
-  if (mod == nullptr) return std::string();   // 诊断已经报出；产物照常写出（可定位）
-  if (normalize) {
-    sysy::sir::LoopNormStats ls;
-    mod = sysy::sir::normalizeLoops(mod, arena, ls);
-    const size_t moved = sysy::sir::hoistAllocas(mod);
-    if (loopStats) {
-      std::cerr << sysy::sir::formatLoopNormStats(ls);
-      std::cerr << "allocas-hoisted " << moved << "\n";
-    }
-    const std::vector<sysy::sir::Violation> vs = sysy::sir::verifyModule(mod);
-    if (!vs.empty()) {
-      diags.report(DiagLevel::Error, sysy::SourceLoc(0, 0), "E-STRUCT-VERIFY",
-                   "读回后再规范化的结果违反不变量：\n" + sysy::sir::formatViolations(vs));
-    }
-  }
-  return sysy::sir::dumpModule(mod);
-}
-
-// ============================================================================
-// --emit=flat-ir 的真实实现（S06）
-//   …（此处原有 11 行说明，已并入 S06 报告与设计文档）
-// ============================================================================
-std::string renderFlatIr(const SourceFile& src, DiagnosticEngine& diags, bool fromAst,
-                         bool /*normalizeAlreadyImplied*/, bool flatStats, bool mem2reg,
-                         std::unique_ptr<sysy::flat::Module>* moduleOut = nullptr) {
-  std::unique_ptr<CompUnit> unit;
-  if (fromAst) {
-    unit = sysy::parseAstText(src.text(), diags);
-  } else {
-    Lexer lexer(src, diags);
-    Parser parser(lexer, diags);
-    unit = parser.parseCompUnit();
-  }
-  if (unit == nullptr) return std::string();
-  sysy::Sema sema(diags);
-  sema.run(*unit);
-  const sysy::InitPlan plan = sysy::runInitLowering(*unit, sema);
-  sysy::sir::Arena arena;
-  sysy::sir::Op* smod = sysy::sir::buildModule(arena, *unit, plan, baseNameOf(src.path()), diags);
-  sysy::sir::LoopNormStats ls;
-  smod = sysy::sir::normalizeLoops(smod, arena, ls);
-  const size_t moved = sysy::sir::hoistAllocas(smod);
-  const std::vector<sysy::sir::Violation> svs = sysy::sir::verifyModule(smod);
-  if (!svs.empty()) {
-    diags.report(DiagLevel::Error, sysy::SourceLoc(0, 0), "E-STRUCT-VERIFY",
-                 "展平之前结构化 IR 已违反不变量：\n" + sysy::sir::formatViolations(svs));
-  }
-  // Recovery IR after a frontend error can violate downstream invariants too;
-  // skip flat verification there to avoid misleading secondary diagnostics.
-  const bool pipelineClean = !diags.hasError();
-  auto fmod = std::make_unique<sysy::flat::Module>();
-  if (sysy::flat::flattenModule(smod, *fmod, diags) == nullptr) return std::string();
-  if (pipelineClean) {
-    const std::vector<sysy::flat::Violation> fvs = sysy::flat::verifyFlatModule(*fmod);
-    if (!fvs.empty()) {
-      // Optional diagnostic dump adds block context to verifier violations.
-      if (const char* want = std::getenv("SYSY_DUMP_BAD_FLAT"); want != nullptr && *want != '0') {
-        std::cerr << "===== 违约模块的平面 IR =====\n" << sysy::flat::dumpModule(*fmod) << "\n";
-      }
-      diags.report(DiagLevel::Error, sysy::SourceLoc(0, 0), "E-FLAT-VERIFY",
-                   "平面 IR 违反不变量（" + std::to_string(fvs.size()) + " 条）：\n" +
-                       sysy::flat::formatViolations(fvs));
-    }
-  }
-  if (pipelineClean && !sysy::mainstage::applyMem2Reg(*fmod, diags, mem2reg, flatStats))
-    return std::string();  // Failed promotion may have partially rewritten the module.
-  if (flatStats) {
-    std::cerr << fmod->formatStats();
-    std::cerr << "loopnorm rolled-back " << ls.rolledBack << " allocas-hoisted " << moved
-              << "\n";
-  }
-  if (moduleOut != nullptr) {
-    *moduleOut = std::move(fmod);
-    return std::string();
-  }
-  return sysy::flat::dumpModule(*fmod);
-}
-
 void ensureReadable(const SourceFile& src) {
-  // 只做 I/O（读文件 + CRLF 规范化）。解析由 renderAst / renderTokens 各自负责。
+  // 只做 I/O（读文件 + CRLF 规范化）。解析由 CompilationSession 负责。
   (void)src.text();
 }
-std::string renderLlvmIr(const SourceFile& src, DiagnosticEngine& diags,
-                         bool fromAst, bool fromFlat, bool normalize, bool flatStats,
-                         bool mem2reg) {
-  std::unique_ptr<sysy::flat::Module> module;
-  if (fromFlat) {
-    module.reset(sysy::flat::parseFlatModule(src.text(), diags));
-    if (module && !diags.hasError() &&
-        !sysy::mainstage::applyMem2Reg(*module, diags, mem2reg, flatStats)) {
-      module.reset();  // Never emit a partially promoted module.
-    }
-    if (module && flatStats && !diags.hasError()) std::cerr << module->formatStats();
-  } else {
-    (void)renderFlatIr(src, diags, fromAst, normalize, flatStats, mem2reg, &module);
-  }
-  if (!module || diags.hasError()) return std::string();
-  const std::vector<sysy::flat::Violation> violations =
-      sysy::flat::verifyFlatModule(*module);
-  if (!violations.empty()) {
-    diags.report(DiagLevel::Error, SourceLoc(0, 0), "E-FLAT-VERIFY",
-                 "发射 LLVM 前平面 IR 违反不变量：\n" +
-                     sysy::flat::formatViolations(violations));
-    return std::string();
-  }
 
-  sysy::flat::LLVMTextEmitter emitter;
-  std::string output;
-  std::string error;
-  if (!emitter.emit(*module, output, error)) {
-    diags.report(DiagLevel::Error, SourceLoc(0, 0), "E-LLVM-EMIT", error);
-    return std::string();
+// ============================================================================
+// --emit 分发：所有阶段物化都经 CompilationSession（单一物化路径）
+// ============================================================================
+std::string emitArtifact(CompilationSession& session, const Options& opts) {
+  switch (opts.emit) {
+    case EmitKind::Tokens:
+      return session.tokensText();
+    case EmitKind::Ast:
+      return session.astText();
+    case EmitKind::Sema:
+      return session.semaText();
+    case EmitKind::InitPlan:
+      return session.initPlanText();
+    case EmitKind::StructuredIr:
+      return session.structuredText(opts.normalize, opts.loopStats);
+    case EmitKind::FlatIr:
+      return session.flatText(opts.fromFlat, opts.normalize, opts.flatStats,
+                              opts.mem2reg);
+    case EmitKind::LlvmIr:
+      return session.llvmIrText(opts.fromFlat, opts.normalize, opts.flatStats,
+                                opts.mem2reg || opts.optLevel >= 1);
+    case EmitKind::Nothing:
+      break;
   }
-  return output;
+  return std::string();
 }
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -523,48 +257,8 @@ int main(int argc, char** argv) {
     }
 
     if (opts.emit != EmitKind::Nothing) {
-      std::string artifact;
-      switch (opts.emit) {
-        case EmitKind::Tokens:
-          // ★ S01 的真实产物：词法分析（Token 转储，机器可校验）
-          artifact = renderTokens(src, diags);
-          break;
-        case EmitKind::Ast:
-          // ★ S02 的真实产物：语法分析 + AST（S-表达式）
-          artifact = renderAst(src, diags, opts.fromAst);
-          break;
-        case EmitKind::Sema:
-          // ★ S03 的真实产物：语义分析 + 类型注解转储
-          artifact = renderSema(src, diags, opts.fromAst);
-          break;
-        case EmitKind::InitPlan:
-          // ★ S04 的真实产物：初始化器降级 → 初始化计划（§4.3 的冻结格式）
-          artifact = renderInitPlan(src, diags, opts.fromAst);
-          break;
-        case EmitKind::StructuredIr:
-          // ★ S05 的真实产物：结构化 IR（容器 → 文本）
-          // ★ S05b：`--normalize` 在**同一棵树**上跑 LoopNormalize + AllocaHoist
-          artifact = opts.fromStructured
-                         ? renderFromStructured(src, diags, opts.normalize, opts.loopStats)
-                         : renderStructuredIr(src, diags, opts.fromAst, opts.normalize,
-                                              opts.loopStats);
-          break;
-        case EmitKind::FlatIr:
-          // ★ S06 的真实产物：平面 IR（含 φ 与 critical-edge 拆分）
-          artifact = opts.fromFlat
-                         ? sysy::mainstage::renderFromFlat(src, diags, opts.flatStats,
-                                                           opts.mem2reg)
-                         : renderFlatIr(src, diags, opts.fromAst, opts.normalize,
-                                        opts.flatStats, opts.mem2reg);
-          break;
-        case EmitKind::LlvmIr:
-          artifact = renderLlvmIr(src, diags, opts.fromAst, opts.fromFlat,
-                                  opts.normalize, opts.flatStats,
-                                  opts.mem2reg || opts.optLevel >= 1);
-          break;
-        case EmitKind::Nothing:
-          break;
-      }
+      CompilationSession session(src, diags, opts.fromAst, opts.fromStructured);
+      const std::string artifact = emitArtifact(session, opts);
       // 文本 dump 即使伴随诊断仍可定位；LLVM 产物必须完整才写入。
       if (opts.emit == EmitKind::LlvmIr && diags.hasError()) {
         diags.printAll(std::cerr, false);

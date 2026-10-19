@@ -1,95 +1,60 @@
 #!/usr/bin/env bash
-# unit/run.sh —— 支撑层 + 前端 + 两层 IR 的单元测试
-# 用 clang++ --std=c++17 直接编译；退出 0 即通过。S06 的 ir/ 与 Flatten* 用通配，源清单与 CMake 保持一致。
+# unit/run.sh —— 单元测试入口（F05：不再手抄 SOURCES）
+#
+# 源码清单只在 CMakeLists.txt 维护一次；这里只负责"构建 + 运行"。
+# 每个测试是链接组件 STATIC 库的 CMake 目标，注册在 ctest 中。
+# 工作目录默认 mktemp；--keep 保留并打印路径。
 # ============================================================================
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../../../.." && pwd)"
-SRC="$ROOT/compiler/src"
+BUILD="${BUILD:-$ROOT/compiler/build}"
 CXX="${CXX:-clang++}"
 WORK="${WORK:-$(mktemp -d /tmp/sysy_unit_XXXXXX)}"
 KEEP=0
 [ "${1:-}" = "--keep" ] && KEEP=1
 mkdir -p "$WORK"
-# -Werror：零警告是硬门禁（clang++ 对 mingw 目标的告警与本项目无关，已避开）。
-FLAGS=(--std=c++17 -Wall -Wextra -Wpedantic -Werror -O1 -I"$SRC")
-SUPPORT=("$SRC/support/SourceFile.cpp" "$SRC/support/Diagnostic.cpp")
-FRONTEND=("$SRC/frontend/Lexer.cpp" "$SRC/frontend/Parser.cpp" "$SRC/frontend/ParserStmtExpr.cpp"
-          "$SRC/frontend/AstPrinter.cpp" "$SRC/frontend/AstReader.cpp" "$SRC/frontend/ConstEval.cpp"
-          "$SRC/frontend/RuntimeLib.cpp" "$SRC/frontend/Sema.cpp" "$SRC/frontend/SemaStmt.cpp"
-          "$SRC/frontend/SemaExpr.cpp" "$SRC/frontend/SemaDecl.cpp" "$SRC/frontend/SemaDump.cpp"
-          "$SRC/frontend/InitLowering.cpp" "$SRC/frontend/InitLoweringDump.cpp"
-          "$SRC/structured/StructuredIR.cpp" "$SRC/structured/StructuredDump.cpp"
-          "$SRC/structured/StructuredReader.cpp" "$SRC/structured/StructuredVerifier.cpp"
-          "$SRC/structured/IRGenTypes.cpp" "$SRC/structured/IRGen.cpp" "$SRC/structured/IRGenStmt.cpp"
-          "$SRC/structured/LoopNormalize.cpp" "$SRC/structured/AllocaHoist.cpp"
-          "$SRC/structured/LoopAnalysis.cpp"
-          "$SRC/structured/LoopRewrite.cpp"
-          "$SRC/ir/"*.cpp "$SRC/structured/Flatten"*.cpp)
-ANALYSIS=("$SRC/analysis/"*.cpp)
-OPT=("$SRC/opt/Mem2Reg.cpp" "$SRC/opt/Mem2RegAnalysis.cpp")
-PASS_MANAGER=("$SRC/opt/FlatPassManager.cpp")
-TESTS=(
-  "test_runtime_catalog|$SRC/frontend/RuntimeLib.cpp"
-  "test_sourcefile|${SUPPORT[*]}"
-  "test_diagnostic|${SUPPORT[*]}"
-  "test_lexer|${SUPPORT[*]} ${FRONTEND[*]}"
-  "test_parser|${SUPPORT[*]} ${FRONTEND[*]}"
-  "test_sema|${SUPPORT[*]} ${FRONTEND[*]}"
-  "test_initlowering|${SUPPORT[*]} ${FRONTEND[*]}"
-  "test_const_remainder|${SUPPORT[*]} ${FRONTEND[*]}"
-  "test_structured|${SUPPORT[*]} ${FRONTEND[*]}" "test_loopnorm|${SUPPORT[*]} ${FRONTEND[*]}"
-  "test_flat|${SUPPORT[*]} ${FRONTEND[*]}" "test_ir_mutation|${SUPPORT[*]} ${FRONTEND[*]}" "test_value_use|${SUPPORT[*]} ${FRONTEND[*]}" "test_flat_f2i|${SUPPORT[*]} ${FRONTEND[*]}" "test_flat_dead_phi|${SUPPORT[*]} ${FRONTEND[*]}" "test_llvm_emitter|${SUPPORT[*]} ${FRONTEND[*]}"
-  "test_analysis_manager|${SUPPORT[*]} ${FRONTEND[*]} ${ANALYSIS[*]}"
-  "test_pass_manager|${SUPPORT[*]} ${FRONTEND[*]} ${ANALYSIS[*]} ${PASS_MANAGER[*]}"
-  "test_mem2reg|${SUPPORT[*]} ${FRONTEND[*]} ${ANALYSIS[*]} ${OPT[*]} ${PASS_MANAGER[*]}" "test_mem2reg_pass|${SUPPORT[*]} ${FRONTEND[*]} ${ANALYSIS[*]} ${OPT[*]} ${PASS_MANAGER[*]}")
-BENCHES=(
-  "bench_lexer|${SUPPORT[*]} ${FRONTEND[*]}"
-)
+
 echo "════════════════════════════════════════════════════════════"
-echo " 单元测试    $("$CXX" --version | head -1)"; echo " 工作目录: $WORK"
+echo " 单元测试    $("$CXX" --version 2>/dev/null | head -1 || echo 'CXX unavailable')"
+echo " 构建目录: $BUILD"
+echo " 工作目录: $WORK"
 echo "════════════════════════════════════════════════════════════"
 
-build_one() {   # $1 = 目标名, $2 = 依赖源文件
-  local t="$1" extra="$2"
-  # shellcheck disable=SC2206  # 这里就是要按空格拆开源文件列表
-  local deps=($extra)
-  local cmd=("$CXX" "${FLAGS[@]}" "$HERE/$t.cpp" "${deps[@]}" -o "$WORK/$t")
-  echo "\$ ${cmd[*]}"
-  if ! "${cmd[@]}" 2>"$WORK/$t.build.log"; then
-    echo "  ✘ 编译失败:"; sed 's/^/    /' "$WORK/$t.build.log"; return 1
-  fi
-  echo "  （编译零警告：-Wall -Wextra -Wpedantic -Werror）"
-  return 0
-}
+if [ ! -f "$BUILD/CMakeCache.txt" ]; then
+  cmake -S "$ROOT/compiler" -B "$BUILD" -G Ninja -DCMAKE_CXX_COMPILER="$CXX" || {
+    echo "  ✘ CMake 配置失败"; exit 1; }
+fi
+
+if ! cmake --build "$BUILD" --target test_runtime_catalog test_sourcefile test_diagnostic \
+     test_lexer test_parser test_sema test_initlowering test_const_remainder \
+     test_structured test_loopnorm test_flat test_ir_mutation test_value_use \
+     test_flat_f2i test_flat_dead_phi test_llvm_emitter test_analysis_manager \
+     test_pass_manager test_mem2reg test_mem2reg_pass bench_lexer \
+     >"$WORK/build.log" 2>&1; then
+  echo "  ✘ 单元测试构建失败："; tail -30 "$WORK/build.log" | sed 's/^/    /'
+  exit 1
+fi
+echo "  （构建通过：-Wall -Wextra -Wpedantic -Werror）"
 
 FAIL=0
-for entry in "${TESTS[@]}"; do
-  t="${entry%%|*}"; extra="${entry#*|}"
-  echo
-  echo "──── $t ────"
-  build_one "$t" "$extra" || { FAIL=1; continue; }
-  # test_parser 需要真实编译器二进制做 CLI 往返冒烟（可选参数：二进制 + 工作目录）
-  if [ "$t" = "test_parser" ]; then
-    "$WORK/$t" "$ROOT/compiler/build/compiler" "$WORK"
-  else
-    "$WORK/$t"
-  fi
-  rc=$?
-  if [ "$rc" = 0 ]; then
-    echo "  ✔ $t 通过"
-  else
-    echo "  ✘ $t 失败（退出码 $rc）"; FAIL=1
-  fi
-done
+# ctest covers every test except test_parser, whose CLI round-trip needs the
+# product binary and a writable directory.
+if ! (cd "$BUILD" && ctest --output-on-failure -E test_parser) >"$WORK/ctest.log" 2>&1; then
+  echo "  ✘ ctest 有失败："; tail -40 "$WORK/ctest.log" | sed 's/^/    /'
+  FAIL=1
+else
+  grep -E "tests passed|tests failed" "$WORK/ctest.log" | sed 's/^/  /'
+fi
 
-for entry in "${BENCHES[@]}"; do
-  t="${entry%%|*}"; extra="${entry#*|}"
-  echo
-  echo "──── $t（仅构建；用法见文件头，验证标准 §7.5 由它的输出佐证）────"
-  build_one "$t" "$extra" || FAIL=1
-done
+echo
+echo "──── test_parser（含 CLI 往返）────"
+if "$BUILD/unit/test_parser" "$BUILD/compiler" "$WORK"; then
+  echo "  ✔ test_parser 通过"
+else
+  echo "  ✘ test_parser 失败（退出码 $?）"; FAIL=1
+fi
 
 echo
 echo "════════════════════════════════════════════════════════════"

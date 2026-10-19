@@ -220,6 +220,25 @@ class ArchitectureTests(unittest.TestCase):
         self.assertTrue(any('structured component' in error
                             for error in check_f05(self.root)))
 
+    def test_s16b_foundation_audit_boundaries(self):
+        from check_foundation_audit import ANALYSES, check as check_audit
+        for rel, analysis in ANALYSES.items():
+            self.put(rel, f'struct {analysis} {{ '
+                     'static constexpr AnalysisScope scope = AnalysisScope::Function; '
+                     'static constexpr MutationKind revisionDependencies(); };')
+        self.put('src/opt/Good.cpp', '// no rebuilds here\n')
+        self.assertEqual([], check_audit(self.root))
+        self.put('src/opt/Bad.cpp', 'void f(){ m.rebuildCFG(); }\n')
+        self.assertTrue(any('manual rebuild' in error for error in check_audit(self.root)))
+        self.put('src/opt/Bad.cpp')
+        self.put('src/opt/Dom.cpp', 'DominatorTree tree(function);\n')
+        self.assertTrue(any('DominatorTree outside' in error
+                            for error in check_audit(self.root)))
+        self.put('src/opt/Dom.cpp')
+        self.put('src/ir/Bad.cpp', '#include "analysis/AnalysisManager.h"\n')
+        self.assertTrue(any('ir must not include analysis' in error
+                            for error in check_audit(self.root)))
+
     def budget(self):
         return subprocess.run([sys.executable, str(Path(__file__).with_name('check_line_budget.py')),
                                '--root', str(self.root)], capture_output=True, text=True)

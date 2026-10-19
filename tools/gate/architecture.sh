@@ -1,5 +1,5 @@
 hdr "A2. 架构边界、能力契约与判据反证"
-for check in check_architecture check_cli_capabilities check_ir_mutation_boundary check_mem2reg_pass_boundary check_f05_session_boundary; do
+for check in check_architecture check_cli_capabilities check_ir_mutation_boundary check_mem2reg_pass_boundary check_f05_session_boundary check_foundation_audit; do
   if python3 "$TOOLS/selftest/$check.py" >"$WORK/$check.log" 2>&1; then
     c_ok "$check：通过"
   else

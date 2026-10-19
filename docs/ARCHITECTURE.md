@@ -203,6 +203,17 @@ not claim linear time for constructing all SCC summaries. The read-only
 `freshnessExpansionCount()` is a cumulative diagnostic of actual expansions;
 it does not participate in cache validity or invalidation decisions.
 
+## S16b foundation audit (CLOSED / PASS)
+
+`tools/selftest/check_foundation_audit.py` enforces the structural controls:
+`DominatorTree` appears only in the shared `ir` implementation and the
+dominator analysis wrapper, `src/opt`/`src/analysis` do not call
+`rebuildCFG/rebuildUseDef`, `src/ir` does not include `analysis/`, and every
+analysis header declares its scope and revision dependencies.
+`test_foundation_audit` exercises the DataFlow/CFG/Memory/Calls invalidation
+matrix across the S12-S16 analyses and lazy recompute. The dated audit report
+under workspace `docs/audit/` records residual, non-blocking findings.
+
 ## S16 affine dependence analysis (CLOSED / PASS)
 
 `src/analysis/DependenceAnalysis.{h,cpp}` models an access as one affine

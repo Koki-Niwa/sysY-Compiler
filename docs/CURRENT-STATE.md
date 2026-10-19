@@ -152,6 +152,14 @@ pure; read/write/external effects are a least fixed point. Dependencies:
 cache reuse, revision invalidation and stale-graph rejection (33 checks).
 F00/F01/F02/F03/F04/F05 frozen acceptance remains unchanged; **S13 is next**.
 
+**S16b CLOSED / PASS** (full S09 **57 PASS / 0 FAIL / 2 expected SKIP**):
+the foundation audit adds `check_foundation_audit.py` (single dominator
+implementation, no manual rebuilds in analyses/passes, no `ir -> analysis`
+includes, every analysis declares scope/dependencies) and
+`test_foundation_audit` (14-check revision/invalidation matrix). Residual
+non-blocking findings and follow-up triggers are recorded in
+[`../docs/audit/S16B-FOUNDATION-AUDIT-2026-10-20.md`](../../docs/audit/S16B-FOUNDATION-AUDIT-2026-10-20.md).
+
 **S16 CLOSED / PASS** (full S09 **56/0/2**, `test_dependence` **13 checks**):
 `analysis/DependenceAnalysis` implements the affine dependence pipeline over
 one loop nest: GCD divisibility, a bounded Banerjee range test, and an exact

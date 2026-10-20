@@ -143,11 +143,13 @@ struct MapNest {
   GlobalAddr* input2 = nullptr;
   GlobalAddr* output = nullptr;
   explicit MapNest(int n) {
-    const Type* row = typePool().arrayOf(i32, n);
-    const Type* mat = typePool().arrayOf(row, n);
-    input = m.globalAddr(m.createGlobal("in", mat));
-    input2 = m.globalAddr(m.createGlobal("in2", mat));
-    output = m.globalAddr(m.createGlobal("out", mat));
+    const Type* inRowTy = typePool().arrayOf(i32, n + 1);
+    const Type* inMat = typePool().arrayOf(inRowTy, n + 1);
+    const Type* outRowTy = typePool().arrayOf(i32, n);
+    const Type* outMat = typePool().arrayOf(outRowTy, n);
+    input = m.globalAddr(m.createGlobal("in", inMat));
+    input2 = m.globalAddr(m.createGlobal("in2", inMat));
+    output = m.globalAddr(m.createGlobal("out", outMat));
     f = m.createFunction("main", i32);
     BasicBlock* pre = m.createBlock(f); BasicBlock* outer = m.createBlock(f);
     BasicBlock* inner = m.createBlock(f); BasicBlock* body = m.createBlock(f);
@@ -166,16 +168,22 @@ struct MapNest {
     add(m, inner, createCondBr(ic, body, outerLatch, {}));
     Instruction* oi64 = add(m, body, createCast(Opcode::SExt, oi, {}));
     Instruction* ij64 = add(m, body, createCast(Opcode::SExt, ij, {}));
-    Instruction* inRow = add(m, body, createGEP(row, input, oi64, {}));
-    Instruction* inPtr = add(m, body, createGEP(i32, inRow, ij64, {}));
+    Instruction* ijNext = add(m, body, createBin(Opcode::Add, ij,
+                                                 m.getIntConst(i32, 1), {}));
+    Instruction* ijNext64 = add(m, body, createCast(Opcode::SExt, ijNext, {}));
+    Instruction* inRowPtr = add(m, body, createGEP(inRowTy, input, oi64, {}));
+    Instruction* inPtr = add(m, body, createGEP(i32, inRowPtr, ij64, {}));
     Instruction* old = add(m, body, createLoad(i32, inPtr, {}));
-    Instruction* in2Row = add(m, body, createGEP(row, input2, oi64, {}));
+    Instruction* neighborPtr = add(m, body, createGEP(i32, inRowPtr, ijNext64, {}));
+    Instruction* neighbor = add(m, body, createLoad(i32, neighborPtr, {}));
+    Instruction* in2Row = add(m, body, createGEP(inRowTy, input2, oi64, {}));
     Instruction* in2Ptr = add(m, body, createGEP(i32, in2Row, ij64, {}));
     Instruction* second = add(m, body, createLoad(i32, in2Ptr, {}));
-    Instruction* oldSum = add(m, body, createBin(Opcode::Add, old, second, {}));
-    Instruction* val = add(m, body, createBin(Opcode::Add, oldSum, oi, {}));
-    Instruction* outRow = add(m, body, createGEP(row, output, oi64, {}));
-    Instruction* outPtr = add(m, body, createGEP(i32, outRow, ij64, {}));
+    Instruction* oldSum = add(m, body, createBin(Opcode::Add, old, neighbor, {}));
+    Instruction* fullSum = add(m, body, createBin(Opcode::Add, oldSum, second, {}));
+    Instruction* val = add(m, body, createBin(Opcode::Add, fullSum, oi, {}));
+    Instruction* outRowPtr = add(m, body, createGEP(outRowTy, output, oi64, {}));
+    Instruction* outPtr = add(m, body, createGEP(i32, outRowPtr, ij64, {}));
     add(m, body, createStore(i32, val, outPtr, {}));
     add(m, body, createBr(innerLatch, {}));
     Instruction* jn = add(m, innerLatch, createBin(Opcode::Add, ij,

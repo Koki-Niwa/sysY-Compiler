@@ -604,7 +604,8 @@ canonical two-level nest with either:
 - an integer-add reduction `g = g + f(i,j)` (one scalar-global load/store), or
 - a read-only-input/write-only-output map whose store indices are exactly the
   two loop indices and whose one or more global loads all come from bases
-  distinct from the output (e.g. `out[i][j] = f(in1[i][j], in2[i][j])`).
+  distinct from the output (e.g. a two-input/neighbor stencil
+  `out[i][j] = f(in[i][j], in[i][j+1], in2[i][j])`).
 
 Both are pure (no calls/alloca/memcpy), have no live-outs, and require both tile
 dimensions to be strictly partial. The reduction is legal because i32 addition is

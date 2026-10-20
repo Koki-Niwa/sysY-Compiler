@@ -249,6 +249,10 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
       "${CMAKE_CURRENT_SOURCE_DIR}/tools/selftest/blocking_equivalence.py"
       $<TARGET_FILE:test_blocking_transform>)
   set_tests_properties(test_blocking_equivalence PROPERTIES TIMEOUT 60)
+  add_test(NAME test_cli_help
+    COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/tools/selftest/cli_help.py"
+      $<TARGET_FILE:compiler>)
 
   add_executable(bench_lexer tools/selftest/unit/bench_lexer.cpp)
   target_include_directories(bench_lexer PRIVATE src)

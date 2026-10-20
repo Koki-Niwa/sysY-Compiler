@@ -18,6 +18,9 @@ struct UnrollContext {
   size_t tripCount = 0;
   size_t bodyInstructions = 0;
   size_t liveValues = 0;
+  // Length of the longest dependence chain in one iteration. 0 = unknown
+  // (no cap); otherwise unrolling cannot exceed bodyInstructions/criticalPath.
+  size_t criticalPath = 0;
   double hotness = 0.0;
 };
 struct UnrollPlan {
@@ -26,14 +29,16 @@ struct UnrollPlan {
   size_t projectedLiveValues = 0;
   double pressurePenalty = 0.0;
   size_t vectorFactor = 1;
+  double estimatedGain = 0.0;
   bool probeUsed = false;
   const char* reason = "";
 };
 using UnrollProbe =
     std::function<std::optional<bool>(size_t factor, size_t projectedLive)>;
-// Baseline heuristic only: hotness is caller-supplied, and no critical-path
-// model, joint VF/UF search or machine-register-bank estimate is implemented.
-// A successful plan is a cost candidate, not proof of transform legality.
+// Heuristic planning model: hotness is caller-supplied, the critical path is
+// an input, and VF/UF candidates are enumerated for the target profile. There
+// is no per-register-bank machine model or backend calibration; a successful
+// plan is a cost candidate, not proof of transform legality.
 UnrollPlan planUnroll(const UnrollContext& context, const UnrollProfile& profile,
                       const UnrollProbe& probe = {}, size_t probeBudget = 2);
 }}  // namespace sysy::flat

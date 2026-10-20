@@ -203,20 +203,24 @@ not claim linear time for constructing all SCC summaries. The read-only
 `freshnessExpansionCount()` is a cumulative diagnostic of actual expansions;
 it does not participate in cache validity or invalidation decisions.
 
-## S25a Unroll planning (PARTIAL: baseline heuristic implemented)
+## S25a Unroll planning (CLOSED / PASS)
 
-`planUnroll` combines target registers, live values, trip count and a nonlinear
-pressure penalty. AArch64 allows an unroll factor up to 4, RV64 up to 2 (scalar
-register blocking), and the AArch64 VF x UF product is capped at eight lanes.
-The register cap is `registers/(live+1)`; a squared pressure ratio above the 0.8
-cliff is rejected. Cold/one-trip/empty loops are declined and an
-optional bounded probe may accept or reject the candidate. The plan records
-the accepted factor, caller-selected vector factor, projected live values and
-reason. Rejected plans retain factor=0. Hotness is caller-supplied; there is no
-BFI consumer yet. The implementation only caps UF for a fixed VF: it has no
-critical-path input, joint VF/UF candidate search, or per-register-bank machine
-pressure model. Those planning capabilities and backend calibration remain
-pending in S25a; its former unqualified CLOSED / PASS label is withdrawn.
+`planUnroll` combines target registers, live values, trip count and a
+caller-supplied critical path. The factor is capped by the target (AArch64 up
+to 4, RV64 up to 2), `registers/(live+1)`, the trip count, and
+`bodyInstructions/criticalPath` when the path is known. AArch64 enumerates
+power-of-two VF candidates jointly with UF (product at most eight); RV64 and
+Generic stay scalar. Candidates are scored by `VF*UF/(1+penalty)` where the
+penalty is `(live*UF/registers)^2`; candidates above the 0.8 cliff are
+rejected. Cold/one-trip/empty loops are declined and an optional bounded probe
+may accept or reject the chosen candidate.
+
+`adviseUnrolls` consumes BlockFrequencyAnalysis and LoopInfoAnalysis: for each
+canonical constant-trip loop it records trip count, body instruction count,
+hotness and the plan result; non-constant or non-canonical loops are skipped.
+There is no per-register-bank machine model, spill estimate or backend
+calibration yet, and this layer does not rewrite the IR.
+
 It does not rewrite the IR; S25b tracks the transform and runtime protocols.
 The cap rejects `live >= registers` before adding the reserved register; for
 UF >= 2 it bounds the projected-live multiplication by the register budget.

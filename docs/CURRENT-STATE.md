@@ -575,24 +575,20 @@ a unit extent does not iterate over the dimension count.
 **S24b pending**: the tiled IR transform and the fixed matmul/conv/stencil
 runtime protocol. The plan deliberately does not rewrite loops yet.
 
-**S25a PARTIAL — baseline heuristic implemented** (original `867710f`
-delivery reported full S09 **57/0/2**; current `test_unroll` **14 checks**):
-`planUnroll` derives the unroll factor from the target profile and register
-budget instead of test-specific constants. AArch64 uses up to 4, RV64 uses 2,
-and for AArch64 the caller-selected VF x UF product is capped at eight lanes;
-the register cap is
-`registers/(live+1)`. A nonlinear `(live*factor/registers)^2` pressure penalty
-and a 0.8 cliff decline high-pressure candidates. Cold/one-trip/empty loops are
-declined; an optional bounded probe can accept/reject the candidate. The
-original pressure rejection test exercised only the register cap; paired tests
-now use live=9 and registers=40/41 to cross the actual 0.8 cliff with UF=4.
-The register-cap guard rejects `live >= registers` before `live+1` can
-overflow; SIZE_MAX boundary tests cover rejection and a valid large budget.
+**S25a CLOSED / PASS** (full S09 **57/0/2**, `test_unroll` **18** +
+`test_unroll_advisor` **3** checks): `planUnroll` now consumes a critical-path
+estimate (capping UF at body/criticalPath), enumerates power-of-two VF
+candidates jointly with UF for AArch64 (product at most eight) and scalar
+unroll for RV64, applies the `registers/(live+1)` cap, the nonlinear pressure
+penalty with its 0.8 cliff, and a bounded probe. `adviseUnrolls` consumes
+BlockFrequencyAnalysis + LoopInfoAnalysis for canonical constant-trip loops,
+recording trip count, body size, hotness and the resulting plan; non-constant
+trips are skipped rather than guessed. The register guard rejects
+`live >= registers` before `live+1` and SIZE_MAX boundaries are covered.
 
-The former unqualified CLOSED / PASS label is withdrawn: hotness is supplied by
-the caller, and critical-path input, joint VF/UF candidate selection, BFI
-integration, per-register-bank machine pressure and backend calibration remain
-pending planning work in S25a. A fixed VF product cap is not joint enumeration.
+Limits, recorded rather than hidden: there is no per-register-bank machine
+model, no spill estimate and no backend calibration; those belong to S25b
+together with the actual unroll/vector transform and runtime protocols.
 
 **S25b pending**: the actual unroll/vector-unroll transform, per-target
 runtime measurements, and the `transpose`/matmul protocols. The plan records

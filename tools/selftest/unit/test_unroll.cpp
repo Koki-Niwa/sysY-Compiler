@@ -42,6 +42,29 @@ void testTargets() {
   check(plan.unroll && plan.factor == 2 && plan.vectorFactor == 4,
         "AArch64 VF x UF budget caps the joint factor at 8");
 }
+void testCriticalPathAndJoint() {
+  UnrollProfile arm;
+  arm.target = UnrollTarget::AArch64;
+  arm.scalarRegisters = 32;
+  auto ctx = context(100, 6, 2);
+  ctx.criticalPath = 2;
+  auto plan = planUnroll(ctx, arm);
+  check(plan.unroll && plan.factor == 3 && plan.estimatedGain > 0.0,
+        "critical path caps the factor at body/criticalPath");
+  ctx.criticalPath = 6;
+  plan = planUnroll(ctx, arm);
+  check(!plan.unroll &&
+        std::strstr(plan.reason, "critical path") != nullptr,
+        "a fully serial body is not unrolled");
+  ctx.criticalPath = 0;
+  plan = planUnroll(ctx, arm);
+  check(plan.unroll && plan.factor == 4, "unknown critical path does not cap");
+  arm.vectorWidth = 4;
+  plan = planUnroll(context(100, 6, 4), arm);
+  check(plan.unroll && plan.factor == 2 && plan.vectorFactor == 4 &&
+        plan.estimatedGain > 7.0,
+        "joint VF x UF enumeration prefers the vectorized candidate");
+}
 void testRejections() {
   UnrollProfile p;
   p.scalarRegisters = 8;
@@ -122,6 +145,7 @@ void testProbe() {
 int main() {
   testTargets();
   testRejections();
+  testCriticalPathAndJoint();
   testPressureCliff();
   testRegisterBoundaries();
   testProbe();

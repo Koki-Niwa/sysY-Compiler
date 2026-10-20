@@ -164,6 +164,18 @@ reduction and both AddressPlan choices (11 checks). Transpose 220 → 202
 instructions; S20 corpus behavior 357 exact + 62 loop-count-only + 0
 observable differences + 121 skips, all pass.
 
+**S21a CLOSED / PASS** (full S09 **57/0/2**, `test_inline_v0` **13 checks**):
+`InlineV0Pass` now takes an optional bounded `InlineProbe`. Calls that pass the
+structural checks but exceed the conservative cost cap may request one of at
+most `probeBudget` probes; a profitable probe inlines, an unprofitable or
+absent probe declines. Every decision is recorded as an `InlineRecord` with
+frequency, instruction count, code-growth/latency estimate, probe use and
+reason. Tests cover probe-approved, probe-declined, no-probe fallback, records
+and inlining inside a loop while preserving its body/back edge.
+
+**S21b pending**: LoopRotate (while-to-do-while with duplicated guard and phi
+edge updates).
+
 **S20b CLOSED / PASS**: signed division by a non-power-of-two constant is
 now lowered with a 32-bit `mulhi` (16-bit limb emulation; Flat integer ops are
 i32-only), the magic reciprocal, a one-step remainder correction and an

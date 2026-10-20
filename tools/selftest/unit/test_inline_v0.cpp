@@ -173,11 +173,145 @@ void testMultiBlockAllocaRecursiveAndModel() {
     check(r.ok() && !r.changed && remains, "cost model cap is respected");
   }
 }
+void buildThreeAdd(Module& m, Function** calleeOut, Instruction** callOut,
+                   Function** callerOut) {
+  const Type* i32 = typePool().i32();
+  Function* callee = m.createFunction("add3", i32);
+  BasicBlock* cb = m.createBlock(callee);
+  Argument* x = m.createArgument(i32, {});
+  callee->addParam(x);
+  Instruction* a = add(m, cb, createBin(Opcode::Add, x, m.getIntConst(i32, 1), {}));
+  Instruction* b = add(m, cb, createBin(Opcode::Add, a, m.getIntConst(i32, 1), {}));
+  Instruction* c = add(m, cb, createBin(Opcode::Add, b, m.getIntConst(i32, 1), {}));
+  add(m, cb, createRet(c, {}));
+  Function* main = m.createFunction("main", i32);
+  BasicBlock* mb = m.createBlock(main);
+  *callOut = add(m, mb, createCall("add3", i32, {m.getIntConst(i32, 5)}, {}));
+  add(m, mb, createRet(*callOut, {}));
+  m.rebuildCFG(); m.rebuildUseDef();
+  *calleeOut = callee; *callerOut = main;
+}
+void testInlineInsideLoop() {
+  Module m; const Type* i32 = typePool().i32();
+  Function* callee = m.createFunction("inc", i32);
+  BasicBlock* cb = m.createBlock(callee);
+  Argument* arg = m.createArgument(i32, {});
+  callee->addParam(arg);
+  add(m, cb, createRet(add(m, cb, createBin(Opcode::Add, arg,
+                                            m.getIntConst(i32, 1), {})), {}));
+  Function* main = m.createFunction("main", i32);
+  BasicBlock* entry = m.createBlock(main);
+  BasicBlock* header = m.createBlock(main);
+  BasicBlock* body = m.createBlock(main);
+  BasicBlock* exit = m.createBlock(main);
+  add(m, entry, createBr(header, {}));
+  Instruction* phi = add(m, header, createPhi(i32, {m.getIntConst(i32, 0), nullptr},
+                                              {entry, body}, {}));
+  Instruction* cmp = add(m, header, createICmp(IPred::Slt, phi,
+                                               m.getIntConst(i32, 10), {}));
+  add(m, header, createCondBr(cmp, body, exit, {}));
+  Instruction* next = add(m, body, createBin(Opcode::Add, phi,
+                                             m.getIntConst(i32, 1), {}));
+  Instruction* call = add(m, body, createCall("inc", i32, {phi}, {}));
+  add(m, body, createBin(Opcode::Add, call, next, {}));
+  add(m, body, createBr(header, {}));
+  phi->setOperand(1, next);
+  add(m, exit, createRet(m.getIntConst(i32, 0), {}));
+  m.rebuildCFG(); m.rebuildUseDef();
+  FlatPassManager pm; pm.addPass(std::make_unique<InlineV0Pass>());
+  const auto r = pm.run(m);
+  bool hasCall = false;
+  for (BasicBlock* block : main->blocks())
+    for (Instruction* inst : block->insts())
+      if (inst->op() == Opcode::Call) hasCall = true;
+  check(r.ok() && r.changed && !hasCall &&
+        header->terminator()->op() == Opcode::Br &&
+        header->terminator()->numSuccs() == 2 &&
+        body->terminator()->op() == Opcode::Br &&
+        body->terminator()->succ(0) == header && verifyFlatModule(m).empty(),
+        "inlining inside a loop keeps the loop body and back edge intact");
+}
+void testProbe() {
+  {
+    Module m; Function* callee = nullptr; Instruction* call = nullptr;
+    Function* main = nullptr;
+    buildThreeAdd(m, &callee, &call, &main);
+    Model model(2);
+    size_t probes = 0;
+    auto pass = std::make_unique<InlineV0Pass>(
+        &model, CostContext{},
+        [&](const InlineProbeRequest&) -> std::optional<InlineProbeResult> {
+          ++probes;
+          return InlineProbeResult{true, -2.0, 4.0};
+        }, 1);
+    InlineV0Pass* raw = pass.get();
+    FlatPassManager pm; pm.addPass(std::move(pass));
+    const auto r = pm.run(m);
+    bool hasCall = false;
+    for (BasicBlock* block : main->blocks())
+      for (Instruction* inst : block->insts())
+        if (inst->op() == Opcode::Call) hasCall = true;
+    check(r.ok() && r.changed && !hasCall && probes == 1 &&
+          verifyFlatModule(m).empty(), "profitable probe inlines a larger hot callee");
+    bool found = false;
+    for (const InlineRecord& record : raw->records())
+      if (record.inlined) {
+        found = record.probeUsed && record.frequency >= 0.5 &&
+                record.codeGrowth == 4.0 && record.reason == "probe approved";
+      }
+    check(found, "inline record stores probe basis, frequency and code growth");
+  }
+  {
+    Module m; Function* callee = nullptr; Instruction* call = nullptr;
+    Function* main = nullptr;
+    buildThreeAdd(m, &callee, &call, &main);
+    Model model(2);
+    auto pass = std::make_unique<InlineV0Pass>(
+        &model, CostContext{},
+        [](const InlineProbeRequest&) -> std::optional<InlineProbeResult> {
+          return InlineProbeResult{false, 1.0, 4.0};
+        }, 1);
+    InlineV0Pass* raw = pass.get();
+    FlatPassManager pm; pm.addPass(std::move(pass));
+    const auto r = pm.run(m);
+    bool hasCall = false;
+    for (BasicBlock* block : main->blocks())
+      for (Instruction* inst : block->insts())
+        if (inst->op() == Opcode::Call) hasCall = true;
+    bool declined = false;
+    for (const InlineRecord& record : raw->records())
+      if (!record.inlined && record.probeUsed) declined = true;
+    check(r.ok() && !r.changed && hasCall && declined,
+          "unprofitable probe keeps the call");
+  }
+  {
+    Module m; Function* callee = nullptr; Instruction* call = nullptr;
+    Function* main = nullptr;
+    buildThreeAdd(m, &callee, &call, &main);
+    Model model(2);
+    auto pass = std::make_unique<InlineV0Pass>(&model);
+    InlineV0Pass* raw = pass.get();
+    FlatPassManager pm; pm.addPass(std::move(pass));
+    const auto r = pm.run(m);
+    bool hasCall = false;
+    for (BasicBlock* block : main->blocks())
+      for (Instruction* inst : block->insts())
+        if (inst->op() == Opcode::Call) hasCall = true;
+    bool fallback = false;
+    for (const InlineRecord& record : raw->records())
+      if (!record.inlined && !record.probeUsed && record.reason == "cost cap")
+        fallback = true;
+    check(r.ok() && !r.changed && hasCall && fallback,
+          "no probe uses the conservative cost fallback");
+  }
+}
 }  // namespace
 int main() {
   testInlinesHotTinyCallee();
   testColdAndUnsupportedAreDeclined();
   testMultiBlockAllocaRecursiveAndModel();
+  testInlineInsideLoop();
+  testProbe();
   std::printf("S15_CHECKS=%d FAILURES=%d\n", checks, failures);
   return failures ? 1 : 0;
 }

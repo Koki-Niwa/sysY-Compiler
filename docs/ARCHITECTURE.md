@@ -203,6 +203,19 @@ not claim linear time for constructing all SCC summaries. The read-only
 `freshnessExpansionCount()` is a cumulative diagnostic of actual expansions;
 it does not participate in cache validity or invalidation decisions.
 
+## S21a Early inlining with bounded probe (CLOSED / PASS)
+
+`InlineV0Pass` accepts an optional `InlineProbe` with a per-run budget. A
+structurally eligible call above the conservative size/cost cap may request a
+bounded probe; a profitable result permits the inline, while an unprofitable
+result or no probe keeps the call. Each decision appends an `InlineRecord`
+(frequency, instruction count, code-growth and latency estimate, probe use,
+reason: hot tiny / probe approved / probe declined / cost cap / cold).
+Inlining only inserts into the caller block and rewrites the call, so an
+enclosing loop's blocks and back edge remain intact.
+
+LoopRotate is not implemented yet; S21b tracks it.
+
 ## S20 SCEV, LICM, strength reduction and AddressPlan (CLOSED / PASS)
 
 `ScalarEvolutionAnalysis` maps canonical loop phis to `{start,+,step}` AddRec

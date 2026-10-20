@@ -20,13 +20,16 @@ bool isModuleValue(const Value* value) {
 }
 }  // namespace
 
-InlineV0Pass::InlineV0Pass(const TargetCostModel* model, CostContext context)
-    : FunctionPass("inline-v0"), model_(model), costContext_(context) {}
+InlineV0Pass::InlineV0Pass(const TargetCostModel* model, CostContext context,
+                           InlineProbe probe, size_t probeBudget)
+    : FunctionPass("inline-v0"), model_(model), costContext_(context),
+      probe_(std::move(probe)), probeBudget_(probeBudget) {}
 
 PassResult InlineV0Pass::run(Function& function, PassContext& context) {
   Module& module = context.analyses().module();
   IRMutator& mutator = context.mutator();
   PassResult result;
+  size_t probesLeft = probeBudget_;
   const TargetCostModel* model = model_ != nullptr ? model_ : nullptr;
   ConservativeCostModel fallback;
   if (model == nullptr) model = &fallback;
@@ -110,18 +113,44 @@ PassResult InlineV0Pass::run(Function& function, PassContext& context) {
     }
     const double hotness =
         frequencies.get()->frequency(call->parent()->index()) / entryFrequency;
-    if (hotness < 0.5) {
-      ++result.stats.counters["declined-cold"];
-      continue;
-    }
-    if (bodySize > model->maxInlineInstructions(costContext_)) {
-      ++result.stats.counters["declined-cost"];
-      continue;
-    }
     double bodyCost = 0.0;
     for (Instruction* inst : entry->insts())
       if (inst != terminator) bodyCost += model->instructionCost(*inst, costContext_);
-    if (bodyCost > model->callOverhead(costContext_) + 4.0) {
+    const double overhead = model->callOverhead(costContext_);
+    InlineRecord record;
+    record.call = call;
+    record.frequency = hotness;
+    record.instructions = bodySize;
+    record.codeGrowth = static_cast<double>(bodySize);
+    record.latencyDelta = overhead - bodyCost;
+    if (hotness < 0.5) {
+      record.reason = "cold";
+      records_.push_back(record);
+      ++result.stats.counters["declined-cold"];
+      continue;
+    }
+    const bool overCap =
+        bodySize > model->maxInlineInstructions(costContext_) ||
+        bodyCost > overhead + 4.0;
+    bool allow = !overCap;
+    if (overCap && probe_ && probesLeft > 0 && bodySize <= 32) {
+      InlineProbeRequest request;
+      request.call = call;
+      request.callee = callee;
+      request.frequency = hotness;
+      request.instructions = bodySize;
+      const std::optional<InlineProbeResult> probeResult = probe_(request);
+      --probesLeft;
+      record.probeUsed = true;
+      if (probeResult.has_value()) {
+        record.latencyDelta = probeResult->latencyDelta;
+        record.codeGrowth = probeResult->codeGrowth;
+        allow = probeResult->profitable;
+      }
+    }
+    if (!allow) {
+      record.reason = record.probeUsed ? "probe declined" : "cost cap";
+      records_.push_back(record);
       ++result.stats.counters["declined-cost"];
       continue;
     }
@@ -199,6 +228,9 @@ PassResult InlineV0Pass::run(Function& function, PassContext& context) {
       result.diagnostic = "inline-v0 call removal rejected";
       return result;
     }
+    record.inlined = true;
+    record.reason = record.probeUsed ? "probe approved" : "hot tiny";
+    records_.push_back(record);
     ++result.stats.counters["inlined-calls"];
   }
   result.status = context.mutator().summary().changed() ? PassStatus::Applied

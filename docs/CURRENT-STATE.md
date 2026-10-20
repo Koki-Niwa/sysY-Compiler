@@ -398,7 +398,7 @@ all three committed file-content hashes.
 Mem2Reg gates **PASS**; trajectory **357 exact / 62 loop-count-only /
 0 observable differences / 121 categorized skips**. LLVM manifest
 **540 total / 490 supported PASS / 50 tensor frontend reject /
-0 FAIL / 0 TIMEOUT**. `test_pass_manager` **41 checks /
+0 FAIL / 0 TIMEOUT**. `test_pass_manager` **47 checks /
 8 negative controls / 0 failures**; unit runner **exit=0**.
 Full O1 Flat protocol: `IDENTITIES=540`, `SUPPORTED=490`,
 `BASELINE_TENSOR_REJECT=50`, `CURRENT_TENSOR_REJECT=50`,
@@ -582,7 +582,7 @@ for newly added edges and rejects duplicate incoming values on retained edges.
 The matcher now rejects loop-defined live-outs and non-canonical exit phis before
 editing; non-unit steps advance by `T*step` and clamp to the terminal value on
 the original recurrence. Tests: `test_cfg_phi_edges` **12** and
-`test_tiling_transform` **41**; CTest `test_tiling_equivalence` executes seven
+`test_tiling_transform` **47**; CTest `test_tiling_equivalence` executes seven
 actually-transformed before/after modules and compares FlatExec observables,
 including the step-3 oracle (6048).
 
@@ -605,7 +605,7 @@ scalar-global load/store and only pure arithmetic. Integer addition modulo i32
 is associative/commutative, so the blocked order preserves the final global
 value. It requires both tile dimensions to be strictly partial (no full-extent degenerate order), consumes `BlockingPlan`, builds the four-level tile nest (i0,j0,i,j),
 clones the reduction body, and neutralizes the now-unreachable original headers'
-phis. `test_blocking_transform` has **41 checks**; CTest
+phis. `test_blocking_transform` has **47 checks**; CTest
 `test_blocking_equivalence` executes the genuinely reordered reduction and
 requires identical final memory/return (write order intentionally differs).
 This is not matmul/conv/stencil and has no target runtime; S24b remains

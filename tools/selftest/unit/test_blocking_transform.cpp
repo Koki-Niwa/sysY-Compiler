@@ -33,7 +33,8 @@ struct Nest {
   GlobalAddr* global = nullptr;
   Nest(int n, int innerBound, bool extraStore = false, bool latchStore = false,
        bool badHeaderCond = false, bool preOperand = false,
-       bool headerOperand = false, bool exitPhi = false) {
+       bool headerOperand = false, bool exitPhi = false,
+       bool sameStore = false, bool innerLatchStore = false) {
     global = m.globalAddr(m.createGlobal("g", i32));
     GlobalAddr* other = m.globalAddr(m.createGlobal("h", i32));
     f = m.createFunction("main", i32);
@@ -67,9 +68,11 @@ struct Nest {
     Instruction* sum = add(m, body, createBin(Opcode::Add, old, value, {}));
     add(m, body, createStore(i32, sum, global, {}));
     if (extraStore) add(m, body, createStore(i32, sum, other, {}));
+    if (sameStore) add(m, body, createStore(i32, sum, global, {}));
     add(m, body, createBr(innerLatch, {}));
     Instruction* jn = add(m, innerLatch, createBin(Opcode::Add, ij,
                                                    m.getIntConst(i32, 1), {}));
+    if (innerLatchStore) add(m, innerLatch, createStore(i32, jn, other, {}));
     add(m, innerLatch, createBr(inner, {}));
     Instruction* in = add(m, outerLatch, createBin(Opcode::Add, oi,
                                                    m.getIntConst(i32, 1), {}));
@@ -99,9 +102,10 @@ void saveIR(const std::string& name, const std::string& before, const Module& m)
 void runCase(const char* name, int n, int m, bool extraStore, bool expectChange,
              bool latchStore = false, bool badHeaderCond = false,
              bool preOperand = false, bool headerOperand = false,
-             bool exitPhi = false) {
+             bool exitPhi = false, bool sameStore = false,
+             bool innerLatchStore = false) {
   Nest nest(n, m, extraStore, latchStore, badHeaderCond, preOperand, headerOperand,
-            exitPhi);
+            exitPhi, sameStore, innerLatchStore);
   check(verifyFlatModule(nest.m).empty(), "blocking fixture verifies");
   const std::string before = dumpModule(nest.m);
   FlatPassManager pm; pm.addPass(std::make_unique<LoopBlockingPass>());
@@ -140,6 +144,10 @@ int main(int argc, char** argv) {
   runCase("inner_full", 65, 64, false, false);
   runCase("outer_full", 16, 1000, false, false);
   runCase("extra_store", 128, 128, true, false);
+  runCase("same_store", 128, 128, false, false, false, false, false, false,
+          true);
+  runCase("inner_latch_store", 128, 128, false, false, false, false, false,
+          false, false, true);
   runCase("latch_store", 128, 128, false, false, true);
   runCase("bad_header_cond", 128, 128, false, false, false, true);
   runCase("preheader_operand", 128, 128, false, false, false, false, true);

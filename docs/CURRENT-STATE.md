@@ -590,9 +590,17 @@ Still missing for S24b: two-dimensional blocking (which reorders tiles and
 needs a dependence-legality proof), matmul/conv/stencil fixed-protocol runtime
 measurements, and target-backed evidence. No runtime gain is claimed.
 
-**S24c pending**: 2D blocking order plus the fixed matmul/conv/stencil runtime
-protocol; the current transform only strip-mines one loop without changing the
-iteration order.
+**S24c-a CLOSED / PASS (planning)** — `BlockingPlan` selects a 2D tile
+(`tileOuter`, `tileInner`), records the tile footprint, chooses row-major or
+column-major blocked order from unit strides, and declines dependence, cold,
+small, fitted and over-capacity cases. `test_blocking` has **16 checks**
+(exact half-cache boundary, one element above/below, column-major, dependence,
+cold, SIZE_MAX saturation, oversized element). This layer does **not** rewrite
+IR and is not yet consumed by a transform.
+
+**S24c-b pending**: 2D blocked-order transform with a dependence proof and the
+fixed matmul/conv/stencil runtime protocol. S24b remains order-preserving
+strip-mining only.
 
 **S25a CLOSED / PASS** (full S09 **57/0/2**, `test_unroll` **20** +
 `test_unroll_advisor` **13** checks): `planUnroll` now consumes a critical-path

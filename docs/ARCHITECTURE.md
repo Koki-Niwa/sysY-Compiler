@@ -234,6 +234,17 @@ comparing FlatExec observables. Two-dimensional blocking (which reorders tiles)
 and fixed matmul/conv/stencil runtime measurements remain S24c; this pass is not
 in the default CLI pipeline and no runtime gain is claimed.
 
+## S24c-a 2D blocking plan (CLOSED / PASS, planning only)
+
+`planBlocking` consumes a `BlockingContext` (outer/inner trips, element strides,
+element bytes, hotness, a caller-supplied dependence-free flag) and a
+`MemoryModel`. It declines dependence, cold, small, already-fitting and
+over-capacity cases; otherwise it shrinks power-of-two tile dimensions until the
+tile footprint fits half the cache, and picks blocked order from the unit-stride
+dimension (row-major i-tile first, or column-major j-tile first). The plan is
+deterministic, saturating and has exact half-cache boundary tests. It does not
+rewrite IR; the blocked transform and runtime protocol remain S24c-b.
+
 ## S25b Pair unrolling (PARTIAL)
 
 `LoopUnrollPass` matches a two-block canonical loop: an i32 induction phi,

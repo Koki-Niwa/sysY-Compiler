@@ -99,6 +99,7 @@ add_library(sysy_analysis STATIC
   src/analysis/TailCallAnalysis.cpp
   src/analysis/InterchangePlan.cpp
   src/analysis/TilePlan.cpp
+  src/analysis/BlockingPlan.cpp
   src/analysis/UnrollPlan.cpp
   src/analysis/UnrollAdvisor.cpp)
 target_include_directories(sysy_analysis PUBLIC src)
@@ -223,6 +224,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   sysy_unit_test(test_tco sysy_opt)
   sysy_unit_test(test_interchange sysy_analysis)
   sysy_unit_test(test_tile sysy_analysis)
+  sysy_unit_test(test_blocking sysy_analysis)
   sysy_unit_test(test_unroll sysy_analysis)
   sysy_unit_test(test_unroll_advisor sysy_analysis)
   sysy_unit_test(test_interchange_transform sysy_opt)

@@ -122,7 +122,8 @@ add_library(sysy_opt STATIC
   src/opt/LoopRotate.cpp
   src/opt/TailRecursion.cpp
   src/opt/LoopInterchange.cpp
-  src/opt/LoopTiling.cpp)
+  src/opt/LoopTiling.cpp
+  src/opt/LoopUnroll.cpp)
 target_include_directories(sysy_opt PUBLIC src)
 target_link_libraries(sysy_opt PUBLIC sysy_analysis)
 
@@ -227,12 +228,18 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   sysy_unit_test(test_interchange_transform sysy_opt)
   sysy_unit_test(test_cfg_phi_edges sysy_opt)
   sysy_unit_test(test_tiling_transform sysy_opt)
+  sysy_unit_test(test_unroll_transform sysy_opt)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
   add_test(NAME test_tiling_equivalence
     COMMAND "${Python3_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/tools/selftest/tiling_equivalence.py"
       $<TARGET_FILE:test_tiling_transform>)
   set_tests_properties(test_tiling_equivalence PROPERTIES TIMEOUT 60)
+  add_test(NAME test_unroll_equivalence
+    COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/tools/selftest/unroll_equivalence.py"
+      $<TARGET_FILE:test_unroll_transform>)
+  set_tests_properties(test_unroll_equivalence PROPERTIES TIMEOUT 60)
 
   add_executable(bench_lexer tools/selftest/unit/bench_lexer.cpp)
   target_include_directories(bench_lexer PRIVATE src)

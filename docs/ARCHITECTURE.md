@@ -234,6 +234,20 @@ comparing FlatExec observables. Two-dimensional blocking (which reorders tiles)
 and fixed matmul/conv/stencil runtime measurements remain S24c; this pass is not
 in the default CLI pipeline and no runtime gain is claimed.
 
+## S25b Pair unrolling (PARTIAL)
+
+`LoopUnrollPass` matches a two-block canonical loop: an i32 induction phi,
+constant start/bound/positive step, one body and a unique latch, with no
+loop-defined live-outs, body phi or alloca. Only even trip counts are accepted;
+the body is cloned once, the header guard becomes `i < bound - step`, the first
+body executes at `i`, the clone at `i+step`, and the header advances by
+`2*step`. The body clone maps the phi to `i+step`; the old back edge is
+redirected so the header keeps exactly the preheader and the new pair edge.
+Odd trips decline without mutation (tail loops are not implemented yet).
+`test_unroll_equivalence` requires a real IR change and then compares FlatExec
+observables. Vectorization, pressure/spill measurements and target runtime are
+not implemented; the pass is not in the default pipeline.
+
 ## S25a Unroll planning (CLOSED / PASS)
 
 `planUnroll` combines target registers, live values, trip count and a

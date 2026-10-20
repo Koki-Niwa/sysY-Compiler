@@ -31,7 +31,7 @@ if ! cmake --build "$BUILD" --target compiler test_runtime_catalog test_sourcefi
      test_lexer test_parser test_sema test_initlowering test_const_remainder test_flat_reader \
      test_structured test_loopnorm test_flat test_ir_mutation test_value_use \
      test_flat_f2i test_flat_dead_phi test_llvm_emitter test_analysis_manager test_interprocedural test_alias test_cfg_analysis test_hotness test_dependence test_foundation_audit \
-     test_pass_manager test_mem2reg test_mem2reg_pass test_inline_v0 test_s17 test_rewrite test_s19 test_s20 test_looprotate test_tailcall test_tco test_interchange test_tile test_unroll test_unroll_advisor test_interchange_transform test_cfg_phi_edges test_tiling_transform bench_lexer \
+     test_pass_manager test_mem2reg test_mem2reg_pass test_inline_v0 test_s17 test_rewrite test_s19 test_s20 test_looprotate test_tailcall test_tco test_interchange test_tile test_unroll test_unroll_advisor test_interchange_transform test_cfg_phi_edges test_tiling_transform test_unroll_transform bench_lexer \
      >"$WORK/build.log" 2>&1; then
   echo "  ✘ 单元测试构建失败："; tail -30 "$WORK/build.log" | sed 's/^/    /'
   exit 1

@@ -181,6 +181,18 @@ stack object (transitively via alloca); the result exposes per-call reasons and
 an all-safe flag. `test_tailcall` covers direct/general, non-tail result use,
 mutual recursion and alloca-capturing arguments.
 
+**S23a CLOSED / PASS** (full S09 **57/0/2**, `test_interchange` **7 checks**):
+`planInterchange` decides adjacent loop interchange legality from exact
+dependence distance vectors (uniform nonnegative/nonpositive directions),
+requires a hot nest, and compares cache-line traffic before/after with a
+`MemoryModel` (64/128-byte lines). The plan records the outer/inner indices,
+strides, traffic, hotness and reason; a target line size can change the
+benefit decision. The test includes a hand-checked equivalence oracle over
+legal/illegal directions.
+
+**S23b pending**: the actual structured/F lat IR loop interchange transform and
+runtime evidence. The planner deliberately does not rewrite loops yet.
+
 **S22b CLOSED / PASS (single-block scope)**: `TailRecursionEliminationPass`
 consumes `TailCallAnalysis` and transforms a one-block function whose only
 return is a direct self tail call. Parameters are stored in entry-block slots;

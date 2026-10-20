@@ -203,6 +203,16 @@ not claim linear time for constructing all SCC summaries. The read-only
 `freshnessExpansionCount()` is a cumulative diagnostic of actual expansions;
 it does not participate in cache validity or invalidation decisions.
 
+## S23a Interchange planning (CLOSED / PASS)
+
+`planInterchange` combines dependence legality with a cache-line cost model.
+It accepts exact dependence distance vectors only; a pair is legal when every
+vector is uniformly nonnegative or nonpositive, so swapping preserves the
+dependence direction. A nest must be hot (>=0.5 of entry frequency) to be
+profitable. `MemoryModel` converts a byte stride to cache lines per element;
+the plan records old/new inner strides, line traffic, hotness and the reason.
+The planner is a decision layer; the IR transform is S23b.
+
 ## S22a Tail-call classification (CLOSED / PASS)
 
 `TailCallAnalysis` is a Function-scope consumer of `CallGraphAnalysis` and

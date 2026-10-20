@@ -9,14 +9,44 @@ size_t saturatingMul(size_t a, size_t b) {
     return std::numeric_limits<size_t>::max();
   return a * b;
 }
+size_t saturatingAdd(size_t a, size_t b) {
+  if (a > std::numeric_limits<size_t>::max() - b)
+    return std::numeric_limits<size_t>::max();
+  return a + b;
+}
 size_t floorPow2(size_t value) {
   if (value == 0) return 0;
   size_t result = 1;
   while (result <= value / 2) result *= 2;
   return result;
 }
-size_t tileBytes(size_t outer, size_t inner, size_t elementBytes) {
-  return saturatingMul(saturatingMul(outer, inner), elementBytes);
+size_t lineFootprint(size_t outer, size_t inner, size_t outerStride,
+                     size_t innerStride, size_t elementBytes, size_t lineBytes) {
+  if (lineBytes == 0) lineBytes = 1;
+  // Choose the smaller-stride axis as the per-row span; the other axis's
+  // iterations are counted as separate rows. This is an upper bound and never
+  // undercounts lines shared by a strided rectangle.
+  size_t rows = 0, span = 0;
+  if (innerStride <= outerStride) {
+    rows = outer;
+    span = saturatingMul(
+        saturatingMul(inner > 1 ? inner - 1 : 0, innerStride), elementBytes);
+  } else {
+    rows = inner;
+    span = saturatingMul(
+        saturatingMul(outer > 1 ? outer - 1 : 0, outerStride), elementBytes);
+  }
+  // Include the last element's own bytes; an element larger than a line must
+  // be charged all of its lines.
+  span = saturatingAdd(span, elementBytes);
+  const size_t linesPerRow =
+      span == 0 ? 0 : 1 + (span - 1) / lineBytes;
+  return saturatingMul(rows, saturatingMul(linesPerRow, lineBytes));
+}
+size_t tileBytes(size_t outer, size_t inner, const BlockingContext& context,
+                 const MemoryModel& model) {
+  return lineFootprint(outer, inner, context.outerStride, context.innerStride,
+                       context.elementBytes, model.cacheLineBytes);
 }
 }  // namespace
 BlockingPlan planBlocking(const BlockingContext& context, const MemoryModel& model) {
@@ -34,7 +64,7 @@ BlockingPlan planBlocking(const BlockingContext& context, const MemoryModel& mod
     return plan;
   }
   const size_t fullBytes =
-      tileBytes(context.outerTrip, context.innerTrip, context.elementBytes);
+      tileBytes(context.outerTrip, context.innerTrip, context, model);
   plan.workingSetBytes = fullBytes;
   const size_t budget = model.cacheBytes / 2;
   if (fullBytes <= budget) {
@@ -50,13 +80,17 @@ BlockingPlan planBlocking(const BlockingContext& context, const MemoryModel& mod
     return plan;
   }
   while (outer > 1 || inner > 1) {
-    if (tileBytes(outer, inner, context.elementBytes) <= budget) break;
+    if (tileBytes(outer, inner, context, model) <= budget) break;
     if (outer >= inner && outer > 1) outer /= 2;
     else if (inner > 1) inner /= 2;
     else outer /= 2;
   }
-  if (tileBytes(outer, inner, context.elementBytes) > budget) {
+  if (tileBytes(outer, inner, context, model) > budget) {
     plan.reason = "capacity";
+    return plan;
+  }
+  if (outer < 8 || inner < 8) {
+    plan.reason = "minimum tile";
     return plan;
   }
   if (outer >= context.outerTrip && inner >= context.innerTrip) {
@@ -66,7 +100,7 @@ BlockingPlan planBlocking(const BlockingContext& context, const MemoryModel& mod
   plan.block = true;
   plan.tileOuter = outer;
   plan.tileInner = inner;
-  plan.workingSetBytes = tileBytes(outer, inner, context.elementBytes);
+  plan.workingSetBytes = tileBytes(outer, inner, context, model);
   plan.outerTileFirst = true;
   if (context.outerStride == 1 && context.innerStride >= context.outerTrip)
     plan.outerTileFirst = false;  // column-major: keep i innermost

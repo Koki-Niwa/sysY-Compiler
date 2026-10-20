@@ -81,8 +81,22 @@ bool matchUnroll(const Function& function, const LoopEntry& loop, Induction& out
     return false;
   for (Instruction* inst : exit->insts())
     if (inst->op() == Opcode::Phi) return false;
+  std::vector<Instruction*> bodyInsts;
   for (Instruction* inst : body->insts())
     if (inst->op() == Opcode::Phi || inst->op() == Opcode::Alloca) return false;
+    else if (inst != body->terminator()) bodyInsts.push_back(inst);
+  // Every cloned operand must be locally defined, the induction phi, a
+  // constant/global, or an argument. Reject other header/outside values before
+  // creating any block so a clone failure cannot leave partial IR.
+  for (Instruction* inst : bodyInsts)
+    for (size_t i = 0; i < inst->numOperands(); ++i) {
+      const Value* operand = inst->operand(i);
+      if (operand == phi || operand->isConstant() || operand->isGlobalAddr() ||
+          operand->isArgument())
+        continue;
+      if (std::find(bodyInsts.begin(), bodyInsts.end(), operand) == bodyInsts.end())
+        return false;
+    }
   // The clone re-executes every body definition; reject any live-out before
   // touching IR (exit-value reconstruction is not implemented).
   for (size_t index : loop.blocks)
@@ -134,7 +148,8 @@ Instruction* clone(Module& module, IRMutator& mutator, BasicBlock* block,
     if (it != mapping.end()) {
       copy->addOperand(it->second);
     } else if (operand != nullptr &&
-               (operand->isConstant() || operand->isGlobalAddr())) {
+               (operand->isConstant() || operand->isGlobalAddr() ||
+                operand->isArgument())) {
       copy->addOperand(const_cast<Value*>(operand));
     } else {
       mutator.discardDetached({copy});

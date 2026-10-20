@@ -593,8 +593,9 @@ measurements, and target-backed evidence. No runtime gain is claimed.
 **S24c-a CLOSED / PASS (planning)** — `BlockingPlan` selects a 2D tile
 (`tileOuter`, `tileInner`), records the tile footprint, chooses row-major or
 column-major blocked order from unit strides, and declines dependence, cold,
-small, fitted and over-capacity cases. `test_blocking` has **17 checks**
-(exact half-cache boundary, one element above/below, large-trip cache sizing,
+small, fitted and over-capacity cases. Footprints are cache-line upper bounds,
+not raw element bytes; `dependenceFree` defaults to false so callers must opt in. `test_blocking` has **19 checks**
+(exact half-cache line footprint, one element above/below, large-trip sizing,
 column-major, dependence, cold, SIZE_MAX saturation, oversized element). This layer does **not** rewrite
 IR and is not yet consumed by a transform.
 
@@ -623,11 +624,11 @@ body, no loop-defined live-outs, no body phi/alloca). The chain length is
 `min(plan.factor, 4)`; the header guard becomes
 `i < bound - (factor-1)*step`, the chain executes `factor` body copies at
 `i..i+(factor-1)*step`, and the header advances by `factor*step`. A single tail
-loop consumes the remainder one body at a time, so all trip counts >= 2 are
-covered. `test_unroll_transform` has **89 checks**; CTest
+loop consumes the remainder one body at a time, so every representable, non-overflowing trip count >= 2 is
+covered; overflowing recurrences decline unchanged. `test_unroll_transform` has **99 checks**; CTest
 `test_unroll_equivalence` executes eight genuinely transformed cases
 (even/odd/step-3, non-aligned, near i32 bounds, wide step) and compares FlatExec
-observables. Vectorization, pressure/spill measurements and per-target runtime
+observables. Body operands are prevalidated; arguments are cloneable. Vectorization, pressure/spill measurements and per-target runtime
 remain S25b follow-up; the pass is not in the default pipeline.
 
 ## S23 audit fixes (2026-10-20)

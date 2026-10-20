@@ -114,6 +114,79 @@ void runCase(const char* name, int start, int bound, int step, bool liveOut,
     check(before == dumpModule(loop.m), "unsupported loop is left unchanged");
   }
 }
+void testPreheaderOperandDeclined() {
+  Module m;
+  const Type* i32 = typePool().i32();
+  Function* f = m.createFunction("main", i32);
+  GlobalAddr* global = m.globalAddr(m.createGlobal("g", i32));
+  BasicBlock* pre = m.createBlock(f); BasicBlock* header = m.createBlock(f);
+  BasicBlock* body = m.createBlock(f); BasicBlock* exit = m.createBlock(f);
+  Instruction* outside = add(m, pre, createBin(Opcode::Add,
+                                               m.getIntConst(i32, 1),
+                                               m.getIntConst(i32, 2), {}));
+  add(m, pre, createBr(header, {}));
+  Instruction* phi = add(m, header, createPhi(i32, {m.getIntConst(i32, 0), nullptr},
+                                             {pre, body}, {}));
+  Instruction* cmp = add(m, header, createICmp(IPred::Slt, phi,
+                                               m.getIntConst(i32, 4), {}));
+  add(m, header, createCondBr(cmp, body, exit, {}));
+  Instruction* old = add(m, body, createLoad(i32, global, {}));
+  Instruction* sum = add(m, body, createBin(Opcode::Add, old, outside, {}));
+  add(m, body, createStore(i32, sum, global, {}));
+  Instruction* next = add(m, body, createBin(Opcode::Add, phi,
+                                             m.getIntConst(i32, 1), {}));
+  add(m, body, createBr(header, {}));
+  Instruction* result = add(m, exit, createLoad(i32, global, {}));
+  add(m, exit, createRet(result, {}));
+  phi->setOperand(1, next);
+  m.rebuildCFG(); m.rebuildUseDef();
+  check(verifyFlatModule(m).empty(), "preheader-operand fixture verifies");
+  const std::string before = dumpModule(m);
+  FlatPassManager pm;
+  pm.addPass(std::make_unique<LoopUnrollPass>(UnrollProfile{
+      UnrollTarget::AArch64, 32, 1}));
+  PassManagerOptions options;
+  options.verifyEach = true;
+  const auto r = pm.run(m, options);
+  check(r.ok() && !r.changed && before == dumpModule(m) &&
+            verifyFlatModule(m).empty(),
+        "unsupported preheader operand declines before mutation");
+}
+
+void testArgumentClone() {
+  Module m;
+  const Type* i32 = typePool().i32();
+  Function* f = m.createFunction("main", i32);
+  Argument* n = m.createArgument(i32, {});
+  f->addParam(n);
+  GlobalAddr* global = m.globalAddr(m.createGlobal("g", i32));
+  BasicBlock* pre = m.createBlock(f); BasicBlock* header = m.createBlock(f);
+  BasicBlock* body = m.createBlock(f); BasicBlock* exit = m.createBlock(f);
+  pre->addParam(n);
+  add(m, pre, createBr(header, {}));
+  Instruction* phi = add(m, header, createPhi(i32, {m.getIntConst(i32, 0), nullptr},
+                                             {pre, body}, {}));
+  Instruction* cmp = add(m, header, createICmp(IPred::Slt, phi,
+                                               m.getIntConst(i32, 4), {}));
+  add(m, header, createCondBr(cmp, body, exit, {}));
+  Instruction* old = add(m, body, createLoad(i32, global, {}));
+  Instruction* sum = add(m, body, createBin(Opcode::Add, old, n, {}));
+  add(m, body, createStore(i32, sum, global, {}));
+  Instruction* next = add(m, body, createBin(Opcode::Add, phi,
+                                             m.getIntConst(i32, 1), {}));
+  add(m, body, createBr(header, {}));
+  Instruction* result = add(m, exit, createLoad(i32, global, {}));
+  add(m, exit, createRet(result, {}));
+  phi->setOperand(1, next);
+  m.rebuildCFG(); m.rebuildUseDef();
+  check(verifyFlatModule(m).empty(), "argument-clone fixture verifies");
+  FlatPassManager pm;
+  pm.addPass(std::make_unique<LoopUnrollPass>(UnrollProfile{
+      UnrollTarget::AArch64, 32, 1}));
+  const auto r = pm.run(m);
+  check(r.ok() && r.changed && verifyFlatModule(m).empty(),
+        "argument operands are cloned without partial failure");
+}
 }  // namespace
 int main(int argc, char** argv) {
   if (argc > 2) return 2;
@@ -129,7 +202,13 @@ int main(int argc, char** argv) {
           std::numeric_limits<int>::min() + 10, 3, false, true);
   runCase("wide_step", std::numeric_limits<int>::min(), 1, 33554432,
           false, true);
+  runCase("too_many_trips", std::numeric_limits<int>::min(),
+          std::numeric_limits<int>::max(), 1, false, false);
+  runCase("terminal_overflow", std::numeric_limits<int>::max() - 5,
+          std::numeric_limits<int>::max(), 2, false, false);
   runCase("live_out", 0, 10, 1, true, false);
+  testArgumentClone();
+  testPreheaderOperandDeclined();
   std::printf("S25B_UNROLL_CHECKS=%d FAILURES=%d\n", checks, failures);
   return failures ? 1 : 0;
 }

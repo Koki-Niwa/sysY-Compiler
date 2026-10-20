@@ -253,11 +253,12 @@ loop-defined live-outs, body phi or alloca. The chain length is
 `min(plan.factor, 4)`. Its guard is `i < bound - (factor-1)*step`; the original
 body executes at `i`, later chain blocks at `i+k*step`, and the header advances
 by `factor*step`. A single tail header consumes the remainder one body at a
-time, covering every trip count >= 2. The clones map the phi to their `i+k*step`
+time, covering every representable, non-overflowing trip count >= 2. The clones map the phi to their `i+k*step`
 value; the old back edge is redirected so the header keeps exactly the
 preheader and the last chain edge. `test_unroll_equivalence` requires a real IR
 change and then compares FlatExec observables across even, odd, non-aligned,
-near-bound and wide-step cases. Vectorization, pressure/spill measurements and
+near-bound and wide-step cases. Body operands must be locally defined, the phi,
+a constant/global, or an argument; this is checked before any mutation. Vectorization, pressure/spill measurements and
 target runtime are not implemented; the pass is not in the default pipeline.
 
 ## S25a Unroll planning (CLOSED / PASS)

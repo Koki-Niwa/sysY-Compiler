@@ -113,7 +113,8 @@ add_library(sysy_opt STATIC
   src/opt/DeadLoadElimination.cpp
   src/opt/LICM.cpp
   src/opt/AddressPlan.cpp
-  src/opt/StrengthReduce.cpp)
+  src/opt/StrengthReduce.cpp
+  src/opt/LoopRotate.cpp)
 target_include_directories(sysy_opt PUBLIC src)
 target_link_libraries(sysy_opt PUBLIC sysy_analysis)
 
@@ -208,6 +209,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   sysy_unit_test(test_rewrite sysy_opt)
   sysy_unit_test(test_s19 sysy_opt)
   sysy_unit_test(test_s20 sysy_opt)
+  sysy_unit_test(test_looprotate sysy_opt)
 
   add_executable(bench_lexer tools/selftest/unit/bench_lexer.cpp)
   target_include_directories(bench_lexer PRIVATE src)

@@ -173,8 +173,15 @@ frequency, instruction count, code-growth/latency estimate, probe use and
 reason. Tests cover probe-approved, probe-declined, no-probe fallback, records
 and inlining inside a loop while preserving its body/back edge.
 
-**S21b pending**: LoopRotate (while-to-do-while with duplicated guard and phi
-edge updates).
+**S21b CLOSED / PASS for phi-free loops**: `CFGEditor::replaceTerminator`
+can now add phi-free successor edges as well as drop them.
+`LoopRotatePass` rotates a while loop with a dedicated preheader, one back
+edge, no header phi and phi-free body/exit targets: it keeps the header as a
+guard, clones the condition (single pure instruction with operands outside the
+loop) into the latch, and turns the latch into `cond ? body : exit`. It does
+not rotate phi-bearing loops yet; those are declined and covered by a negative
+test. `test_looprotate` covers rotation, header back-edge removal and the phi
+negative (5 checks).
 
 **S20b CLOSED / PASS**: signed division by a non-power-of-two constant is
 now lowered with a 32-bit `mulhi` (16-bit limb emulation; Flat integer ops are

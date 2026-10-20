@@ -22,9 +22,9 @@ class CFGEditor {
     BasicBlock* block;
   };
   SplitResult splitEdge(BasicBlock* from, size_t successorIndex);
-  // Replace a terminator while preserving the rest of the block. The new
-  // successors must be a subset of the old ones (constant branch / duplicate
-  // target); a target that loses this predecessor must have no phi.
+  // Replace a terminator while preserving the rest of the block. New targets
+  // are allowed only when they have no phi; a target that loses this
+  // predecessor must also have no phi. Phi rewrites are the caller's job.
   MutationResult replaceTerminator(BasicBlock* block, Instruction* newTerminator);
 
  private:

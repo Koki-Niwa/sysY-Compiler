@@ -214,7 +214,12 @@ reason: hot tiny / probe approved / probe declined / cost cap / cold).
 Inlining only inserts into the caller block and rewrites the call, so an
 enclosing loop's blocks and back edge remain intact.
 
-LoopRotate is not implemented yet; S21b tracks it.
+`LoopRotatePass` rotates a phi-free while loop with one dedicated preheader,
+one back edge, and phi-free body/exit targets: the header stays as a guard,
+the latch gets a clone of the condition (a single pure instruction whose
+operands are outside the loop), and its terminator becomes `cond ? body :
+exit`. `CFGEditor::replaceTerminator` may now add phi-free target edges, not
+only drop them. Phi-bearing loops are declined (negative test).
 
 ## S20 SCEV, LICM, strength reduction and AddressPlan (CLOSED / PASS)
 

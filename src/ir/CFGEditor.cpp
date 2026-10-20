@@ -243,11 +243,15 @@ MutationResult CFGEditor::replaceTerminator(BasicBlock* block,
     if (!mutator_.valueAvailableInFunction(newTerminator->operand(i), function) ||
         !hasEdge(newTerminator->operand(i), newTerminator, i))
       return MutationResult::Rejected;
-  // Only edges may be dropped; adding a predecessor would require phi values.
+  // Existing targets may lose an edge; a new target is allowed only when it
+  // has no phi (the caller is responsible for any phi rewrite elsewhere).
   for (size_t s = 0; s < newTerminator->numSuccs(); ++s) {
     BasicBlock* target = newTerminator->succ(s);
     if (target == nullptr || target->parent() != function) return MutationResult::Rejected;
-    if (!hasSuccessor(block, target, newTerminator->numSuccs())) return MutationResult::Rejected;
+    if (hasSuccessor(block, target, newTerminator->numSuccs())) continue;
+    for (Instruction* inst : target->insts())
+      if (inst != nullptr && inst->op() == Opcode::Phi)
+        return MutationResult::Rejected;
   }
   for (size_t s = 0; s < old->numSuccs(); ++s) {
     BasicBlock* target = old->succ(s);
@@ -263,6 +267,12 @@ MutationResult CFGEditor::replaceTerminator(BasicBlock* block,
       if (inst != nullptr && inst->op() == Opcode::Phi)
         return MutationResult::Rejected;
     updatePreds(target, block, nullptr);
+  }
+  for (size_t s = 0; s < newTerminator->numSuccs(); ++s) {
+    BasicBlock* target = newTerminator->succ(s);
+    if (target == nullptr) continue;
+    if (!hasSuccessor(block, target, newTerminator->numSuccs()))
+      updatePreds(target, nullptr, block);
   }
   if (!mutator_.module().ownInst(newTerminator)) return MutationResult::Rejected;
   if (!mutator_.rawErase(old)) return MutationResult::Rejected;

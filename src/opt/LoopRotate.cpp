@@ -76,7 +76,7 @@ PassResult LoopRotatePass::run(Function& function, PassContext& context) {
           if (inst->op() == Opcode::Phi) phiTarget = true;
       if (phiTarget) continue;
       const Value* condition = header->terminator()->operand(0);
-      if (condition == nullptr) continue;
+      if (condition == nullptr || condition->type() != typePool().i32()) continue;
       Value* cloneValue = const_cast<Value*>(condition);
       if (condition->isInst()) {
         const auto* conditionInst = static_cast<const Instruction*>(condition);

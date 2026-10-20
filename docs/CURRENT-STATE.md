@@ -633,7 +633,7 @@ body, no loop-defined live-outs, no body phi/alloca). The chain length is
 `i < bound - (factor-1)*step`, the chain executes `factor` body copies at
 `i..i+(factor-1)*step`, and the header advances by `factor*step`. A single tail
 loop consumes the remainder one body at a time, so every representable, non-overflowing trip count >= 2 is
-covered; overflowing recurrences decline unchanged. `test_unroll_transform` has **99 checks**; CTest
+covered; overflowing recurrences decline unchanged. `test_unroll_transform` has **117 checks**; CTest
 `test_unroll_equivalence` executes eight genuinely transformed cases
 (even/odd/step-3, non-aligned, near i32 bounds, wide step) and compares FlatExec
 observables. Body operands are prevalidated; arguments are cloneable. Vectorization, pressure/spill measurements and per-target runtime

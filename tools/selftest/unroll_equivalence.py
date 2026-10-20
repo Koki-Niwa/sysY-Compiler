@@ -14,7 +14,7 @@ from flat_exec_report import observable_same
 def check_equivalence(binary, directory):
     subprocess.run([binary, str(directory)], check=True)
     expected = {"even", "odd", "step3", "odd_step3", "non_aligned_odd",
-                "near_max", "near_min", "wide_step"}
+                "near_max", "near_min", "wide_step", "factor2"}
     actual = {p.name.removesuffix(".before.flat")
               for p in directory.glob("*.before.flat")}
     if actual != expected:

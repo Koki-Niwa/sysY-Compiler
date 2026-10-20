@@ -62,13 +62,13 @@ void saveIR(const std::string& name, const std::string& before, const Module& m)
   check(input.good() && output.good(), "unroll artifacts written");
 }
 void runCase(const char* name, int start, int bound, int step, bool liveOut,
-             bool expectChange) {
+             bool expectChange, size_t registers = 32) {
   Loop loop(start, bound, step, liveOut);
   check(verifyFlatModule(loop.m).empty(), "unroll fixture verifies");
   const std::string before = dumpModule(loop.m);
   FlatPassManager pm;
   pm.addPass(std::make_unique<LoopUnrollPass>(UnrollProfile{
-      UnrollTarget::AArch64, 32, 1}));
+      UnrollTarget::AArch64, registers, 1}));
   PassManagerOptions options;
   options.verifyEach = true;
   options.instrument = true;
@@ -206,6 +206,7 @@ int main(int argc, char** argv) {
           std::numeric_limits<int>::max(), 1, false, false);
   runCase("terminal_overflow", std::numeric_limits<int>::max() - 5,
           std::numeric_limits<int>::max(), 2, false, false);
+  runCase("factor2", 0, 10, 1, false, true, 12);
   runCase("live_out", 0, 10, 1, true, false);
   testArgumentClone();
   testPreheaderOperandDeclined();

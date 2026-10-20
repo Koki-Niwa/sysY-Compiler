@@ -68,11 +68,12 @@ bool runS20Pipeline(flat::Module& module, DiagnosticEngine& diags) {
   return true;
 }
 
-bool runS24Pipeline(flat::Module& module, DiagnosticEngine& diags) {
+bool runS24Pipeline(flat::Module& module, DiagnosticEngine& diags, bool stats) {
   flat::FlatPassManager manager;
-  manager.addPass(std::make_unique<flat::LoopTilingPass>());
   manager.addPass(std::make_unique<flat::LoopBlockingPass>());
-  const flat::PipelineResult result = manager.run(module);
+  manager.addPass(std::make_unique<flat::LoopTilingPass>());
+  flat::PassManagerOptions options; options.instrument = stats;
+  const flat::PipelineResult result = manager.run(module, options);
   if (!result.ok()) {
     diags.report(DiagLevel::Error, SourceLoc(0, 0), "E-S24-OPT", result.diagnostic);
     return false;
@@ -83,13 +84,19 @@ bool runS24Pipeline(flat::Module& module, DiagnosticEngine& diags) {
                  "S24 输出违反平面 IR 不变量：\n" + flat::formatViolations(violations));
     return false;
   }
+  if (stats)
+    for (const auto& invocation : result.invocations)
+      for (const auto& [key, value] : invocation.stats.counters)
+        std::cerr << "s24 " << invocation.passName << " " << key << "=" << value
+                  << "\n";
   return true;
 }
 
-bool runS25Pipeline(flat::Module& module, DiagnosticEngine& diags) {
+bool runS25Pipeline(flat::Module& module, DiagnosticEngine& diags, bool stats) {
   flat::FlatPassManager manager;
   manager.addPass(std::make_unique<flat::LoopUnrollPass>());
-  const flat::PipelineResult result = manager.run(module);
+  flat::PassManagerOptions options; options.instrument = stats;
+  const flat::PipelineResult result = manager.run(module, options);
   if (!result.ok()) {
     diags.report(DiagLevel::Error, SourceLoc(0, 0), "E-S25-OPT", result.diagnostic);
     return false;
@@ -100,6 +107,11 @@ bool runS25Pipeline(flat::Module& module, DiagnosticEngine& diags) {
                  "S25 输出违反平面 IR 不变量：\n" + flat::formatViolations(violations));
     return false;
   }
+  if (stats)
+    for (const auto& invocation : result.invocations)
+      for (const auto& [key, value] : invocation.stats.counters)
+        std::cerr << "s25 " << invocation.passName << " " << key << "=" << value
+                  << "\n";
   return true;
 }
 
@@ -334,8 +346,8 @@ const flat::Module* CompilationSession::flat(bool fromFlat, bool normalize,
       if (s17 && !runS17Pipeline(*holder, diags_)) return nullptr;
       if (s19 && !runS19Pipeline(*holder, diags_)) return nullptr;
       if (s20 && !runS20Pipeline(*holder, diags_)) return nullptr;
-      if (s24 && !runS24Pipeline(*holder, diags_)) return nullptr;
-      if (s25 && !runS25Pipeline(*holder, diags_)) return nullptr;
+      if (s24 && !runS24Pipeline(*holder, diags_, optStats_)) return nullptr;
+      if (s25 && !runS25Pipeline(*holder, diags_, optStats_)) return nullptr;
     }
     flat_.module = std::move(holder);
     return flat_.module.get();
@@ -385,8 +397,8 @@ const flat::Module* CompilationSession::flat(bool fromFlat, bool normalize,
   if (pipelineClean && s17 && !runS17Pipeline(*fmod, diags_)) return nullptr;
   if (pipelineClean && s19 && !runS19Pipeline(*fmod, diags_)) return nullptr;
   if (pipelineClean && s20 && !runS20Pipeline(*fmod, diags_)) return nullptr;
-  if (pipelineClean && s24 && !runS24Pipeline(*fmod, diags_)) return nullptr;
-  if (pipelineClean && s25 && !runS25Pipeline(*fmod, diags_)) return nullptr;
+  if (pipelineClean && s24 && !runS24Pipeline(*fmod, diags_, optStats_)) return nullptr;
+  if (pipelineClean && s25 && !runS25Pipeline(*fmod, diags_, optStats_)) return nullptr;
   flat_.module = std::move(fmod);
   return flat_.module.get();
 }

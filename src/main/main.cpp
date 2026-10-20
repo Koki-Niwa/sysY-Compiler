@@ -85,6 +85,7 @@ struct Options {
   bool s24 = false;             // --opt=s24：loop tiling + blocked reduction/map
   bool s25 = false;             // --opt=s25：plan-sized loop unrolling
   bool flatStats = false;       // --dump-flat-stats：把平面 IR 统计打到 stderr
+  bool optStats = false;        // --dump-opt-stats：把 s24/s25 pass counters 打到 stderr
   bool normalize = false;       // --normalize：跑 LoopNormalize + AllocaHoist（**默认关**）
   bool loopStats = false;       // --dump-loopnorm-stats：把规范化统计打到 stderr
   bool verbose = false;
@@ -161,6 +162,7 @@ bool parseCommandLine(int argc, char** argv, Options& opts) {
     if (a == "--opt=s24")      { opts.s24 = true; continue; }
     if (a == "--opt=s25")      { opts.s25 = true; continue; }
     if (a == "--dump-flat-stats") { opts.flatStats = true; continue; }
+    if (a == "--dump-opt-stats") { opts.optStats = true; continue; }
     // ★ S05b：循环规范化开关（**默认关**：不带它时 `--emit=structured-ir` 的
     //   输出必须与 S05 的样例对逐字节相同 —— 那是冻结契约）。
     if (a == "--normalize")     { opts.normalize = true; continue; }
@@ -278,6 +280,7 @@ int main(int argc, char** argv) {
 
     if (opts.emit != EmitKind::Nothing) {
       CompilationSession session(src, diags, opts.fromAst, opts.fromStructured);
+      session.setOptStats(opts.optStats);
       const std::string artifact = emitArtifact(session, opts);
       // 文本 dump 即使伴随诊断仍可定位；LLVM 产物必须完整才写入。
       if (opts.emit == EmitKind::LlvmIr && diags.hasError()) {

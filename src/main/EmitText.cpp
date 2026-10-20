@@ -29,6 +29,7 @@ std::string helpText() {
       "                     SysY 源码（S05 起用于轨 A：往返必须逐字节相同）\n"
       "  --from-flat        输入是 --emit=flat-ir 的产物（S06 起用于轨 A）\n"
       "  --dump-flat-stats  把平面 IR 的统计（块/指令/φ）打到 stderr\n"
+      "  --dump-opt-stats   把 s24/s25 pass counters 打到 stderr\n"
       "  --mem2reg          显式提升安全的标量 alloca（flat-ir / llvm-ir）\n"
       "  --opt=s17          constprop + simplifycfg + dce（flat-ir / llvm-ir）\n"
       "  --opt=s19          rewrite + gvn + dse + dle（flat-ir / llvm-ir）\n"

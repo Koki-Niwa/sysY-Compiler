@@ -4,7 +4,8 @@
 import subprocess
 import sys
 
-FLAGS = ("--opt=s17", "--opt=s19", "--opt=s20", "--opt=s24", "--opt=s25")
+FLAGS = ("--opt=s17", "--opt=s19", "--opt=s20", "--opt=s24", "--opt=s25",
+         "--dump-opt-stats")
 
 
 def main():

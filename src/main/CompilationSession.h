@@ -46,6 +46,7 @@ class CompilationSession {
   const CompUnit* ast();
   const Sema* sema();
   const InitPlan* initPlan();
+  void setOptStats(bool enabled) { optStats_ = enabled; }
 
   // Structured IR. `normalize` maps to --normalize; the result is cached by
   // the flag pair so the two documented modes never share state.
@@ -106,6 +107,7 @@ class CompilationSession {
     flat::Mem2RegResult mem2RegResult;
     std::unique_ptr<flat::Module> module;
   } flat_;
+  bool optStats_ = false;
 };
 
 }  // namespace mainstage

@@ -616,7 +616,7 @@ header phis. `test_blocking_transform` has **53 checks**; CTest
 `test_blocking_equivalence` executes 128x128 reduction, 65x63 partial reduction,
 128x128 map and an in-place array reduction, requiring identical final memory/return (write order differs).
 This is not matmul/conv accumulation and has no target runtime; the transforms
-are available only through opt-in pipelines (`--opt=s24` for tiling/blocking,
+are available only through opt-in pipelines (`--opt=s24` for blocking/tiling,
 `--opt=s25` for unrolling), never by default. Both and their combination pass the
 540-file corpus with zero observable differences (357 exact + 62 loop-count +
 121 skip). S24b remains order-preserving strip-mining.

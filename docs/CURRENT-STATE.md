@@ -615,8 +615,9 @@ builds i0/j0/i/j, clones the body, and neutralizes the now-unreachable original
 header phis. `test_blocking_transform` has **50 checks**; CTest
 `test_blocking_equivalence` executes 128x128 reduction, 65x63 partial reduction
 and 128x128 map, requiring identical final memory/return (write order differs).
-This is not matmul/conv accumulation and has no target runtime; S24b remains
-order-preserving strip-mining.
+This is not matmul/conv accumulation and has no target runtime; the transforms
+are available only through the opt-in `--opt=s24` pipeline (tiling then
+blocking), never by default. S24b remains order-preserving strip-mining.
 
 **S25a CLOSED / PASS** (full S09 **57/0/2**, `test_unroll` **20** +
 `test_unroll_advisor` **13** checks): `planUnroll` now consumes a critical-path

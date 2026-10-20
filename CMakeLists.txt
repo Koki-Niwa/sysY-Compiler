@@ -123,6 +123,8 @@ add_library(sysy_opt STATIC
   src/opt/LoopRotate.cpp
   src/opt/TailRecursion.cpp
   src/opt/LoopInterchange.cpp
+  src/opt/AllocaGEPCanonicalization.cpp
+  src/opt/DuplicatePhiCoalescing.cpp
   src/opt/LoopTiling.cpp
   src/opt/LoopUnroll.cpp
   src/opt/LoopBlocking.cpp)

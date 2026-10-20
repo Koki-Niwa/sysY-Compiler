@@ -15,6 +15,7 @@ struct Induction {
   Instruction* increment = nullptr;
   BasicBlock* preheader = nullptr;
   BasicBlock* body = nullptr;
+  BasicBlock* latch = nullptr;
   BasicBlock* exit = nullptr;
   int64_t start = 0;
   int64_t bound = 0;
@@ -34,7 +35,7 @@ bool inLoop(const LoopEntry& loop, const BasicBlock* block) {
   return false;
 }
 bool matchUnroll(const Function& function, const LoopEntry& loop, Induction& out) {
-  if (loop.blocks.size() != 2) return false;
+  if (loop.blocks.size() != 2 && loop.blocks.size() != 3) return false;
   BasicBlock* header = function.at(loop.header);
   if (header == nullptr || header->size() != 3) return false;
   Instruction* phi = header->at(0);
@@ -53,21 +54,30 @@ bool matchUnroll(const Function& function, const LoopEntry& loop, Induction& out
       function.at(loop.blocks[1]) == nullptr || body == header)
     return false;
   if (body->terminator() == nullptr || body->terminator()->op() != Opcode::Br ||
-      body->terminator()->numSuccs() != 1 ||
-      body->terminator()->succ(0) != header)
+      body->terminator()->numSuccs() != 1)
     return false;
-  BasicBlock* preheader = nullptr;
   BasicBlock* latch = nullptr;
+  if (loop.blocks.size() == 2) {
+    if (body->terminator()->succ(0) != header) return false;
+    latch = body;
+  } else {
+    latch = body->terminator()->succ(0);
+    if (latch == nullptr || latch == header || latch == body ||
+        latch->terminator() == nullptr ||
+        latch->terminator()->op() != Opcode::Br ||
+        latch->terminator()->numSuccs() != 1 ||
+        latch->terminator()->succ(0) != header || latch->size() != 2)
+      return false;
+  }
+  BasicBlock* preheader = nullptr;
   for (size_t i = 0; i < phi->numSuccs(); ++i) {
     BasicBlock* pred = phi->succ(i);
     if (pred == nullptr) return false;
     if (inLoop(loop, pred)) {
-      if (latch != nullptr) return false;
-      latch = pred;
-    } else {
-      if (preheader != nullptr) return false;
-      preheader = pred;
+      continue;
     }
+    if (preheader != nullptr) return false;
+    preheader = pred;
   }
   if (preheader == nullptr || header->preds().size() != 2 ||
       std::find(header->preds().begin(), header->preds().end(), preheader) ==
@@ -128,7 +138,7 @@ bool matchUnroll(const Function& function, const LoopEntry& loop, Induction& out
   const int64_t limit = bound - step;
   if (limit < std::numeric_limits<int32_t>::min()) return false;
   out = Induction{phi, cmp, const_cast<Instruction*>(increment), preheader, body,
-                  exit, start, bound, step, static_cast<size_t>(iterations)};
+                  latch, exit, start, bound, step, static_cast<size_t>(iterations)};
   return true;
 }
 Instruction* clone(Module& module, IRMutator& mutator, BasicBlock* block,
@@ -233,16 +243,31 @@ PassResult LoopUnrollPass::run(Function& function, PassContext& context) {
           MutationResult::Applied)
         return [] { PassResult p; p.status = PassStatus::Failed;
                     p.diagnostic = "loop-unroll: chain edge rejected"; return p; }();
-    Instruction* lastNext = createBin(
-        Opcode::Add, indices.back(), module.getIntConst(typePool().i32(), ind.step), {});
-    if (mutator.insertInstruction(chain.back(), chain.back()->size() - 1, lastNext) !=
-        MutationResult::Applied)
-      return [] { PassResult p; p.status = PassStatus::Failed;
-                  p.diagnostic = "loop-unroll: final index rejected"; return p; }();
-    if (cfg.replaceTerminator(chain.back(), createBr(ind.phi->parent(), {}),
-                              {{lastNext}}) != MutationResult::Applied)
-      return [] { PassResult p; p.status = PassStatus::Failed;
-                  p.diagnostic = "loop-unroll: back edge rejected"; return p; }();
+    if (ind.latch == ind.body) {
+      Instruction* lastNext = createBin(
+          Opcode::Add, indices.back(),
+          module.getIntConst(typePool().i32(), ind.step), {});
+      if (mutator.insertInstruction(chain.back(), chain.back()->size() - 1, lastNext) !=
+          MutationResult::Applied)
+        return [] { PassResult p; p.status = PassStatus::Failed;
+                    p.diagnostic = "loop-unroll: final index rejected"; return p; }();
+      if (cfg.replaceTerminator(chain.back(), createBr(ind.phi->parent(), {}),
+                                {{lastNext}}) != MutationResult::Applied)
+        return [] { PassResult p; p.status = PassStatus::Failed;
+                    p.diagnostic = "loop-unroll: back edge rejected"; return p; }();
+    } else {
+      if (cfg.replaceTerminator(chain.back(), createBr(ind.latch, {})) !=
+          MutationResult::Applied)
+        return [] { PassResult p; p.status = PassStatus::Failed;
+                    p.diagnostic = "loop-unroll: latch edge rejected"; return p; }();
+      if (mutator.rewriteOperand(
+              ind.increment, 1,
+              module.getIntConst(typePool().i32(),
+                                 static_cast<int64_t>(unroll) * ind.step)) !=
+          MutationResult::Applied)
+        return [] { PassResult p; p.status = PassStatus::Failed;
+                    p.diagnostic = "loop-unroll: latch increment rejected"; return p; }();
+    }
     // Tail: one final body execution when the pair loop leaves an odd remainder.
     // The even case enters TH with i >= bound and exits without executing TB.
     BasicBlock* tailHeader = module.createBlock(&function);

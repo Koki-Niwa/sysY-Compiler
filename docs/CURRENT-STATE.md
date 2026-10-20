@@ -618,8 +618,10 @@ header phis. `test_blocking_transform` has **53 checks**; CTest
 This is not matmul/conv accumulation and has no target runtime; the transforms
 are available only through opt-in pipelines (`--opt=s24` for blocking/tiling,
 `--opt=s25` for unrolling), never by default. Both and their combination pass the
-540-file corpus with zero observable differences (357 exact + 62 loop-count +
-121 skip). S24b remains order-preserving strip-mining.
+540-file corpus with zero observable differences (349 exact + 70 loop-count +
+121 skip); 50 loops in 38 files actually tiled. S24b remains order-preserving
+strip-mining; nested blocking patterns still do not fire on the corpus because
+frontend nests retain three-block latches.
 
 **S25a CLOSED / PASS** (full S09 **57/0/2**, `test_unroll` **20** +
 `test_unroll_advisor` **13** checks): `planUnroll` now consumes a critical-path
@@ -643,8 +645,8 @@ body, no loop-defined live-outs, no body phi/alloca). The chain length is
 `i < bound - (factor-1)*step`, the chain executes `factor` body copies at
 `i..i+(factor-1)*step`, and the header advances by `factor*step`. A single tail
 loop consumes the remainder one body at a time, so every representable, non-overflowing trip count >= 2 is
-covered; overflowing recurrences decline unchanged. `test_unroll_transform` has **109 checks**; CTest
-`test_unroll_equivalence` executes nine genuinely transformed cases
+covered; overflowing recurrences decline unchanged. `test_unroll_transform` has **112 checks**; CTest
+`test_unroll_equivalence` executes ten genuinely transformed cases
 (even/odd/step-3, non-aligned, near i32 bounds, wide step) and compares FlatExec
 observables. Body operands are prevalidated; arguments are cloneable. Vectorization, pressure/spill measurements and per-target runtime
 remain S25b follow-up; the pass is not in the default pipeline.

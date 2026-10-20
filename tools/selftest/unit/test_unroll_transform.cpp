@@ -189,6 +189,58 @@ void testArgumentClone() {
   check(r.ok() && r.changed && verifyFlatModule(m).empty(),
         "argument operands are cloned without partial failure");
 }
+
+struct ThreeLoop {
+  Module m;
+  const Type* i32 = typePool().i32();
+  Function* f = nullptr;
+  BasicBlock* pre = nullptr;
+  BasicBlock* header = nullptr;
+  BasicBlock* body = nullptr;
+  BasicBlock* latch = nullptr;
+  BasicBlock* exit = nullptr;
+  GlobalAddr* global = nullptr;
+  ThreeLoop() {
+    global = m.globalAddr(m.createGlobal("g", i32));
+    f = m.createFunction("main", i32);
+    pre = m.createBlock(f); header = m.createBlock(f); body = m.createBlock(f);
+    latch = m.createBlock(f); exit = m.createBlock(f);
+    add(m, pre, createBr(header, {}));
+    Instruction* phi = add(m, header, createPhi(
+        i32, {m.getIntConst(i32, 0), nullptr}, {pre, latch}, {}));
+    Instruction* cmp = add(m, header, createICmp(
+        IPred::Slt, phi, m.getIntConst(i32, 10), {}));
+    add(m, header, createCondBr(cmp, body, exit, {}));
+    Instruction* old = add(m, body, createLoad(i32, global, {}));
+    Instruction* sum = add(m, body, createBin(Opcode::Add, old, phi, {}));
+    add(m, body, createStore(i32, sum, global, {}));
+    add(m, body, createBr(latch, {}));
+    Instruction* next = add(m, latch, createBin(
+        Opcode::Add, phi, m.getIntConst(i32, 1), {}));
+    add(m, latch, createBr(header, {}));
+    Instruction* result = add(m, exit, createLoad(i32, global, {}));
+    add(m, exit, createRet(result, {}));
+    phi->setOperand(1, next);
+    m.rebuildCFG(); m.rebuildUseDef();
+  }
+};
+void testThreeBlock() {
+  ThreeLoop loop;
+  check(verifyFlatModule(loop.m).empty(), "three-block fixture verifies");
+  const std::string before = dumpModule(loop.m);
+  FlatPassManager pm;
+  pm.addPass(std::make_unique<LoopUnrollPass>(UnrollProfile{
+      UnrollTarget::AArch64, 32, 1}));
+  PassManagerOptions options; options.verifyEach = true; options.instrument = true;
+  const auto r = pm.run(loop.m, options);
+  check(r.ok() && r.changed && before != dumpModule(loop.m) &&
+            verifyFlatModule(loop.m).empty(),
+        "three-block loop is unrolled");
+  check(r.invocations.size() == 1 &&
+            r.invocations[0].stats.counters.at("unrolled-loops") == 1,
+        "three-block unroll counter recorded");
+  saveIR("three_block", before, loop.m);
+}
 }  // namespace
 int main(int argc, char** argv) {
   if (argc > 2) return 2;
@@ -212,6 +264,7 @@ int main(int argc, char** argv) {
   runCase("live_out", 0, 10, 1, true, false);
   testArgumentClone();
   testPreheaderOperandDeclined();
+  testThreeBlock();
   std::printf("S25B_UNROLL_CHECKS=%d FAILURES=%d\n", checks, failures);
   return failures ? 1 : 0;
 }

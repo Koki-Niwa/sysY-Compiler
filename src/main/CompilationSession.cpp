@@ -32,6 +32,8 @@
 #include "opt/LoopTiling.h"
 #include "opt/LoopBlocking.h"
 #include "opt/LoopUnroll.h"
+#include "opt/AllocaGEPCanonicalization.h"
+#include "opt/DuplicatePhiCoalescing.h"
 #include "structured/AllocaHoist.h"
 #include "structured/FlattenCFG.h"
 #include "structured/IRGen.h"
@@ -63,6 +65,30 @@ bool runS20Pipeline(flat::Module& module, DiagnosticEngine& diags) {
   if (!violations.empty()) {
     diags.report(DiagLevel::Error, SourceLoc(0, 0), "E-S20-VERIFY",
                  "S20 输出违反平面 IR 不变量：\n" + flat::formatViolations(violations));
+    return false;
+  }
+  return true;
+}
+
+bool runAllocaGEPCanonicalization(flat::Module& module, DiagnosticEngine& diags) {
+  flat::FlatPassManager manager;
+  manager.addPass(std::make_unique<flat::AllocaGEPCanonicalizationPass>());
+  const flat::PipelineResult result = manager.run(module);
+  if (!result.ok()) {
+    diags.report(DiagLevel::Error, SourceLoc(0, 0), "E-ALLOCA-GEP-OPT",
+                 result.diagnostic);
+    return false;
+  }
+  return true;
+}
+
+bool runDuplicatePhiCoalescing(flat::Module& module, DiagnosticEngine& diags) {
+  flat::FlatPassManager manager;
+  manager.addPass(std::make_unique<flat::DuplicatePhiCoalescingPass>());
+  const flat::PipelineResult result = manager.run(module);
+  if (!result.ok()) {
+    diags.report(DiagLevel::Error, SourceLoc(0, 0), "E-PHI-COALESCE",
+                 result.diagnostic);
     return false;
   }
   return true;
@@ -330,6 +356,8 @@ const flat::Module* CompilationSession::flat(bool fromFlat, bool normalize,
                     "读回的平面 IR 违反不变量：\n" + flat::formatViolations(violations));
     }
     if (!diags_.hasError()) {
+      if ((s24 || s25) && !runAllocaGEPCanonicalization(*holder, diags_))
+        return nullptr;
       flat_.mem2RegResult = flat::runMem2Reg(*holder, flat::Mem2RegOptions{mem2reg, false});
       if (!flat_.mem2RegResult.success) {
         diags_.report(DiagLevel::Error, SourceLoc(0, 0), "E-MEM2REG",
@@ -343,6 +371,7 @@ const flat::Module* CompilationSession::flat(bool fromFlat, bool normalize,
         return nullptr;
       }
       if (flatStats) reportMem2RegStats(flat_.mem2RegResult);
+      if ((s24 || s25) && !runDuplicatePhiCoalescing(*holder, diags_)) return nullptr;
       if (s17 && !runS17Pipeline(*holder, diags_)) return nullptr;
       if (s19 && !runS19Pipeline(*holder, diags_)) return nullptr;
       if (s20 && !runS20Pipeline(*holder, diags_)) return nullptr;
@@ -379,6 +408,7 @@ const flat::Module* CompilationSession::flat(bool fromFlat, bool normalize,
     }
   }
   if (pipelineClean && mem2reg) {
+    if ((s24 || s25) && !runAllocaGEPCanonicalization(*fmod, diags_)) return nullptr;
     // Same one-wrapper contract as pre-F05: run, then one output verification.
     flat_.mem2RegResult = flat::runMem2Reg(*fmod, flat::Mem2RegOptions{true, flatStats});
     if (!flat_.mem2RegResult.success) {
@@ -393,6 +423,7 @@ const flat::Module* CompilationSession::flat(bool fromFlat, bool normalize,
       return nullptr;
     }
     if (flatStats) reportMem2RegStats(flat_.mem2RegResult);
+    if ((s24 || s25) && !runDuplicatePhiCoalescing(*fmod, diags_)) return nullptr;
   }
   if (pipelineClean && s17 && !runS17Pipeline(*fmod, diags_)) return nullptr;
   if (pipelineClean && s19 && !runS19Pipeline(*fmod, diags_)) return nullptr;

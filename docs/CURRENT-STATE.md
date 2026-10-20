@@ -276,7 +276,7 @@ includes, every analysis declares scope/dependencies) and
 non-blocking findings and follow-up triggers are recorded in
 [`../docs/audit/S16B-FOUNDATION-AUDIT-2026-10-20.md`](../../docs/audit/S16B-FOUNDATION-AUDIT-2026-10-20.md).
 
-**S16 CLOSED / PASS** (full S09 **56/0/2**, `test_dependence` **13 checks**):
+**S16 CLOSED / PASS** (full S09 **56/0/2**, `test_dependence` **28 checks**):
 `analysis/DependenceAnalysis` implements the affine dependence pipeline over
 one loop nest: GCD divisibility, a bounded Banerjee range test, and an exact
 distance vector when every dimension has a common coefficient. Independent
@@ -603,9 +603,9 @@ IR and is not yet consumed by a transform.
 a canonical two-level nest whose body is `g = g + f(i,j)` with exactly one
 scalar-global load/store and only pure arithmetic. Integer addition modulo i32
 is associative/commutative, so the blocked order preserves the final global
-value. It consumes `BlockingPlan`, builds the four-level tile nest (i0,j0,i,j),
+value. It requires both tile dimensions to be strictly partial (no full-extent degenerate order), consumes `BlockingPlan`, builds the four-level tile nest (i0,j0,i,j),
 clones the reduction body, and neutralizes the now-unreachable original headers'
-phis. `test_blocking_transform` has **13 checks**; CTest
+phis. `test_blocking_transform` has **41 checks**; CTest
 `test_blocking_equivalence` executes the genuinely reordered reduction and
 requires identical final memory/return (write order intentionally differs).
 This is not matmul/conv/stencil and has no target runtime; S24b remains
@@ -633,8 +633,8 @@ body, no loop-defined live-outs, no body phi/alloca). The chain length is
 `i < bound - (factor-1)*step`, the chain executes `factor` body copies at
 `i..i+(factor-1)*step`, and the header advances by `factor*step`. A single tail
 loop consumes the remainder one body at a time, so every representable, non-overflowing trip count >= 2 is
-covered; overflowing recurrences decline unchanged. `test_unroll_transform` has **117 checks**; CTest
-`test_unroll_equivalence` executes eight genuinely transformed cases
+covered; overflowing recurrences decline unchanged. `test_unroll_transform` has **109 checks**; CTest
+`test_unroll_equivalence` executes nine genuinely transformed cases
 (even/odd/step-3, non-aligned, near i32 bounds, wide step) and compares FlatExec
 observables. Body operands are prevalidated; arguments are cloneable. Vectorization, pressure/spill measurements and per-target runtime
 remain S25b follow-up; the pass is not in the default pipeline.

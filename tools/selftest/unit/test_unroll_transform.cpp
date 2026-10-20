@@ -83,6 +83,8 @@ void runCase(const char* name, int start, int bound, int step, bool liveOut,
     const size_t factor = static_cast<size_t>(
         r.invocations[0].stats.counters.at("unroll-factor"));
     check(factor >= 2 && factor <= 4, "unroll factor is bounded");
+    if (std::string(name) == "factor2")
+      check(factor == 2, "factor2 profile selects exactly two");
     check(loop.header->terminator()->numSuccs() == 2 &&
           loop.header->terminator()->succ(0) == loop.body,
           "header body edge is preserved");

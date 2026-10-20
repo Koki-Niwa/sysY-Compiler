@@ -268,7 +268,9 @@ target runtime are not implemented; the pass is not in the default pipeline.
 other memory, and only pure arithmetic. Integer addition modulo i32 is
 associative and commutative, so reordering the iterations preserves the final
 `g`. The pass consumes `BlockingPlan` (dependence opt-in is justified by the
-reduction), builds the four-level tile nest i0/j0/i/j, clones the body once, and
+reduction) but requires both tile dimensions to be strictly smaller than their
+trips, so the four-level i0/j0/i/j nest is not a degenerate 1D order; it builds
+the nest, clones the body once, and
 replaces the now-unreachable original header phis with neutral constants so the
 dead loop remains verifier-valid. `test_blocking_equivalence` requires actual
 reordering and compares final memory/return (not the intentionally reordered

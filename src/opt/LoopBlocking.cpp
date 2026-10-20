@@ -83,7 +83,9 @@ bool matchNest(const Function& function, ReductionNest& nest) {
     if (innerLatch == nullptr || innerLatch->terminator() == nullptr ||
         innerLatch->terminator()->op() != Opcode::Br ||
         innerLatch->terminator()->numSuccs() != 1 ||
-        innerLatch->terminator()->succ(0) != inner)
+        innerLatch->terminator()->succ(0) != inner ||
+        inner->at(2)->operand(0) != inner->at(1) ||
+        outer->at(2)->operand(0) != outer->at(1))
       continue;
     BasicBlock* pre = nullptr;
     for (BasicBlock* pred : outer->preds())
@@ -94,10 +96,17 @@ bool matchNest(const Function& function, ReductionNest& nest) {
     if (pre == nullptr || outer->preds().size() != 2 ||
         inner->preds().size() != 2 || body->preds().size() != 1 ||
         innerLatch->preds().size() != 1 || outerLatch->preds().size() != 1 ||
+        innerLatch->size() != 2 || outerLatch->size() != 2 ||
         pre->terminator() == nullptr || pre->terminator()->op() != Opcode::Br ||
         pre->terminator()->numSuccs() != 1 ||
         pre->terminator()->succ(0) != outer)
       continue;
+    for (Instruction* inst : exit->insts())
+      if (inst->op() == Opcode::Phi) {
+        pre = nullptr;
+        break;
+      }
+    if (pre == nullptr) continue;
     if (!matchInduction(outerPhi, outer->at(1), nest.outerBound, pre, outerLatch) ||
         !matchInduction(inner->at(0), inner->at(1), nest.innerBound, outer,
                         innerLatch))
@@ -134,9 +143,26 @@ bool matchNest(const Function& function, ReductionNest& nest) {
       if (inst == load || inst == store || inst == body->terminator()) continue;
       if (inst->op() == Opcode::Load || inst->op() == Opcode::Store ||
           inst->op() == Opcode::Call || inst->op() == Opcode::Alloca ||
-          inst->op() == Opcode::Phi) { pure = false; break; }
+          inst->op() == Opcode::Phi || inst->op() == Opcode::LLVMMemCpy ||
+          inst->op() == Opcode::LLVMMemSet) { pure = false; break; }
     }
     if (!pure) continue;
+    std::vector<Instruction*> bodyInsts;
+    for (Instruction* inst : body->insts())
+      if (inst != body->terminator()) bodyInsts.push_back(inst);
+    bool cloneable = true;
+    for (Instruction* inst : bodyInsts)
+      for (size_t i = 0; i < inst->numOperands(); ++i) {
+        const Value* operand = inst->operand(i);
+        if (operand == outerPhi || operand == inner->at(0) || operand->isConstant() ||
+            operand->isGlobalAddr() || operand->isArgument())
+          continue;
+        if (std::find(bodyInsts.begin(), bodyInsts.end(), operand) == bodyInsts.end()) {
+          cloneable = false;
+          break;
+        }
+      }
+    if (!cloneable) continue;
     // The original nest becomes unreachable; no loop-defined value may be
     // consumed outside it, or the new clone would break SSA uses.
     bool liveOut = false;
@@ -167,10 +193,19 @@ bool matchNest(const Function& function, ReductionNest& nest) {
 }
 Instruction* insertBeforeTerm(Module& module, IRMutator& mutator, BasicBlock* block,
                               Instruction* inst) {
-  if (mutator.insertInstruction(block, block->size() - 1, inst) != MutationResult::Applied)
+  if (mutator.insertInstruction(block, block->size() - 1, inst) != MutationResult::Applied) {
+    mutator.discardDetached({inst});
     return nullptr;
+  }
   (void)module;
   return inst;
+}
+MutationResult replaceTerm(CFGEditor& cfg, IRMutator& mutator, BasicBlock* block,
+                           Instruction* term,
+                           const std::vector<std::vector<Value*>>& values = {}) {
+  const MutationResult result = cfg.replaceTerminator(block, term, values);
+  if (result != MutationResult::Applied) mutator.discardDetached({term});
+  return result;
 }
 Instruction* clone(Module& module, IRMutator& mutator, BasicBlock* block,
                    size_t& index, const Instruction* inst,
@@ -218,6 +253,11 @@ PassResult LoopBlockingPass::run(Function& function, PassContext& context) {
   planning.dependenceFree = true;  // integer-add reduction is associative
   const BlockingPlan plan = planBlocking(planning);
   if (!plan.block || plan.tileOuter < 8 || plan.tileInner < 8) return result;
+  // A single full-extent tile degenerates to the original/wrong order. Require
+  // both dimensions to be partial so this transform really produces a 2D
+  // blocked permutation.
+  if (plan.tileOuter >= planning.outerTrip || plan.tileInner >= planning.innerTrip)
+    return result;
   const int64_t tileOuter = static_cast<int64_t>(plan.tileOuter);
   const int64_t tileInner = static_cast<int64_t>(plan.tileInner);
   if (nest.outerBound > std::numeric_limits<int32_t>::max() - tileOuter ||
@@ -245,7 +285,10 @@ PassResult LoopBlockingPass::run(Function& function, PassContext& context) {
   if (cfg.redirectEdge(nest.pre, 0, t1, {}) != MutationResult::Applied) return fail;
   Instruction* i0 = createPhi(typePool().i32(), {module.getIntConst(typePool().i32(), 0)},
                               {nest.pre}, {});
-  if (cfg.insertPhi(t1, i0) != MutationResult::Applied) return fail;
+  if (cfg.insertPhi(t1, i0) != MutationResult::Applied) {
+    mutator.discardDetached({i0});
+    return fail;
+  }
   Instruction* i0Plus = createBin(Opcode::Add, i0,
                                   module.getIntConst(typePool().i32(), tileOuter), {});
   if (insertBeforeTerm(module, mutator, t1, i0Plus) == nullptr) return fail;
@@ -258,11 +301,14 @@ PassResult LoopBlockingPass::run(Function& function, PassContext& context) {
   Instruction* i0Cmp = createICmp(IPred::Slt, i0,
                                   module.getIntConst(typePool().i32(), nest.outerBound), {});
   if (insertBeforeTerm(module, mutator, t1, i0Cmp) == nullptr) return fail;
-  if (cfg.replaceTerminator(t1, createCondBr(i0Cmp, t2, nest.exit, {})) !=
+  if (replaceTerm(cfg, mutator, t1, createCondBr(i0Cmp, t2, nest.exit, {})) !=
       MutationResult::Applied) return fail;
   Instruction* j0 = createPhi(typePool().i32(), {module.getIntConst(typePool().i32(), 0)},
                               {t1}, {});
-  if (cfg.insertPhi(t2, j0) != MutationResult::Applied) return fail;
+  if (cfg.insertPhi(t2, j0) != MutationResult::Applied) {
+    mutator.discardDetached({j0});
+    return fail;
+  }
   Instruction* j0Plus = createBin(Opcode::Add, j0,
                                   module.getIntConst(typePool().i32(), tileInner), {});
   if (insertBeforeTerm(module, mutator, t2, j0Plus) == nullptr) return fail;
@@ -275,19 +321,25 @@ PassResult LoopBlockingPass::run(Function& function, PassContext& context) {
   Instruction* j0Cmp = createICmp(IPred::Slt, j0,
                                   module.getIntConst(typePool().i32(), nest.innerBound), {});
   if (insertBeforeTerm(module, mutator, t2, j0Cmp) == nullptr) return fail;
-  if (cfg.replaceTerminator(t2, createCondBr(j0Cmp, i, lt1, {})) !=
+  if (replaceTerm(cfg, mutator, t2, createCondBr(j0Cmp, i, lt1, {})) !=
       MutationResult::Applied) return fail;
   Instruction* ii = createPhi(typePool().i32(), {i0}, {t2}, {});
-  if (cfg.insertPhi(i, ii) != MutationResult::Applied) return fail;
+  if (cfg.insertPhi(i, ii) != MutationResult::Applied) {
+    mutator.discardDetached({ii});
+    return fail;
+  }
   Instruction* iCmp = createICmp(IPred::Slt, ii, iEnd, {});
   if (insertBeforeTerm(module, mutator, i, iCmp) == nullptr) return fail;
-  if (cfg.replaceTerminator(i, createCondBr(iCmp, j, lt2, {})) !=
+  if (replaceTerm(cfg, mutator, i, createCondBr(iCmp, j, lt2, {})) !=
       MutationResult::Applied) return fail;
   Instruction* jj = createPhi(typePool().i32(), {j0}, {i}, {});
-  if (cfg.insertPhi(j, jj) != MutationResult::Applied) return fail;
+  if (cfg.insertPhi(j, jj) != MutationResult::Applied) {
+    mutator.discardDetached({jj});
+    return fail;
+  }
   Instruction* jCmp = createICmp(IPred::Slt, jj, jEnd, {});
   if (insertBeforeTerm(module, mutator, j, jCmp) == nullptr) return fail;
-  if (cfg.replaceTerminator(j, createCondBr(jCmp, nb, li, {})) !=
+  if (replaceTerm(cfg, mutator, j, createCondBr(jCmp, nb, li, {})) !=
       MutationResult::Applied) return fail;
   std::unordered_map<const Value*, Value*> mapping;
   mapping[nest.outerPhi] = ii;
@@ -299,26 +351,26 @@ PassResult LoopBlockingPass::run(Function& function, PassContext& context) {
     if (copy == nullptr) return fail;
     mapping[inst] = copy;
   }
-  if (cfg.replaceTerminator(nb, createBr(lj, {})) != MutationResult::Applied) return fail;
+  if (replaceTerm(cfg, mutator, nb, createBr(lj, {})) != MutationResult::Applied) return fail;
   Instruction* jNext = createBin(Opcode::Add, jj,
                                  module.getIntConst(typePool().i32(), 1), {});
   if (insertBeforeTerm(module, mutator, lj, jNext) == nullptr) return fail;
-  if (cfg.replaceTerminator(lj, createBr(j, {}), {{jNext}}) != MutationResult::Applied)
+  if (replaceTerm(cfg, mutator, lj, createBr(j, {}), {{jNext}}) != MutationResult::Applied)
     return fail;
   Instruction* iNext = createBin(Opcode::Add, ii,
                                  module.getIntConst(typePool().i32(), 1), {});
   if (insertBeforeTerm(module, mutator, li, iNext) == nullptr) return fail;
-  if (cfg.replaceTerminator(li, createBr(i, {}), {{iNext}}) != MutationResult::Applied)
+  if (replaceTerm(cfg, mutator, li, createBr(i, {}), {{iNext}}) != MutationResult::Applied)
     return fail;
   Instruction* j0Next = createBin(Opcode::Add, j0,
                                   module.getIntConst(typePool().i32(), tileInner), {});
   if (insertBeforeTerm(module, mutator, lt2, j0Next) == nullptr) return fail;
-  if (cfg.replaceTerminator(lt2, createBr(t2, {}), {{j0Next}}) != MutationResult::Applied)
+  if (replaceTerm(cfg, mutator, lt2, createBr(t2, {}), {{j0Next}}) != MutationResult::Applied)
     return fail;
   Instruction* i0Next = createBin(Opcode::Add, i0,
                                   module.getIntConst(typePool().i32(), tileOuter), {});
   if (insertBeforeTerm(module, mutator, lt1, i0Next) == nullptr) return fail;
-  if (cfg.replaceTerminator(lt1, createBr(t1, {}), {{i0Next}}) != MutationResult::Applied)
+  if (replaceTerm(cfg, mutator, lt1, createBr(t1, {}), {{i0Next}}) != MutationResult::Applied)
     return fail;
   // The original nest is now unreachable. Leaving its phis behind would make
   // the verifier reject unreachable phi definitions; replace their uses with a

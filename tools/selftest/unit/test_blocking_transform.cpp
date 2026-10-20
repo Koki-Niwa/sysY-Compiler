@@ -31,26 +31,39 @@ struct Nest {
   BasicBlock* innerLatch = nullptr;
   BasicBlock* exit = nullptr;
   GlobalAddr* global = nullptr;
-  Nest(int n, bool extraStore = false) {
+  Nest(int n, int innerBound, bool extraStore = false, bool latchStore = false,
+       bool badHeaderCond = false, bool preOperand = false,
+       bool headerOperand = false, bool exitPhi = false) {
     global = m.globalAddr(m.createGlobal("g", i32));
     GlobalAddr* other = m.globalAddr(m.createGlobal("h", i32));
     f = m.createFunction("main", i32);
     pre = m.createBlock(f); outer = m.createBlock(f); inner = m.createBlock(f);
     body = m.createBlock(f); innerLatch = m.createBlock(f);
     outerLatch = m.createBlock(f); exit = m.createBlock(f);
+    Instruction* flag = badHeaderCond
+        ? add(m, pre, createICmp(IPred::Slt, m.getIntConst(i32, 1),
+                                 m.getIntConst(i32, 0), {}))
+        : nullptr;
+    Instruction* preValue = preOperand
+        ? add(m, pre, createBin(Opcode::Add, m.getIntConst(i32, 1),
+                                m.getIntConst(i32, 2), {}))
+        : nullptr;
     add(m, pre, createBr(outer, {}));
     Instruction* oi = add(m, outer, createPhi(i32, {m.getIntConst(i32, 0), nullptr},
                                               {pre, outerLatch}, {}));
     Instruction* oc = add(m, outer, createICmp(IPred::Slt, oi,
                                                m.getIntConst(i32, n), {}));
-    add(m, outer, createCondBr(oc, inner, exit, {}));
+    add(m, outer, createCondBr(badHeaderCond ? flag : oc, inner, exit, {}));
     Instruction* ij = add(m, inner, createPhi(i32, {m.getIntConst(i32, 0), nullptr},
                                               {outer, innerLatch}, {}));
     Instruction* ic = add(m, inner, createICmp(IPred::Slt, ij,
-                                               m.getIntConst(i32, n), {}));
+                                               m.getIntConst(i32, innerBound), {}));
     add(m, inner, createCondBr(ic, body, outerLatch, {}));
     Instruction* old = add(m, body, createLoad(i32, global, {}));
-    Instruction* value = add(m, body, createBin(Opcode::Mul, oi, ij, {}));
+    Instruction* rhs = oi;
+    if (preOperand) rhs = preValue;
+    if (headerOperand) rhs = ic;
+    Instruction* value = add(m, body, createBin(Opcode::Mul, rhs, ij, {}));
     Instruction* sum = add(m, body, createBin(Opcode::Add, old, value, {}));
     add(m, body, createStore(i32, sum, global, {}));
     if (extraStore) add(m, body, createStore(i32, sum, other, {}));
@@ -60,9 +73,17 @@ struct Nest {
     add(m, innerLatch, createBr(inner, {}));
     Instruction* in = add(m, outerLatch, createBin(Opcode::Add, oi,
                                                    m.getIntConst(i32, 1), {}));
+    if (latchStore) add(m, outerLatch, createStore(i32, in, other, {}));
     add(m, outerLatch, createBr(outer, {}));
     Instruction* result = add(m, exit, createLoad(i32, global, {}));
-    add(m, exit, createRet(result, {}));
+    if (exitPhi) {
+      Instruction* ep = createPhi(i32, {m.getIntConst(i32, 0)}, {outer}, {});
+      m.ownInst(ep);
+      exit->insertInst(0, ep);
+      add(m, exit, createRet(ep, {}));
+    } else {
+      add(m, exit, createRet(result, {}));
+    }
     oi->setOperand(1, in);
     ij->setOperand(1, jn);
     m.rebuildCFG(); m.rebuildUseDef();
@@ -75,8 +96,12 @@ void saveIR(const std::string& name, const std::string& before, const Module& m)
   input << before; output << dumpModule(m);
   check(input.good() && output.good(), "blocking artifacts written");
 }
-void runCase(const char* name, int n, bool extraStore, bool expectChange) {
-  Nest nest(n, extraStore);
+void runCase(const char* name, int n, int m, bool extraStore, bool expectChange,
+             bool latchStore = false, bool badHeaderCond = false,
+             bool preOperand = false, bool headerOperand = false,
+             bool exitPhi = false) {
+  Nest nest(n, m, extraStore, latchStore, badHeaderCond, preOperand, headerOperand,
+            exitPhi);
   check(verifyFlatModule(nest.m).empty(), "blocking fixture verifies");
   const std::string before = dumpModule(nest.m);
   FlatPassManager pm; pm.addPass(std::make_unique<LoopBlockingPass>());
@@ -109,9 +134,17 @@ void runCase(const char* name, int n, bool extraStore, bool expectChange) {
 int main(int argc, char** argv) {
   if (argc > 2) return 2;
   if (argc == 2) artifactDir = argv[1];
-  runCase("reduction", 128, false, true);
-  runCase("small", 32, false, false);
-  runCase("extra_store", 128, true, false);
+  runCase("reduction", 128, 128, false, true);
+  runCase("partial", 65, 63, false, true);
+  runCase("small", 32, 32, false, false);
+  runCase("inner_full", 65, 64, false, false);
+  runCase("outer_full", 16, 1000, false, false);
+  runCase("extra_store", 128, 128, true, false);
+  runCase("latch_store", 128, 128, false, false, true);
+  runCase("bad_header_cond", 128, 128, false, false, false, true);
+  runCase("preheader_operand", 128, 128, false, false, false, false, true);
+  runCase("header_operand", 128, 128, false, false, false, false, false, true);
+  runCase("exit_phi", 128, 128, false, false, false, false, false, false, true);
   std::printf("S24C_BLOCKING_TRANSFORM_CHECKS=%d FAILURES=%d\n", checks, failures);
   return failures ? 1 : 0;
 }

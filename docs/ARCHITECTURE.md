@@ -261,6 +261,20 @@ near-bound and wide-step cases. Body operands must be locally defined, the phi,
 a constant/global, or an argument; this is checked before any mutation. Vectorization, pressure/spill measurements and
 target runtime are not implemented; the pass is not in the default pipeline.
 
+## S24c-b Blocked integer-add reduction (PARTIAL)
+
+`LoopBlockingPass` matches a canonical two-level nest whose body is
+`g = g + f(i,j)`, with exactly one scalar-global load and one store, no calls or
+other memory, and only pure arithmetic. Integer addition modulo i32 is
+associative and commutative, so reordering the iterations preserves the final
+`g`. The pass consumes `BlockingPlan` (dependence opt-in is justified by the
+reduction), builds the four-level tile nest i0/j0/i/j, clones the body once, and
+replaces the now-unreachable original header phis with neutral constants so the
+dead loop remains verifier-valid. `test_blocking_equivalence` requires actual
+reordering and compares final memory/return (not the intentionally reordered
+write trace). This covers reductions, not matmul/conv/stencil, and has no
+target runtime; S24b remains the order-preserving strip-mine.
+
 ## S25a Unroll planning (CLOSED / PASS)
 
 `planUnroll` combines target registers, live values, trip count and a

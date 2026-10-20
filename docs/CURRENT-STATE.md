@@ -599,9 +599,17 @@ not raw element bytes; `dependenceFree` defaults to false so callers must opt in
 column-major, dependence, cold, SIZE_MAX saturation, oversized element). This layer does **not** rewrite
 IR and is not yet consumed by a transform.
 
-**S24c-b pending**: 2D blocked-order transform with a dependence proof and the
-fixed matmul/conv/stencil runtime protocol. S24b remains order-preserving
-strip-mining only.
+**S24c-b PARTIAL — blocked integer-add reduction**: `LoopBlockingPass` matches
+a canonical two-level nest whose body is `g = g + f(i,j)` with exactly one
+scalar-global load/store and only pure arithmetic. Integer addition modulo i32
+is associative/commutative, so the blocked order preserves the final global
+value. It consumes `BlockingPlan`, builds the four-level tile nest (i0,j0,i,j),
+clones the reduction body, and neutralizes the now-unreachable original headers'
+phis. `test_blocking_transform` has **13 checks**; CTest
+`test_blocking_equivalence` executes the genuinely reordered reduction and
+requires identical final memory/return (write order intentionally differs).
+This is not matmul/conv/stencil and has no target runtime; S24b remains
+order-preserving strip-mining.
 
 **S25a CLOSED / PASS** (full S09 **57/0/2**, `test_unroll` **20** +
 `test_unroll_advisor` **13** checks): `planUnroll` now consumes a critical-path

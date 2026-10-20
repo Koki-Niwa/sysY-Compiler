@@ -261,21 +261,24 @@ near-bound and wide-step cases. Body operands must be locally defined, the phi,
 a constant/global, or an argument; this is checked before any mutation. Vectorization, pressure/spill measurements and
 target runtime are not implemented; the pass is not in the default pipeline.
 
-## S24c-b Blocked integer-add reduction (PARTIAL)
+## S24c-b Blocked reduction and map (PARTIAL)
 
-`LoopBlockingPass` matches a canonical two-level nest whose body is
-`g = g + f(i,j)`, with exactly one scalar-global load and one store, no calls or
-other memory, and only pure arithmetic. Integer addition modulo i32 is
-associative and commutative, so reordering the iterations preserves the final
-`g`. The pass consumes `BlockingPlan` (dependence opt-in is justified by the
-reduction) but requires both tile dimensions to be strictly smaller than their
-trips, so the four-level i0/j0/i/j nest is not a degenerate 1D order; it builds
-the nest, clones the body once, and
-replaces the now-unreachable original header phis with neutral constants so the
-dead loop remains verifier-valid. `test_blocking_equivalence` requires actual
-reordering and compares final memory/return (not the intentionally reordered
-write trace). This covers reductions, not matmul/conv/stencil, and has no
-target runtime; S24b remains the order-preserving strip-mine.
+`LoopBlockingPass` matches a canonical two-level nest with one of two bodies:
+
+- integer-add reduction `g = g + f(i,j)`, with exactly one scalar-global
+  load/store; i32 addition modulo 2^32 is associative/commutative;
+- map `out[i][j] = f(in[i][j])`, with one read-only global load and one store to
+  a distinct global whose GEP chain indices are exactly the two induction
+  variables; the input is never written and the output address is unique.
+
+Both require pure body arithmetic (no calls, allocas, memcpy/memset or other
+memory), no loop-defined live-outs, exit without phis, clean latches, and both
+tile dimensions strictly partial. The pass consumes `BlockingPlan`, builds the
+four-level i0/j0/i/j nest, clones the body once, and neutralizes the original
+headers' now-unreachable phis. `test_blocking_equivalence` checks final
+memory/return for exact and partial reductions and a map, and requires a
+different global write trace. This is not matmul/conv accumulation and has no
+target runtime; S24b remains order-preserving strip-mining.
 
 ## S25a Unroll planning (CLOSED / PASS)
 

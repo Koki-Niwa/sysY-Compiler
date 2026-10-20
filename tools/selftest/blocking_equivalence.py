@@ -12,7 +12,7 @@ from flat_exec import FlatExec, FlatMod
 
 def check_equivalence(binary, directory):
     subprocess.run([binary, str(directory)], check=True)
-    expected = {"reduction", "partial"}
+    expected = {"reduction", "partial", "map"}
     actual = {p.name.removesuffix(".before.flat")
               for p in directory.glob("*.before.flat")}
     if actual != expected:

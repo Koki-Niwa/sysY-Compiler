@@ -134,6 +134,72 @@ void runCase(const char* name, int n, int m, bool extraStore, bool expectChange,
     check(before == dumpModule(nest.m), "unsupported nest is left unchanged");
   }
 }
+
+struct MapNest {
+  Module m;
+  const Type* i32 = typePool().i32();
+  Function* f = nullptr;
+  GlobalAddr* input = nullptr;
+  GlobalAddr* output = nullptr;
+  explicit MapNest(int n) {
+    const Type* row = typePool().arrayOf(i32, n);
+    const Type* mat = typePool().arrayOf(row, n);
+    input = m.globalAddr(m.createGlobal("in", mat));
+    output = m.globalAddr(m.createGlobal("out", mat));
+    f = m.createFunction("main", i32);
+    BasicBlock* pre = m.createBlock(f); BasicBlock* outer = m.createBlock(f);
+    BasicBlock* inner = m.createBlock(f); BasicBlock* body = m.createBlock(f);
+    BasicBlock* innerLatch = m.createBlock(f); BasicBlock* outerLatch = m.createBlock(f);
+    BasicBlock* exit = m.createBlock(f);
+    add(m, pre, createBr(outer, {}));
+    Instruction* oi = add(m, outer, createPhi(i32, {m.getIntConst(i32, 0), nullptr},
+                                              {pre, outerLatch}, {}));
+    Instruction* oc = add(m, outer, createICmp(IPred::Slt, oi,
+                                               m.getIntConst(i32, n), {}));
+    add(m, outer, createCondBr(oc, inner, exit, {}));
+    Instruction* ij = add(m, inner, createPhi(i32, {m.getIntConst(i32, 0), nullptr},
+                                              {outer, innerLatch}, {}));
+    Instruction* ic = add(m, inner, createICmp(IPred::Slt, ij,
+                                               m.getIntConst(i32, n), {}));
+    add(m, inner, createCondBr(ic, body, outerLatch, {}));
+    Instruction* oi64 = add(m, body, createCast(Opcode::SExt, oi, {}));
+    Instruction* ij64 = add(m, body, createCast(Opcode::SExt, ij, {}));
+    Instruction* inRow = add(m, body, createGEP(row, input, oi64, {}));
+    Instruction* inPtr = add(m, body, createGEP(i32, inRow, ij64, {}));
+    Instruction* old = add(m, body, createLoad(i32, inPtr, {}));
+    Instruction* val = add(m, body, createBin(Opcode::Add, old, oi, {}));
+    Instruction* outRow = add(m, body, createGEP(row, output, oi64, {}));
+    Instruction* outPtr = add(m, body, createGEP(i32, outRow, ij64, {}));
+    add(m, body, createStore(i32, val, outPtr, {}));
+    add(m, body, createBr(innerLatch, {}));
+    Instruction* jn = add(m, innerLatch, createBin(Opcode::Add, ij,
+                                                   m.getIntConst(i32, 1), {}));
+    add(m, innerLatch, createBr(inner, {}));
+    Instruction* in = add(m, outerLatch, createBin(Opcode::Add, oi,
+                                                   m.getIntConst(i32, 1), {}));
+    add(m, outerLatch, createBr(outer, {}));
+    add(m, exit, createRet(m.getIntConst(i32, 0), {}));
+    oi->setOperand(1, in);
+    ij->setOperand(1, jn);
+    m.rebuildCFG(); m.rebuildUseDef();
+  }
+};
+void testMap() {
+  MapNest nest(128);
+  check(verifyFlatModule(nest.m).empty(), "map fixture verifies");
+  const std::string before = dumpModule(nest.m);
+  FlatPassManager pm; pm.addPass(std::make_unique<LoopBlockingPass>());
+  PassManagerOptions options; options.verifyEach = true; options.instrument = true;
+  const auto r = pm.run(nest.m, options);
+  check(r.ok() && r.changed && before != dumpModule(nest.m) &&
+            verifyFlatModule(nest.m).empty(),
+        "map nest is transformed");
+  check(r.invocations.size() == 1 &&
+            r.invocations[0].stats.counters.count("blocked-maps") &&
+            r.invocations[0].stats.counters.at("blocked-maps") == 1,
+        "map pattern is distinguished from reduction");
+  saveIR("map", before, nest.m);
+}
 }  // namespace
 int main(int argc, char** argv) {
   if (argc > 2) return 2;
@@ -153,6 +219,7 @@ int main(int argc, char** argv) {
   runCase("preheader_operand", 128, 128, false, false, false, false, true);
   runCase("header_operand", 128, 128, false, false, false, false, false, true);
   runCase("exit_phi", 128, 128, false, false, false, false, false, false, true);
+  testMap();
   std::printf("S24C_BLOCKING_TRANSFORM_CHECKS=%d FAILURES=%d\n", checks, failures);
   return failures ? 1 : 0;
 }

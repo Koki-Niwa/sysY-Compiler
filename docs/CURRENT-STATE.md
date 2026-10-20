@@ -599,16 +599,22 @@ not raw element bytes; `dependenceFree` defaults to false so callers must opt in
 column-major, dependence, cold, SIZE_MAX saturation, oversized element). This layer does **not** rewrite
 IR and is not yet consumed by a transform.
 
-**S24c-b PARTIAL — blocked integer-add reduction**: `LoopBlockingPass` matches
-a canonical two-level nest whose body is `g = g + f(i,j)` with exactly one
-scalar-global load/store and only pure arithmetic. Integer addition modulo i32
-is associative/commutative, so the blocked order preserves the final global
-value. It requires both tile dimensions to be strictly partial (no full-extent degenerate order), consumes `BlockingPlan`, builds the four-level tile nest (i0,j0,i,j),
-clones the reduction body, and neutralizes the now-unreachable original headers'
-phis. `test_blocking_transform` has **47 checks**; CTest
-`test_blocking_equivalence` executes the genuinely reordered reduction and
-requires identical final memory/return (write order intentionally differs).
-This is not matmul/conv/stencil and has no target runtime; S24b remains
+**S24c-b PARTIAL — blocked reduction and map**: `LoopBlockingPass` matches a
+canonical two-level nest with either:
+- an integer-add reduction `g = g + f(i,j)` (one scalar-global load/store), or
+- a read-only-input/write-only-output map `out[i][j] = f(in[i][j])` whose store
+  indices are exactly the two loop indices (one global load, one store, distinct
+  bases).
+
+Both are pure (no calls/alloca/memcpy), have no live-outs, and require both tile
+dimensions to be strictly partial. The reduction is legal because i32 addition is
+associative/commutative; the map is legal because the input is never written and
+the output address is unique per `(i,j)`. The pass consumes `BlockingPlan`,
+builds i0/j0/i/j, clones the body, and neutralizes the now-unreachable original
+header phis. `test_blocking_transform` has **50 checks**; CTest
+`test_blocking_equivalence` executes 128x128 reduction, 65x63 partial reduction
+and 128x128 map, requiring identical final memory/return (write order differs).
+This is not matmul/conv accumulation and has no target runtime; S24b remains
 order-preserving strip-mining.
 
 **S25a CLOSED / PASS** (full S09 **57/0/2**, `test_unroll` **20** +

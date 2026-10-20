@@ -23,6 +23,7 @@ struct ReductionNest {
   int64_t outerBound = 0;
   int64_t innerBound = 0;
   GlobalAddr* global = nullptr;
+  bool map = false;
 };
 bool constantI32(const Value* value, int64_t& out) {
   if (value == nullptr || !value->isConstant() || value->type() != typePool().i32())
@@ -53,6 +54,44 @@ bool matchInduction(Instruction* phi, Instruction* cmp, int64_t& bound,
       !constantI32(inc->operand(1), step) || step != 1)
     return false;
   return true;
+}
+const GlobalAddr* baseGlobal(const Value* value) {
+  while (value != nullptr && value->isInst()) {
+    const auto* inst = static_cast<const Instruction*>(value);
+    if (inst->op() != Opcode::GEP || inst->numOperands() < 1) return nullptr;
+    value = inst->operand(0);
+  }
+  return value != nullptr && value->isGlobalAddr()
+             ? static_cast<const GlobalAddr*>(value)
+             : nullptr;
+}
+bool collectStoreIndices(const Value* ptr, const Instruction* outer,
+                         const Instruction* inner, bool& sawOuter, bool& sawInner) {
+  if (ptr == nullptr) return false;
+  if (ptr->isGlobalAddr()) return true;
+  if (!ptr->isInst()) return false;
+  const auto* inst = static_cast<const Instruction*>(ptr);
+  if (inst->op() != Opcode::GEP || inst->numOperands() < 2) return false;
+  if (!collectStoreIndices(inst->operand(0), outer, inner, sawOuter, sawInner))
+    return false;
+  const Value* index = inst->operand(1);
+  while (index != nullptr && index->isInst() &&
+         (static_cast<const Instruction*>(index)->op() == Opcode::SExt ||
+          static_cast<const Instruction*>(index)->op() == Opcode::ZExt)) {
+    index = static_cast<const Instruction*>(index)->operand(0);
+  }
+  if (index == outer) {
+    if (sawOuter) return false;
+    sawOuter = true;
+    return true;
+  }
+  if (index == inner) {
+    if (sawInner) return false;
+    sawInner = true;
+    return true;
+  }
+  if (index != nullptr && index->isConstant()) return true;
+  return false;
 }
 bool matchNest(const Function& function, ReductionNest& nest) {
   for (BasicBlock* outer : function.blocks()) {
@@ -127,17 +166,27 @@ bool matchNest(const Function& function, ReductionNest& nest) {
       }
     }
     if (load == nullptr || store == nullptr || store->numOperands() != 2 ||
-        load->numOperands() != 1 || !load->operand(0)->isGlobalAddr() ||
-        !store->operand(1)->isGlobalAddr() ||
-        load->operand(0) != store->operand(1) ||
-        !store->operand(0)->isInst())
+        load->numOperands() != 1)
       continue;
-    Instruction* add = const_cast<Instruction*>(
-        static_cast<const Instruction*>(store->operand(0)));
-    if (add->op() != Opcode::Add || add->numOperands() != 2 ||
-        (add->operand(0) != load && add->operand(1) != load) ||
-        load->useCount() != 1 || load->uses()[0].user != add)
-      continue;
+    const GlobalAddr* loadBase = baseGlobal(load->operand(0));
+    const GlobalAddr* storeBase = baseGlobal(store->operand(1));
+    if (loadBase == nullptr || storeBase == nullptr) continue;
+    bool map = loadBase != storeBase;
+    if (map) {
+      bool sawOuter = false, sawInner = false;
+      if (!collectStoreIndices(store->operand(1), outerPhi, inner->at(0), sawOuter,
+                               sawInner) ||
+          !sawOuter || !sawInner)
+        continue;
+    } else {
+      if (!store->operand(0)->isInst()) continue;
+      Instruction* add = const_cast<Instruction*>(
+          static_cast<const Instruction*>(store->operand(0)));
+      if (add->op() != Opcode::Add || add->numOperands() != 2 ||
+          (add->operand(0) != load && add->operand(1) != load) ||
+          load->useCount() != 1 || load->uses()[0].user != add)
+        continue;
+    }
     bool pure = true;
     for (Instruction* inst : body->insts()) {
       if (inst == load || inst == store || inst == body->terminator()) continue;
@@ -185,7 +234,8 @@ bool matchNest(const Function& function, ReductionNest& nest) {
     candidate.outerPhi = outerPhi; candidate.innerPhi = inner->at(0);
     candidate.outerCmp = outer->at(1); candidate.innerCmp = inner->at(1);
     candidate.outerBound = nest.outerBound; candidate.innerBound = nest.innerBound;
-    candidate.global = static_cast<GlobalAddr*>(load->operand(0));
+    candidate.global = const_cast<GlobalAddr*>(loadBase);
+    candidate.map = map;
     nest = candidate;
     return true;
   }
@@ -381,7 +431,8 @@ PassResult LoopBlockingPass::run(Function& function, PassContext& context) {
       mutator.replaceUses(nest.innerPhi, zero) != MutationResult::Applied ||
       cfg.erasePhi(nest.innerPhi) != MutationResult::Applied)
     return fail;
-  ++result.stats.counters["blocked-reductions"];
+  if (nest.map) ++result.stats.counters["blocked-maps"];
+  else ++result.stats.counters["blocked-reductions"];
   result.stats.counters["tile-outer"] = static_cast<long long>(tileOuter);
   result.stats.counters["tile-inner"] = static_cast<long long>(tileInner);
   result.status = PassStatus::Applied;

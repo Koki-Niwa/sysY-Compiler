@@ -41,8 +41,8 @@ struct AliasAnalysis {
   using Result = AliasInfo;
   static constexpr AnalysisScope scope = AnalysisScope::Module;
   static constexpr MutationKind revisionDependencies() {
-    return MutationKind::Memory | MutationKind::Calls |
-           MutationKind::Globals | MutationKind::Interface;
+    return MutationKind::DataFlow | MutationKind::Memory |
+           MutationKind::Calls | MutationKind::Globals | MutationKind::Interface;
   }
   static std::optional<Result> run(const Module&, AnalysisManager&);
 };

@@ -205,14 +205,16 @@ it does not participate in cache validity or invalidation decisions.
 
 ## S23b Canonical loop interchange (CLOSED / PASS, load-only)
 
-`LoopInterchangePass` matches a perfectly nested canonical pair (outer header,
-inner header, one body; the inner exit increments the outer IV) and swaps the
-loop roles. It rewires all six edges with `CFGEditor::redirectEdge`, passing
-the initial phi values to the new headers and exchanging the two latch
-increments so the new outer latch advances the old outer IV and the new inner
-latch advances the old inner IV. Only load-only bodies (no store/call/alloca)
-are transformed, so the reorder is dependence-free; the plan records legality
-and line traffic. General bodies need affine extraction and are not claimed.
+`LoopInterchangePass` matches a perfectly nested pair with exactly one i32
+induction phi per header, constant start/bound/positive step, a single body and
+a separate outer latch. Before editing it validates header sizes, predecessor
+sets, phi/terminator shapes, in-region uses and that every body instruction is
+pure or a load (no store/call/alloca). It then rewires all six edges with
+`CFGEditor::redirectEdge`, passes the initial phi values to the swapped headers
+and rewrites both latch increments to advance the new IVs. Unsupported shapes
+are declined before mutation; an edit rejection after mutation fails the
+pass/pipeline. General dependence-bearing bodies need affine extraction and are
+not claimed.
 
 ## S23a Interchange planning (CLOSED / PASS)
 
@@ -241,9 +243,11 @@ transform stays within the stack-safety oracle.
 
 ## S21a Early inlining with bounded probe (CLOSED / PASS)
 
-`InlineV0Pass` accepts an optional `InlineProbe` with a per-run budget. A
-structurally eligible call above the conservative size/cost cap may request a
-bounded probe; a profitable result permits the inline, while an unprofitable
+`InlineV0Pass` snapshots block frequencies and function summaries before its
+first mutation (inlining invalidates the caller's analysis handles), then
+accepts an optional `InlineProbe` with a per-run budget. A structurally
+eligible call above the conservative size/cost cap may request a bounded
+probe; a profitable result permits the inline, while an unprofitable
 result or no probe keeps the call. Each decision appends an `InlineRecord`
 (frequency, instruction count, code-growth and latency estimate, probe use,
 reason: hot tiny / probe approved / probe declined / cost cap / cold).
@@ -251,10 +255,11 @@ Inlining only inserts into the caller block and rewrites the call, so an
 enclosing loop's blocks and back edge remain intact.
 
 `LoopRotatePass` rotates a phi-free while loop with one dedicated preheader,
-one back edge, and phi-free body/exit targets: the header stays as a guard,
-the latch gets a clone of the condition (a single pure instruction whose
-operands are outside the loop), and its terminator becomes `cond ? body :
-exit`. `CFGEditor::replaceTerminator` may now add phi-free target edges, not
+one back edge, and phi-free body/exit targets: the header stays as a guard and
+must contain only the condition (a single pure instruction whose operands are
+outside the loop, used only by the terminator), so no header side effect is
+bypassed; the latch gets a clone of that condition and its terminator becomes
+`cond ? body : exit`. `CFGEditor::replaceTerminator` may now add phi-free target edges, not
 only drop them. Phi-bearing loops are declined (negative test).
 
 ## S20 SCEV, LICM, strength reduction and AddressPlan (CLOSED / PASS)
@@ -286,9 +291,10 @@ Commutative integer operations canonicalize their operand order. Loads and
 calls are not numbered.
 
 `DeadStoreEliminationPass` scans a block backwards and removes a store
-overwritten by a later store to the same pointer value. Any load or call clears
-all pending stores, so aliasing reads keep earlier stores. It does not cross
-block boundaries. `DeadLoadEliminationPass` removes unused loads.
+overwritten by a later store to the same non-escaping stack-slot pointer. Any
+load or call-like operation clears all pending stores; global/argument/unknown
+pointers also flush them, because the project's equivalence oracle observes
+global write traces. It does not cross block boundaries. `DeadLoadEliminationPass` removes unused loads.
 `--opt=s19` is an opt-in pipeline (rewrite, GVN, DSE, DLE) after mem2reg.
 
 ## S18 rewrite DSL and basic peephole rules (CLOSED / PASS)
@@ -398,7 +404,7 @@ Out-of-range slots and stale CFGs fail closed.
 ## S13 alias analysis (CLOSED / PASS)
 
 `src/analysis/AliasAnalysis.{h,cpp}` is a Module-scope analysis with the
-dependency mask Memory|Calls|Globals|Interface. It consumes CallGraphAnalysis
+dependency mask DataFlow|Memory|Calls|Globals|Interface. It consumes CallGraphAnalysis
 and keeps an immutable provenance map in its result: Alloca, Global, Param and
 Fresh bases, with constant byte offsets accumulated through GEP, BitCast and
 Phi. Distinct Alloca/Global/Fresh objects and distinct constant offsets of the

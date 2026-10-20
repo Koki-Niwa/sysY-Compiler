@@ -80,6 +80,39 @@ void testTransform() {
         n.innerExit->terminator()->succ(0) == n.inner,
         "body and inner exit close the swapped loops");
 }
+void testNoPhiDoesNotCrash() {
+  Module m; const Type* i32 = typePool().i32();
+  Function* f = m.createFunction("nophi", i32);
+  BasicBlock* pre = m.createBlock(f); BasicBlock* o = m.createBlock(f);
+  BasicBlock* i = m.createBlock(f); BasicBlock* b = m.createBlock(f);
+  BasicBlock* l = m.createBlock(f); BasicBlock* e = m.createBlock(f);
+  add(m, pre, createBr(o, {}));
+  add(m, o, createCondBr(m.getIntConst(i32, 1), i, e, {}));
+  add(m, i, createCondBr(m.getIntConst(i32, 1), b, l, {}));
+  add(m, b, createBr(i, {}));
+  add(m, l, createBr(o, {}));
+  add(m, e, createRet(m.getIntConst(i32, 0), {}));
+  m.rebuildCFG(); m.rebuildUseDef();
+  check(verifyFlatModule(m).empty(), "no-phi fixture verifies");
+  FlatPassManager pm; pm.addPass(std::make_unique<LoopInterchangePass>());
+  const auto r = pm.run(m);
+  check(r.ok() && !r.changed && verifyFlatModule(m).empty(),
+        "loop without an induction-phi is declined without a crash");
+}
+void testHeaderStoreNegative() {
+  Nest n(false);
+  BasicBlock* outer = n.outer;
+  Instruction* store = createStore(n.i32, n.m.getIntConst(n.i32, 1),
+                                   n.m.globalAddr(n.m.createGlobal("h", n.i32)), {});
+  n.m.ownInst(store);
+  outer->insertInst(1, store);
+  n.m.rebuildCFG(); n.m.rebuildUseDef();
+  check(verifyFlatModule(n.m).empty(), "header-store interchange fixture verifies");
+  FlatPassManager pm; pm.addPass(std::make_unique<LoopInterchangePass>());
+  const auto r = pm.run(n.m);
+  check(r.ok() && !r.changed && n.pre->terminator()->succ(0) == n.outer,
+        "extra header side effect blocks interchange");
+}
 void testStoreNegative() {
   Nest n(true);
   check(verifyFlatModule(n.m).empty(), "store fixture verifies");
@@ -91,6 +124,8 @@ void testStoreNegative() {
 }  // namespace
 int main() {
   testTransform();
+  testNoPhiDoesNotCrash();
+  testHeaderStoreNegative();
   testStoreNegative();
   std::printf("S23B_CHECKS=%d FAILURES=%d\n", checks, failures);
   return failures ? 1 : 0;

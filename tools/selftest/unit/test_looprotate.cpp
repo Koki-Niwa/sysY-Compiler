@@ -74,10 +74,25 @@ void testNegativePhi() {
   check(r.ok() && !r.changed && f.latch->terminator()->numSuccs() == 1,
         "loop with a header phi is left untouched");
 }
+void testHeaderSideEffect() {
+  RotateFixture f;
+  // A store in the header must keep executing every iteration; rotation would
+  // bypass it, so the pass must decline.
+  Instruction* store = createStore(f.i32, f.m.getIntConst(f.i32, 1), f.global, {});
+  f.m.ownInst(store);
+  f.header->insertInst(0, store);
+  f.m.rebuildCFG(); f.m.rebuildUseDef();
+  check(verifyFlatModule(f.m).empty(), "header-store fixture verifies");
+  FlatPassManager pm; pm.addPass(std::make_unique<LoopRotatePass>());
+  const auto r = pm.run(f.m);
+  check(r.ok() && !r.changed && f.latch->terminator()->numSuccs() == 1,
+        "header side effects block rotation");
+}
 }  // namespace
 int main() {
   testRotate();
   testNegativePhi();
+  testHeaderSideEffect();
   std::printf("S21B_CHECKS=%d FAILURES=%d\n", checks, failures);
   return failures ? 1 : 0;
 }

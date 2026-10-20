@@ -48,7 +48,12 @@ PassResult InlineV0Pass::run(Function& function, PassContext& context) {
     result.diagnostic = "inline-v0 requires block frequencies and function summaries";
     return result;
   }
-  const double entryFrequency = frequencies.get()->frequency(function.entry()->index());
+  // Snapshot analysis results before the first mutation: inlining changes the
+  // caller's data flow, which invalidates the handles. The callee summaries and
+  // block frequencies remain valid inputs for the rest of this run.
+  const BlockFrequencyInfo frequencySnapshot = *frequencies.get();
+  const FunctionSummaryInfo summarySnapshot = *summaries.get();
+  const double entryFrequency = frequencySnapshot.frequency(function.entry()->index());
   if (entryFrequency <= 0.0) return result;
 
   for (Instruction* call : calls) {
@@ -62,8 +67,8 @@ PassResult InlineV0Pass::run(Function& function, PassContext& context) {
       continue;
     }
     const FunctionSummary* summary = nullptr;
-    for (size_t i = 0; i < summaries.get()->perFunction.size(); ++i) {
-      const FunctionSummary& candidate = summaries.get()->perFunction[i];
+    for (size_t i = 0; i < summarySnapshot.perFunction.size(); ++i) {
+      const FunctionSummary& candidate = summarySnapshot.perFunction[i];
       if (candidate.function == callee) { summary = &candidate; break; }
     }
     if (summary == nullptr || summary->recursive) {
@@ -112,7 +117,7 @@ PassResult InlineV0Pass::run(Function& function, PassContext& context) {
       continue;
     }
     const double hotness =
-        frequencies.get()->frequency(call->parent()->index()) / entryFrequency;
+        frequencySnapshot.frequency(call->parent()->index()) / entryFrequency;
     double bodyCost = 0.0;
     for (Instruction* inst : entry->insts())
       if (inst != terminator) bodyCost += model->instructionCost(*inst, costContext_);

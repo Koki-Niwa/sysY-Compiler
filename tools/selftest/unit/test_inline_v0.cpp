@@ -191,6 +191,30 @@ void buildThreeAdd(Module& m, Function** calleeOut, Instruction** callOut,
   m.rebuildCFG(); m.rebuildUseDef();
   *calleeOut = callee; *callerOut = main;
 }
+void testTwoCalls() {
+  Module m; const Type* i32 = typePool().i32();
+  Function* callee = m.createFunction("inc", i32);
+  BasicBlock* cb = m.createBlock(callee);
+  Argument* x = m.createArgument(i32, {});
+  callee->addParam(x);
+  add(m, cb, createRet(add(m, cb, createBin(Opcode::Add, x,
+                                            m.getIntConst(i32, 1), {})), {}));
+  Function* main = m.createFunction("main", i32);
+  BasicBlock* mb = m.createBlock(main);
+  Instruction* a = add(m, mb, createCall("inc", i32, {m.getIntConst(i32, 1)}, {}));
+  Instruction* b = add(m, mb, createCall("inc", i32, {m.getIntConst(i32, 2)}, {}));
+  Instruction* sum = add(m, mb, createBin(Opcode::Add, a, b, {}));
+  add(m, mb, createRet(sum, {}));
+  m.rebuildCFG(); m.rebuildUseDef();
+  FlatPassManager pm; pm.addPass(std::make_unique<InlineV0Pass>());
+  const auto r = pm.run(m);
+  bool hasCall = false;
+  for (BasicBlock* block : main->blocks())
+    for (Instruction* inst : block->insts())
+      if (inst->op() == Opcode::Call) hasCall = true;
+  check(r.ok() && r.changed && !hasCall && verifyFlatModule(m).empty(),
+        "two consecutive hot inlines do not reuse a stale summary");
+}
 void testInlineInsideLoop() {
   Module m; const Type* i32 = typePool().i32();
   Function* callee = m.createFunction("inc", i32);
@@ -310,6 +334,7 @@ int main() {
   testInlinesHotTinyCallee();
   testColdAndUnsupportedAreDeclined();
   testMultiBlockAllocaRecursiveAndModel();
+  testTwoCalls();
   testInlineInsideLoop();
   testProbe();
   std::printf("S15_CHECKS=%d FAILURES=%d\n", checks, failures);

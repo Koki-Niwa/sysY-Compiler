@@ -105,8 +105,8 @@ void testMatrix() {
   check(!h.facts.isCurrent(), "DataFlow invalidates ValueFacts");
   check(h.dominators.isCurrent() && h.loops.isCurrent() &&
         h.probabilities.isCurrent() && h.frequencies.isCurrent() &&
-        h.alias.isCurrent() && h.graph.isCurrent() && h.summaries.isCurrent(),
-        "DataFlow leaves CFG/Call/Memory analyses current");
+        !h.alias.isCurrent() && h.graph.isCurrent() && h.summaries.isCurrent(),
+        "DataFlow invalidates alias; CFG/call summaries stay current");
   h = acquire(manager, *f.caller);
   // CFG: split the header -> body edge.
   CFGEditor editor(mutator);

@@ -164,7 +164,7 @@ reduction and both AddressPlan choices (11 checks). Transpose 220 → 202
 instructions; S20 corpus behavior 357 exact + 62 loop-count-only + 0
 observable differences + 121 skips, all pass.
 
-**S21a CLOSED / PASS** (full S09 **57/0/2**, `test_inline_v0` **13 checks**):
+**S21a CLOSED / PASS** (full S09 **57/0/2**, `test_inline_v0` **14 checks**):
 `InlineV0Pass` now takes an optional bounded `InlineProbe`. Calls that pass the
 structural checks but exceed the conservative cost cap may request one of at
 most `probeBudget` probes; a profitable probe inlines, an unprofitable or
@@ -198,7 +198,9 @@ new outer latch receive swapped increments, and all six edges are redirected
 through `CFGEditor::redirectEdge` with phi values. The body must contain no
 store/call/alloca, so the reorder is dependence-free; the planner still records
 legality and line-traffic estimates. `test_interchange_transform` covers the
-swap and a store negative (8 checks). Runtime measurements are not claimed.
+swap, a no-phi loop (no crash), header-side-effect and store negatives (12
+checks). The matcher validates induction phis, constant domains, predecessor
+sets, in-region uses and edit failure before/after mutation. Runtime measurements are not claimed.
 
 **S22b CLOSED / PASS (single-block scope)**: `TailRecursionEliminationPass`
 consumes `TailCallAnalysis` and transforms a one-block function whose only
@@ -216,8 +218,8 @@ edge, no header phi and phi-free body/exit targets: it keeps the header as a
 guard, clones the condition (single pure instruction with operands outside the
 loop) into the latch, and turns the latch into `cond ? body : exit`. It does
 not rotate phi-bearing loops yet; those are declined and covered by a negative
-test. `test_looprotate` covers rotation, header back-edge removal and the phi
-negative (5 checks).
+test. `test_looprotate` covers rotation, header back-edge removal, the phi
+negative and a header-side-effect negative (7 checks).
 
 **S20b CLOSED / PASS**: signed division by a non-power-of-two constant is
 now lowered with a 32-bit `mulhi` (16-bit limb emulation; Flat integer ops are
@@ -229,14 +231,14 @@ with `--mem2reg --opt=s20`: 540 files, 357 exact + 62 loop-count-only + 0
 observable differences + 121 skips, all pass. AddressPlan remains a decision
 API (indexed/pointer) rather than an IR rewrite.
 
-**S19 CLOSED / PASS** (full S09 **57/0/2**, `test_s19` **6 checks**):
+**S19 CLOSED / PASS** (full S09 **57/0/2**, `test_s19` **7 checks**):
 `GVNPass` numbers pure instructions in dominator-tree scope (scoped
 availability, commutative operand canonicalization, no cross-sibling merge);
 `DeadStoreEliminationPass` removes an overwritten store in the same block and
 clears pending stores on any load/call; `DeadLoadEliminationPass` removes
 unused loads. `--opt=s19` runs rewrite → GVN → DSE → DLE after mem2reg.
 `test_s19` covers same-block GVN, sibling dominance, commutation, DSE with an
-intervening load and DLE (6 checks). Transpose: 220 → 214 instructions with
+intervening load, the alloca-only DSE scope and DLE (7 checks). Transpose: 220 → 214 instructions with
 S19, 220 → 191 with S17+S19. Behavior with `--mem2reg --opt=s17 --opt=s19`: 540 files, 357 exact + 62 loop-count-only + 0 observable differences + 121 skips, all pass.
 
 **S18 CLOSED / PASS** (full S09 **57/0/2**, `test_rewrite` **24 checks**):
@@ -312,14 +314,14 @@ on CFG revisions. `test_cfg_analysis` covers 12 hand CFGs for idom/dominance,
 single/nested/sequential/self/multi-backedge loops, an irreducible cycle,
 unreachable blocks, Loop-scope caching and CFG invalidation (20 checks).
 
-**S13 CLOSED / PASS** (full S09 **56/0/2**, `test_alias` **33 checks**): `AliasAnalysis`
+**S13 CLOSED / PASS** (full S09 **56/0/2**, `test_alias` **37 checks**): `AliasAnalysis`
 is a Module-scope consumer of `CallGraphAnalysis` (dependency mask
 Memory|Calls|Globals|Interface). It resolves pointer provenance to Alloca,
 Global, Param or Fresh bases with constant byte offsets through GEP/BitCast/Phi,
 and instantiates callee return summaries at call sites, so a call returning a
 parameter resolves to the caller's argument and a call returning a global keeps
 that global. Unknown/external results and return offsets that are not provably
-exact degrade to MayAlias. `test_alias` covers 33 checks including locals,
+exact degrade to MayAlias. `test_alias` covers 37 checks including locals,
 globals, arguments, constant/dynamic GEP offsets, cross-function returns,
 interior-pointer unknowns and Memory/Calls invalidation.
 
@@ -555,6 +557,31 @@ gate. The 490 non-tensor / 50 tensor split is a corpus scope fact, not a result
 invented by this document. Full corpus gates may require the workspace's
 external corpus and runtime; standalone clones must remain portable without
 those assets for local checks.
+
+## S23 audit fixes (2026-10-20)
+
+An independent review of the S12–S23 delivery found seven issues; all are
+fixed with regressions:
+
+- DSE now removes only overwritten stores to non-escaping stack slots (the
+  global write trace is observable in the oracle); the old reverse scan erased
+  the later store, changing `g=1; g=2; return g` from 2 to 1.
+- `InlineV0Pass` snapshots block frequencies and function summaries before its
+  first mutation, removing a stale-handle crash on two consecutive inlines.
+- `LoopRotatePass` requires the header to contain only the condition and
+  clones only that condition; header side effects can no longer be bypassed.
+- `LoopInterchangePass` validates one i32 induction phi per header, constant
+  start/bound/positive step, predecessor sets, in-region uses and a single
+  pure/load body before editing; unsupported shapes are declined without a
+  crash, and post-mutation edit failure fails the pipeline.
+- `AliasAnalysis` depends on `MutationKind::DataFlow`; changing a returned
+  pointer invalidates and recomputes the alias result.
+- The unused SCEV field was removed; Clang builds warning-free.
+
+Evidence: `test_alias` 37, `test_s19` 7, `test_inline_v0` 14,
+`test_looprotate` 7, `test_interchange_transform` 12 checks; Clang CTest 37/37;
+DSE regression behavior returns 2 with an unchanged global write trace.
+Full dated report: [`../docs/audit/S23-AUDIT-FIXES-2026-10-20.md`](../../docs/audit/S23-AUDIT-FIXES-2026-10-20.md).
 
 ## Reading paths
 

@@ -121,6 +121,29 @@ void testDSEAndDLE() {
   const auto lr = lm.run(l);
   check(lr.ok() && lr.changed && countOp(*lf, Opcode::Load) == 1 &&
         verifyFlatModule(l).empty(), "DLE removes only unused loads");
+  // Globals: g=1; g=2; return g must keep the later store.
+  Module g; const Type* gt = typePool().i32();
+  GlobalAddr* ga = g.globalAddr(g.createGlobal("g", gt));
+  Function* gf = g.createFunction("keep_later", gt);
+  BasicBlock* gb = g.createBlock(gf);
+  add(g, gb, createStore(gt, g.getIntConst(gt, 1), ga, {}));
+  add(g, gb, createStore(gt, g.getIntConst(gt, 2), ga, {}));
+  Instruction* gl = add(g, gb, createLoad(gt, ga, {}));
+  add(g, gb, createRet(gl, {}));
+  g.rebuildCFG(); g.rebuildUseDef();
+  FlatPassManager gm; gm.addPass(std::make_unique<DeadStoreEliminationPass>());
+  const auto gr = gm.run(g);
+  bool keptOne = false, keptTwo = false;
+  for (BasicBlock* block : gf->blocks())
+    for (Instruction* inst : block->insts())
+      if (inst->op() == Opcode::Store && inst->operand(0)->isConstant()) {
+        const int64_t value = static_cast<const Constant*>(inst->operand(0))->intVal();
+        keptOne = keptOne || value == 1;
+        keptTwo = keptTwo || value == 2;
+      }
+  check(gr.ok() && !gr.changed && countOp(*gf, Opcode::Store) == 2 &&
+        keptOne && keptTwo && verifyFlatModule(g).empty(),
+        "DSE leaves observable global stores intact");
 }
 }  // namespace
 int main() {

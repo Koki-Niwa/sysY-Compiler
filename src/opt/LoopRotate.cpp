@@ -80,6 +80,13 @@ PassResult LoopRotatePass::run(Function& function, PassContext& context) {
       Value* cloneValue = const_cast<Value*>(condition);
       if (condition->isInst()) {
         const auto* conditionInst = static_cast<const Instruction*>(condition);
+        // The guard header may contain only the condition. Anything else
+        // (especially a side effect) would stop executing after rotation.
+        if (header->size() != 2 || header->at(0) != conditionInst) continue;
+        bool onlyTerminatorUse = true;
+        for (const Use& use : conditionInst->uses())
+          if (use.user != header->terminator()) onlyTerminatorUse = false;
+        if (!onlyTerminatorUse) continue;
         if (!pureCondition(*conditionInst)) continue;
         bool operandsOk = true;
         for (size_t i = 0; i < conditionInst->numOperands(); ++i) {
@@ -109,6 +116,8 @@ PassResult LoopRotatePass::run(Function& function, PassContext& context) {
           continue;
         }
         cloneValue = clone;
+      } else if (header->size() != 1) {
+        continue;   // extra header instructions would be bypassed
       }
       Instruction* branch = createCondBr(cloneValue, body, exit, latch->terminator()->loc());
       if (context.cfg().replaceTerminator(latch, branch) != MutationResult::Applied)

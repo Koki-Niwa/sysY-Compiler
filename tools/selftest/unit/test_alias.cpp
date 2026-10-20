@@ -184,10 +184,45 @@ void testInvalidation() {
   check(afterCall.isCurrent() && afterCall.get()->query(addr, addr) ==
         AliasKind::MustAlias, "alias recomputes after call mutation");
 }
+void testReturnDataFlowInvalidation() {
+  Module m; const Type* i32 = typePool().i32();
+  const Type* ptr = typePool().ptrTo(i32);
+  GlobalVariable* gx = m.createGlobal("x", i32);
+  GlobalVariable* gy = m.createGlobal("y", i32);
+  GlobalAddr* ax = m.globalAddr(gx);
+  GlobalAddr* ay = m.globalAddr(gy);
+  Function* id = m.createFunction("id2", ptr);
+  BasicBlock* ib = m.createBlock(id);
+  Argument* a = m.createArgument(ptr, {});
+  Argument* b = m.createArgument(ptr, {});
+  id->addParam(a); id->addParam(b);
+  Instruction* ret = add(m, ib, createRet(a, {}));
+  Function* main = m.createFunction("main", i32);
+  BasicBlock* mb = m.createBlock(main);
+  Instruction* call = add(m, mb, createCall("id2", ptr, {ax, ay}, {}));
+  add(m, mb, createRet(m.getIntConst(i32, 0), {}));
+  m.rebuildCFG(); m.rebuildUseDef();
+  AnalysisManager manager(m);
+  auto handle = manager.get<AliasAnalysis>();
+  check(handle.isCurrent() &&
+        handle.get()->query(call, ax) == AliasKind::MustAlias &&
+        handle.get()->query(call, ay) == AliasKind::NoAlias,
+        "return provenance resolves the first argument");
+  IRMutator mutator(m);
+  check(mutator.rewriteOperand(ret, 0, b) == MutationResult::Applied,
+        "tracked data-flow rewrite of the returned pointer");
+  check(!handle.isCurrent(), "pointer data-flow change invalidates alias");
+  auto rebuilt = manager.get<AliasAnalysis>();
+  check(rebuilt.isCurrent() &&
+        rebuilt.get()->query(call, ay) == AliasKind::MustAlias &&
+        rebuilt.get()->query(call, ax) == AliasKind::NoAlias,
+        "alias recomputes the changed return address");
+}
 }  // namespace
 int main() {
   testProvenance();
   testInvalidation();
+  testReturnDataFlowInvalidation();
   std::printf("S13_CHECKS=%d FAILURES=%d\n", checks, failures);
   return failures ? 1 : 0;
 }

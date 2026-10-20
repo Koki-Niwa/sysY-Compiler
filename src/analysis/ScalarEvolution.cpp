@@ -26,8 +26,7 @@ bool constantOf(const SCEV* expr, int64_t& out) {
 }
 class Builder {
  public:
-  Builder(const Function& function, const LoopInfoResult& loops)
-      : function_(function), loops_(loops) {}
+  explicit Builder(const LoopInfoResult& loops) : loops_(loops) {}
   std::shared_ptr<SCEV> get(const Value* value) {
     if (value == nullptr) return makeUnknown();
     if (value->isConstant()) {
@@ -94,7 +93,6 @@ class Builder {
     }
     return makeUnknown();
   }
-  const Function& function_;
   const LoopInfoResult& loops_;
   std::unordered_map<const Value*, std::shared_ptr<SCEV>> cache_;
   std::unordered_set<const Value*> active_;
@@ -120,7 +118,7 @@ std::optional<SCEVInfo> ScalarEvolutionAnalysis::run(
   AnalysisHandle<LoopInfoResult> loops = manager.get<LoopInfoAnalysis>(function);
   if (!loops.isCurrent()) return std::nullopt;
   SCEVInfo info;
-  Builder builder(function, *loops.get());
+  Builder builder(*loops.get());
   for (BasicBlock* block : function.blocks())
     for (Instruction* inst : block->insts())
       if (inst != nullptr) info.expressions[inst] = builder.get(inst);

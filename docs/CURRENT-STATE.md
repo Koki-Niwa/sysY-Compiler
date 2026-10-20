@@ -612,9 +612,9 @@ dimensions to be strictly partial. The reduction is legal because i32 addition i
 associative/commutative; the map is legal because the input is never written and
 the output address is unique per `(i,j)`. The pass consumes `BlockingPlan`,
 builds i0/j0/i/j, clones the body, and neutralizes the now-unreachable original
-header phis. `test_blocking_transform` has **50 checks**; CTest
-`test_blocking_equivalence` executes 128x128 reduction, 65x63 partial reduction
-and 128x128 map, requiring identical final memory/return (write order differs).
+header phis. `test_blocking_transform` has **53 checks**; CTest
+`test_blocking_equivalence` executes 128x128 reduction, 65x63 partial reduction,
+128x128 map and an in-place array reduction, requiring identical final memory/return (write order differs).
 This is not matmul/conv accumulation and has no target runtime; the transforms
 are available only through opt-in pipelines (`--opt=s24` for tiling/blocking,
 `--opt=s25` for unrolling), never by default. Both and their combination pass the

@@ -214,6 +214,69 @@ void testMap() {
         "map pattern is distinguished from reduction");
   saveIR("map", before, nest.m);
 }
+
+struct ArrayReduction {
+  Module m;
+  const Type* i32 = typePool().i32();
+  Function* f = nullptr;
+  GlobalAddr* acc = nullptr;
+  explicit ArrayReduction(int n) {
+    const Type* row = typePool().arrayOf(i32, n);
+    const Type* mat = typePool().arrayOf(row, n);
+    acc = m.globalAddr(m.createGlobal("acc", mat));
+    f = m.createFunction("main", i32);
+    BasicBlock* pre = m.createBlock(f); BasicBlock* outer = m.createBlock(f);
+    BasicBlock* inner = m.createBlock(f); BasicBlock* body = m.createBlock(f);
+    BasicBlock* innerLatch = m.createBlock(f); BasicBlock* outerLatch = m.createBlock(f);
+    BasicBlock* exit = m.createBlock(f);
+    add(m, pre, createBr(outer, {}));
+    Instruction* oi = add(m, outer, createPhi(i32, {m.getIntConst(i32, 0), nullptr},
+                                              {pre, outerLatch}, {}));
+    Instruction* oc = add(m, outer, createICmp(IPred::Slt, oi,
+                                               m.getIntConst(i32, n), {}));
+    add(m, outer, createCondBr(oc, inner, exit, {}));
+    Instruction* ij = add(m, inner, createPhi(i32, {m.getIntConst(i32, 0), nullptr},
+                                              {outer, innerLatch}, {}));
+    Instruction* ic = add(m, inner, createICmp(IPred::Slt, ij,
+                                               m.getIntConst(i32, n), {}));
+    add(m, inner, createCondBr(ic, body, outerLatch, {}));
+    Instruction* i64 = add(m, body, createCast(Opcode::SExt, oi, {}));
+    Instruction* j64 = add(m, body, createCast(Opcode::SExt, ij, {}));
+    Instruction* rowPtr = add(m, body, createGEP(row, acc, i64, {}));
+    Instruction* ptr = add(m, body, createGEP(i32, rowPtr, j64, {}));
+    Instruction* old = add(m, body, createLoad(i32, ptr, {}));
+    Instruction* value = add(m, body, createBin(Opcode::Mul, oi, ij, {}));
+    Instruction* sum = add(m, body, createBin(Opcode::Add, old, value, {}));
+    add(m, body, createStore(i32, sum, ptr, {}));
+    add(m, body, createBr(innerLatch, {}));
+    Instruction* jn = add(m, innerLatch, createBin(Opcode::Add, ij,
+                                                   m.getIntConst(i32, 1), {}));
+    add(m, innerLatch, createBr(inner, {}));
+    Instruction* in = add(m, outerLatch, createBin(Opcode::Add, oi,
+                                                   m.getIntConst(i32, 1), {}));
+    add(m, outerLatch, createBr(outer, {}));
+    add(m, exit, createRet(m.getIntConst(i32, 0), {}));
+    oi->setOperand(1, in);
+    ij->setOperand(1, jn);
+    m.rebuildCFG(); m.rebuildUseDef();
+  }
+};
+void testArrayReduction() {
+  ArrayReduction nest(128);
+  check(verifyFlatModule(nest.m).empty(), "array-reduction fixture verifies");
+  const std::string before = dumpModule(nest.m);
+  FlatPassManager pm; pm.addPass(std::make_unique<LoopBlockingPass>());
+  PassManagerOptions options; options.verifyEach = true; options.instrument = true;
+  const auto r = pm.run(nest.m, options);
+  check(r.ok() && r.changed && before != dumpModule(nest.m) &&
+            verifyFlatModule(nest.m).empty(),
+        "in-place array reduction is transformed");
+  check(r.invocations.size() == 1 &&
+            r.invocations[0].stats.counters.count("blocked-reductions") &&
+            r.invocations[0].stats.counters.at("blocked-reductions") == 1,
+        "array reduction uses the reduction path");
+  saveIR("array_reduction", before, nest.m);
+}
 }  // namespace
 int main(int argc, char** argv) {
   if (argc > 2) return 2;
@@ -234,6 +297,7 @@ int main(int argc, char** argv) {
   runCase("header_operand", 128, 128, false, false, false, false, false, true);
   runCase("exit_phi", 128, 128, false, false, false, false, false, false, true);
   testMap();
+  testArrayReduction();
   std::printf("S24C_BLOCKING_TRANSFORM_CHECKS=%d FAILURES=%d\n", checks, failures);
   return failures ? 1 : 0;
 }

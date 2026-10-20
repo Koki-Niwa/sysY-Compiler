@@ -621,7 +621,8 @@ are available only through opt-in pipelines (`--opt=s24` for blocking/tiling,
 540-file corpus with zero observable differences (349 exact + 70 loop-count +
 121 skip); 50 loops in 38 files actually tiled. S24b remains order-preserving
 strip-mining; nested blocking patterns still do not fire on the corpus because
-frontend nests retain three-block latches.
+frontend nests retain three-block latches and an inner preheader block between
+the outer header and inner header.
 
 **S25a CLOSED / PASS** (full S09 **57/0/2**, `test_unroll` **20** +
 `test_unroll_advisor` **13** checks): `planUnroll` now consumes a critical-path

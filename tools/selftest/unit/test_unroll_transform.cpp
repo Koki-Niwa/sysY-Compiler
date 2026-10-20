@@ -1,6 +1,7 @@
 // S25b: pair-unrolling of an even-trip canonical loop.
 #include <cstdio>
 #include <fstream>
+#include <limits>
 #include <string>
 #include "ir/FlatDump.h"
 #include "ir/FlatVerifier.h"
@@ -109,6 +110,14 @@ int main(int argc, char** argv) {
   runCase("even", 0, 10, 1, false, true);
   runCase("step3", 0, 12, 3, false, true);
   runCase("odd", 0, 11, 1, false, true);
+  runCase("odd_step3", 0, 9, 3, false, true);
+  runCase("non_aligned_odd", 5, 15, 3, false, true);
+  runCase("near_max", std::numeric_limits<int>::max() - 9,
+          std::numeric_limits<int>::max() - 1, 3, false, true);
+  runCase("near_min", std::numeric_limits<int>::min(),
+          std::numeric_limits<int>::min() + 10, 3, false, true);
+  runCase("wide_step", std::numeric_limits<int>::min(), 1, 33554432,
+          false, true);
   runCase("live_out", 0, 10, 1, true, false);
   std::printf("S25B_UNROLL_CHECKS=%d FAILURES=%d\n", checks, failures);
   return failures ? 1 : 0;

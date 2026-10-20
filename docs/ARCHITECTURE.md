@@ -246,7 +246,7 @@ fails, a tail header checks `i < bound` and optionally executes one tail body at
 the phi to `i+step` (pair) or the tail phi (tail); the old back edge is
 redirected so the header keeps exactly the preheader and the pair edge.
 `test_unroll_equivalence` requires a real IR change and then compares FlatExec
-observables. Vectorization, pressure/spill measurements and target runtime are
+observables across even, odd, non-aligned, near-bound and wide-step cases. Vectorization, pressure/spill measurements and target runtime are
 not implemented; the pass is not in the default pipeline.
 
 ## S25a Unroll planning (CLOSED / PASS)

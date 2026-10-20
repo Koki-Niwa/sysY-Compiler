@@ -615,8 +615,9 @@ body, no loop-defined live-outs, no body phi/alloca). It clones the body twice:
 a pair loop runs `i`/`i+step` and advances by `2*step`, then a single tail body
 runs the remaining iteration when the trip is odd. Even trips enter the tail
 header with `i >= bound` and execute no tail body. `test_unroll_transform` has
-**24 checks**; CTest `test_unroll_equivalence` executes three genuinely
-transformed cases (even, odd, step-3) and compares FlatExec observables.
+**59 checks**; CTest `test_unroll_equivalence` executes eight genuinely
+transformed cases (even/odd/step-3, non-aligned, near i32 bounds, wide step)
+and compares FlatExec observables.
 Vectorization, pressure/spill measurements and per-target runtime remain S25b
 follow-up; the pass is not in the default pipeline.
 

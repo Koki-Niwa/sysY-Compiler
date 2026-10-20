@@ -227,6 +227,12 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   sysy_unit_test(test_interchange_transform sysy_opt)
   sysy_unit_test(test_cfg_phi_edges sysy_opt)
   sysy_unit_test(test_tiling_transform sysy_opt)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_test(NAME test_tiling_equivalence
+    COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/tools/selftest/tiling_equivalence.py"
+      $<TARGET_FILE:test_tiling_transform>)
+  set_tests_properties(test_tiling_equivalence PROPERTIES TIMEOUT 60)
 
   add_executable(bench_lexer tools/selftest/unit/bench_lexer.cpp)
   target_include_directories(bench_lexer PRIVATE src)

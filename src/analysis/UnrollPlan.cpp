@@ -66,8 +66,15 @@ UnrollPlan planUnroll(const UnrollContext& context, const UnrollProfile& profile
   }
   std::vector<size_t> vectors{1};
   if (profile.target == UnrollTarget::AArch64 && profile.vectorWidth > 1) {
-    for (size_t vf = 2; vf <= profile.vectorWidth; vf *= 2) vectors.push_back(vf);
-    if (vectors.back() != profile.vectorWidth) vectors.push_back(profile.vectorWidth);
+    // A useful candidate has UF >= 2, so VF above four cannot satisfy the
+    // joint VF*UF budget. Bound the search and guard the doubling step so a
+    // malformed profile cannot turn it into an overflowing loop.
+    const size_t maxVector = std::min<size_t>(profile.vectorWidth, 8 / 2);
+    for (size_t vf = 2; vf <= maxVector;) {
+      vectors.push_back(vf);
+      if (vf > maxVector / 2) break;
+      vf *= 2;
+    }
   }
   Candidate best;
   for (size_t vector : vectors) {

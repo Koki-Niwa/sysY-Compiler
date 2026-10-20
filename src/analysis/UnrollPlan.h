@@ -11,7 +11,8 @@ enum class UnrollTarget : uint8_t { Generic, AArch64, RV64 };
 struct UnrollProfile {
   UnrollTarget target = UnrollTarget::Generic;
   size_t scalarRegisters = 16;
-  // Caller-selected VF; the baseline planner only caps UF for this width.
+  // Caller-selected maximum VF. AArch64 planning enumerates power-of-two
+  // widths up to this value, bounded by the VF*UF product budget.
   size_t vectorWidth = 1;
 };
 struct UnrollContext {

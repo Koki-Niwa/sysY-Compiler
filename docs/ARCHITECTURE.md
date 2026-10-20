@@ -207,14 +207,32 @@ it does not participate in cache validity or invalidation decisions.
 
 `LoopTilingPass` matches a canonical constant-trip loop (one i32 induction phi,
 constant start/bound/positive step, one latch) and strip-mines it: a tile header
-guards the original loop, the original loop runs `i` from the tile start to
-`min(start+T, bound)`, and a tile latch advances by `T` (clamped to the bound to
-avoid i32 overflow). The tile size comes from `planTiling`; because tile groups
-contain consecutive iterations, the iteration order and side-effect sequence are
-unchanged, so no dependence proof is needed. `CFGEditor::replaceTerminator`
-accepts phi values for newly added edges, and all header rewrites are
-prevalidated. Two-dimensional blocking (which reorders tiles) and fixed
-matmul/conv/stencil runtime measurements remain S24c.
+guards the original loop, and a tile latch advances along the same induction
+recurrence. `T` counts iterations: the span is `T * step`, and the final boundary
+is `terminal = start + ceil((bound-start)/step) * step`. Thus an unaligned bound
+does not reset the induction variable to a different residue class. The pass
+clamps the tile base to `terminal - span` **before** adding the span, avoiding
+overflow even for negative starts and a tail near `INT32_MAX`.
+
+The matcher rejects non-positive steps, overflowing terminal values, spans not
+representable as positive i32, exit phis and any loop-defined value used outside
+the loop. This live-out check precedes all mutation: the new outer exit may
+bypass the original header, and exit-value reconstruction is not implemented.
+At most one loop is transformed per function invocation; CFG/DataFlow edits
+invalidate affected analyses. Unsupported shapes decline without edits;
+unexpected editor failures terminate the pass and must not be consumed as a
+successful pipeline result.
+
+The tile size comes from `planTiling`, currently using a two-dimensional
+working-set estimate, not an inferred access geometry. Consecutive iteration
+groups preserve side-effect order, so the body needs no dependence proof.
+`CFGEditor::replaceTerminator` accepts phi values only for newly added edges;
+retained edges preserve existing values, including when a conditional branch
+becomes an unconditional branch to its second successor.
+`test_tiling_equivalence` requires actual IR changes and verified modules before
+comparing FlatExec observables. Two-dimensional blocking (which reorders tiles)
+and fixed matmul/conv/stencil runtime measurements remain S24c; this pass is not
+in the default CLI pipeline and no runtime gain is claimed.
 
 ## S25a Unroll planning (CLOSED / PASS)
 
@@ -222,7 +240,9 @@ matmul/conv/stencil runtime measurements remain S24c.
 caller-supplied critical path. The factor is capped by the target (AArch64 up
 to 4, RV64 up to 2), `registers/(live+1)`, the trip count, and
 `bodyInstructions/criticalPath` when the path is known. AArch64 enumerates
-power-of-two VF candidates jointly with UF (product at most eight); RV64 and
+power-of-two VF candidates jointly with UF (product at most eight). The caller's
+`vectorWidth` is a maximum, and enumeration is bounded by VF4 because UF is at
+least two, including when the caller supplies `SIZE_MAX`. RV64 and
 Generic stay scalar. Candidates are scored by `VF*UF/(1+penalty)` where the
 penalty is `(live*UF/registers)^2`; candidates above the 0.8 cliff are
 rejected. Cold/one-trip/empty loops are declined and an optional bounded probe
@@ -230,7 +250,11 @@ may accept or reject the chosen candidate.
 
 `adviseUnrolls` consumes BlockFrequencyAnalysis and LoopInfoAnalysis: for each
 canonical constant-trip loop it records trip count, body instruction count,
-hotness and the plan result; non-constant or non-canonical loops are skipped.
+hotness and the plan result. The canonical header contains an i32 induction phi,
+the controlling signed-less-than comparison and its conditional branch. The
+true edge enters the loop and the false edge exits; a unique preheader and latch
+establish the recurrence. Non-constant bounds, other exits, unsupported shapes
+and final-increment i32 overflow are skipped rather than assigned a trip count.
 There is no per-register-bank machine model, spill estimate or backend
 calibration yet, and this layer does not rewrite the IR.
 

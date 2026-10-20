@@ -238,7 +238,10 @@ MutationResult CFGEditor::replaceTerminator(
     return MutationResult::Rejected;
   Instruction* old = block->terminator();
   Function* function = block->parent();
-  if (old == nullptr || function == nullptr) return MutationResult::Rejected;
+  if (old == nullptr || function == nullptr || !mutator_.isLive(old) ||
+      (newTerminator->ownerModule() != nullptr &&
+       newTerminator->ownerModule() != &mutator_.module()))
+    return MutationResult::Rejected;
   auto hasEdge = [](const Value* value, const Instruction* user, size_t index) {
     if (value == nullptr) return false;
     for (const Use& use : value->uses())
@@ -257,7 +260,11 @@ MutationResult CFGEditor::replaceTerminator(
   for (size_t s = 0; s < successorCount; ++s) {
     BasicBlock* target = newTerminator->succ(s);
     if (target == nullptr || target->parent() != function) return MutationResult::Rejected;
-    const bool added = !hasSuccessor(block, target, successorCount);
+    // The detached replacement has no successor index to exclude.  Use an
+    // out-of-range index for the old terminator; using successorCount here
+    // skips a real old edge when the old terminator has more successors than
+    // the replacement (for example condbr A,B -> br B).
+    const bool added = !hasSuccessor(block, target, old->numSuccs());
     std::vector<Value*> supplied;
     if (!incomingValues.empty()) supplied = incomingValues[s];
     if (!added) {
@@ -281,6 +288,7 @@ MutationResult CFGEditor::replaceTerminator(
       addedValues.push_back(std::move(supplied));
     }
   }
+  std::vector<BasicBlock*> removedTargets;
   for (size_t s = 0; s < old->numSuccs(); ++s) {
     BasicBlock* target = old->succ(s);
     if (target == nullptr) continue;
@@ -294,12 +302,15 @@ MutationResult CFGEditor::replaceTerminator(
     for (Instruction* inst : target->insts())
       if (inst != nullptr && inst->op() == Opcode::Phi)
         return MutationResult::Rejected;
-    updatePreds(target, block, nullptr);
+    removedTargets.push_back(target);
   }
+  // All removal checks must finish before any predecessor list changes.
+  // Otherwise a later phi rejection leaves an earlier successor corrupted.
+  for (BasicBlock* target : removedTargets) updatePreds(target, block, nullptr);
   for (size_t s = 0; s < newTerminator->numSuccs(); ++s) {
     BasicBlock* target = newTerminator->succ(s);
     if (target == nullptr) continue;
-    if (!hasSuccessor(block, target, newTerminator->numSuccs()))
+    if (!hasSuccessor(block, target, old->numSuccs()))
       updatePreds(target, nullptr, block);
   }
   if (!mutator_.module().ownInst(newTerminator)) return MutationResult::Rejected;

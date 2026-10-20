@@ -54,9 +54,81 @@ void testAddPhiEdge() {
                               {{m.getIntConst(i32, 5)}}) == MutationResult::Rejected,
         "existing phi edge rejects redundant values");
 }
+
+void testRetainedSecondSuccessor() {
+  Module m;
+  const Type* i32 = typePool().i32();
+  Function* f = m.createFunction("retained", i32);
+  BasicBlock* entry = m.createBlock(f);
+  BasicBlock* source = m.createBlock(f);
+  BasicBlock* first = m.createBlock(f);
+  BasicBlock* target = m.createBlock(f);
+  BasicBlock* other = m.createBlock(f);
+  Constant* zero = m.getIntConst(i32, 0);
+  Constant* one = m.getIntConst(i32, 1);
+  add(m, entry, createBr(source, {}));
+  add(m, source, createCondBr(zero, first, target, {}));
+  add(m, first, createRet(zero, {}));
+  add(m, other, createBr(target, {}));
+  Instruction* phi = add(m, target, createPhi(i32, {zero, one},
+                                               {source, other}, {}));
+  add(m, target, createRet(phi, {}));
+  m.rebuildCFG();
+  m.rebuildUseDef();
+  check(verifyFlatModule(m).empty(), "retained-second fixture verifies");
+  IRMutator mutator(m);
+  CFGEditor cfg(mutator);
+  const uint64_t beforeRejection = m.revision().any;
+  Instruction* rejectedRet = createRet(zero, {});
+  check(cfg.replaceTerminator(source, rejectedRet) == MutationResult::Rejected,
+        "removing a later phi edge is rejected");
+  mutator.discardDetached({rejectedRet});
+  check(m.revision().any == beforeRejection &&
+            first->preds().size() == 1 && first->preds()[0] == source &&
+            source->terminator()->numSuccs() == 2 &&
+            verifyFlatModule(m).empty(),
+        "later phi rejection preserves every earlier predecessor");
+  check(cfg.replaceTerminator(source, createBr(target, {})) ==
+            MutationResult::Applied,
+        "retained second successor preserves phi without incoming values");
+  check(verifyFlatModule(m).empty() && phi->numOperands() == 2 &&
+            phi->succ(0) == source && phi->succ(1) == other,
+        "retained second successor has no duplicate phi predecessor");
+
+  Module rejected;
+  Function* rf = rejected.createFunction("retained_reject", i32);
+  BasicBlock* re = rejected.createBlock(rf);
+  BasicBlock* rs = rejected.createBlock(rf);
+  BasicBlock* rfirst = rejected.createBlock(rf);
+  BasicBlock* rtarget = rejected.createBlock(rf);
+  BasicBlock* rother = rejected.createBlock(rf);
+  Constant* rzero = rejected.getIntConst(i32, 0);
+  Constant* rone = rejected.getIntConst(i32, 1);
+  add(rejected, re, createBr(rs, {}));
+  add(rejected, rs, createCondBr(rzero, rfirst, rtarget, {}));
+  add(rejected, rfirst, createRet(rzero, {}));
+  add(rejected, rother, createBr(rtarget, {}));
+  Instruction* rphi = add(rejected, rtarget,
+                           createPhi(i32, {rzero, rone}, {rs, rother}, {}));
+  add(rejected, rtarget, createRet(rphi, {}));
+  rejected.rebuildCFG();
+  rejected.rebuildUseDef();
+  IRMutator rejectedMutator(rejected);
+  CFGEditor rejectedCfg(rejectedMutator);
+  const uint64_t revision = rejected.revision().any;
+  check(rejectedCfg.replaceTerminator(rs, createBr(rtarget, {}), {{rzero}}) ==
+            MutationResult::Rejected,
+        "retained second successor rejects redundant incoming atomically");
+  check(verifyFlatModule(rejected).empty() &&
+            rejected.revision().any == revision &&
+            rs->terminator()->op() == Opcode::Br &&
+            rs->terminator()->numSuccs() == 2 && rphi->numOperands() == 2,
+        "redundant retained incoming leaves CFG and phi unchanged");
+}
 }  // namespace
 int main() {
   testAddPhiEdge();
+  testRetainedSecondSuccessor();
   std::printf("S24B_CFG_CHECKS=%d FAILURES=%d\n", checks, failures);
   return failures ? 1 : 0;
 }

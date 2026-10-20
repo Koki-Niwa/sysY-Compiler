@@ -578,9 +578,13 @@ tile latch. The tile size comes from `planTiling` (cache/element size, hotness);
 the loop order is unchanged because the tile groups consecutive iterations, so
 the transform is safe for ordinary bodies (stores/calls included) without a
 dependence proof. `CFGEditor::replaceTerminator` gained a phi-values overload
-for newly added edges. Tests: `test_cfg_phi_edges` **5** and
-`test_tiling_transform` **10**; an interpreter probe on a 64x64 nested store
-loop produced the same return and global-write trace before/after.
+for newly added edges and rejects duplicate incoming values on retained edges.
+The matcher now rejects loop-defined live-outs and non-canonical exit phis before
+editing; non-unit steps advance by `T*step` and clamp to the terminal value on
+the original recurrence. Tests: `test_cfg_phi_edges` **12** and
+`test_tiling_transform` **41**; CTest `test_tiling_equivalence` executes seven
+actually-transformed before/after modules and compares FlatExec observables,
+including the step-3 oracle (6048).
 
 Still missing for S24b: two-dimensional blocking (which reorders tiles and
 needs a dependence-legality proof), matmul/conv/stencil fixed-protocol runtime
@@ -590,8 +594,8 @@ measurements, and target-backed evidence. No runtime gain is claimed.
 protocol; the current transform only strip-mines one loop without changing the
 iteration order.
 
-**S25a CLOSED / PASS** (full S09 **57/0/2**, `test_unroll` **18** +
-`test_unroll_advisor` **3** checks): `planUnroll` now consumes a critical-path
+**S25a CLOSED / PASS** (full S09 **57/0/2**, `test_unroll` **20** +
+`test_unroll_advisor` **13** checks): `planUnroll` now consumes a critical-path
 estimate (capping UF at body/criticalPath), enumerates power-of-two VF
 candidates jointly with UF for AArch64 (product at most eight) and scalar
 unroll for RV64, applies the `registers/(live+1)` cap, the nonlinear pressure

@@ -19,6 +19,7 @@ struct Induction {
   int64_t start = 0;
   int64_t bound = 0;
   int64_t step = 0;
+  int64_t terminal = 0;
   size_t trip = 0;
 };
 bool constantI32(const Value* value, int64_t& out) {
@@ -88,18 +89,25 @@ bool matchInduction(const Function& function, const LoopEntry& loop,
   int64_t step = 0;
   if (!constantI32(increment->operand(1), step) || step <= 0) return false;
   BasicBlock* exit = term->succ(1);
-  if (exit == nullptr || exit->parent() != &function || inLoop(loop, exit))
+  if (!inLoop(loop, term->succ(0)) || exit == nullptr ||
+      exit->parent() != &function || inLoop(loop, exit))
     return false;
   for (Instruction* inst : exit->insts())
     if (inst->op() == Opcode::Phi) return false;
+  // The new outer guard can bypass every definition in the original loop.
+  // Until we construct exit phis, decline all live-outs before editing any IR.
+  for (size_t index : loop.blocks)
+    for (Instruction* inst : function.at(index)->insts())
+      for (const auto& use : inst->uses())
+        if (use.user == nullptr || !inLoop(loop, use.user->parent())) return false;
   const int64_t iterations =
       start < bound ? (bound - start + step - 1) / step : 0;
   if (iterations > std::numeric_limits<int32_t>::max() ||
       start + iterations * step > std::numeric_limits<int32_t>::max())
     return false;
   const size_t trip = static_cast<size_t>(iterations);
-  out = Induction{phi, cmp, const_cast<Instruction*>(increment), preheader, latch, exit, start, bound,
-                  step, trip};
+  out = Induction{phi, cmp, const_cast<Instruction*>(increment), preheader, latch,
+                  exit, start, bound, step, start + iterations * step, trip};
   return trip >= 2;
 }
 size_t scalarBytes(const Type* type) {
@@ -148,6 +156,12 @@ PassResult LoopTilingPass::run(Function& function, PassContext& context) {
         planTiling(ind.trip, 2, bytes, model, hotness);
     if (!plan.tile || plan.tileSize < 2) continue;
     const int64_t tile = static_cast<int64_t>(plan.tileSize);
+    // TilePlan counts iterations, not induction-variable units. The terminal
+    // value is on the original recurrence even when the bound is not aligned.
+    // Keep the span representable as a positive i32 operand.
+    const int64_t span = tile * ind.step;
+    if (span > std::numeric_limits<int32_t>::max()) continue;
+    const int64_t lastFullStart = ind.terminal - span;
     CFGEditor& cfg = context.cfg();
     IRMutator& mutator = context.mutator();
     const CFGEditor::SplitResult pre = cfg.splitEdge(ind.preheader, 0);
@@ -167,26 +181,24 @@ PassResult LoopTilingPass::run(Function& function, PassContext& context) {
     auto insertBeforeTerminator = [&](BasicBlock* block, Instruction* inst) {
       return mutator.insertInstruction(block, block->size() - 1, inst);
     };
-    Instruction* tilePlus = createBin(Opcode::Add, tilePhi,
-                                      mutator.module().getIntConst(typePool().i32(), tile), {});
-    if (insertBeforeTerminator(tileHeader, tilePlus) != MutationResult::Applied)
-      return [] { PassResult p; p.status = PassStatus::Failed;
-                  p.diagnostic = "loop-tiling: tile add rejected"; return p; }();
-    Instruction* remaining = createBin(
-        Opcode::Sub, mutator.module().getIntConst(typePool().i32(), ind.bound),
-        tilePhi, {});
-    if (insertBeforeTerminator(tileHeader, remaining) != MutationResult::Applied)
-      return [] { PassResult p; p.status = PassStatus::Failed;
-                  p.diagnostic = "loop-tiling: remaining subtraction rejected"; return p; }();
+    // Clamp the base before addition. A bound - bi subtraction may overflow
+    // for a negative start, and computing bi + span before selecting its result
+    // may overflow on the tail. Both selected bases below are safe to add.
     Instruction* endCmp = createICmp(
-        IPred::Sge, remaining,
-        mutator.module().getIntConst(typePool().i32(), tile), {});
+        IPred::Sle, tilePhi,
+        mutator.module().getIntConst(typePool().i32(), lastFullStart), {});
     if (insertBeforeTerminator(tileHeader, endCmp) != MutationResult::Applied)
       return [] { PassResult p; p.status = PassStatus::Failed;
                   p.diagnostic = "loop-tiling: end compare rejected"; return p; }();
-    Instruction* tileEnd = createSelect(
-        endCmp, tilePlus,
-        mutator.module().getIntConst(typePool().i32(), ind.bound), {});
+    Instruction* cappedBase = createSelect(
+        endCmp, tilePhi,
+        mutator.module().getIntConst(typePool().i32(), lastFullStart), {});
+    if (insertBeforeTerminator(tileHeader, cappedBase) != MutationResult::Applied)
+      return [] { PassResult p; p.status = PassStatus::Failed;
+                  p.diagnostic = "loop-tiling: tile base rejected"; return p; }();
+    Instruction* tileEnd = createBin(
+        Opcode::Add, cappedBase,
+        mutator.module().getIntConst(typePool().i32(), span), {});
     if (insertBeforeTerminator(tileHeader, tileEnd) != MutationResult::Applied)
       return [] { PassResult p; p.status = PassStatus::Failed;
                   p.diagnostic = "loop-tiling: tile end rejected"; return p; }();
@@ -208,8 +220,8 @@ PassResult LoopTilingPass::run(Function& function, PassContext& context) {
       return [] { PassResult p; p.status = PassStatus::Failed;
                   p.diagnostic = "loop-tiling: exit split failed"; return p; }();
     BasicBlock* tileLatch = exitSplit.block;
-    // The next tile starts at min(bi + T, bound). Reusing tileEnd avoids an
-    // i32 overflow in bi + T on the final tile and exits when it equals bound.
+    // Every boundary lies on the original recurrence, including the tail's
+    // terminal value (which may exceed a non-aligned source bound).
     if (cfg.replaceTerminator(tileLatch, createBr(tileHeader, {}),
                               {{tileEnd}}) != MutationResult::Applied)
       return [] { PassResult p; p.status = PassStatus::Failed;

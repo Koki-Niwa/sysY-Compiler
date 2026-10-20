@@ -64,6 +64,10 @@ void testCriticalPathAndJoint() {
   check(plan.unroll && plan.factor == 2 && plan.vectorFactor == 4 &&
         plan.estimatedGain > 7.0,
         "joint VF x UF enumeration prefers the vectorized candidate");
+  arm.vectorWidth = 3;
+  plan = planUnroll(context(100, 12, 8), arm);
+  check(plan.unroll && plan.vectorFactor == 2,
+        "non-power-of-two maximum VF is rounded down to power-of-two candidates");
 }
 void testRejections() {
   UnrollProfile p;
@@ -141,6 +145,15 @@ void testProbe() {
   check(plan.unroll && called && plan.probeUsed,
         "bounded probe can accept the unroll candidate");
 }
+void testVectorWidthBoundary() {
+  UnrollProfile p;
+  p.target = UnrollTarget::AArch64;
+  p.scalarRegisters = 32;
+  p.vectorWidth = std::numeric_limits<size_t>::max();
+  auto plan = planUnroll(context(100, 6, 4), p);
+  check(plan.unroll && plan.vectorFactor == 4 && plan.factor == 2,
+        "extreme maximum VF remains a bounded power-of-two search");
+}
 }  // namespace
 int main() {
   testTargets();
@@ -149,6 +162,7 @@ int main() {
   testPressureCliff();
   testRegisterBoundaries();
   testProbe();
+  testVectorWidthBoundary();
   std::printf("S25_CHECKS=%d failures=%d\n", checks, failures);
   return failures ? 1 : 0;
 }

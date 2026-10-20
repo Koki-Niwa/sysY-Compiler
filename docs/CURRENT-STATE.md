@@ -572,6 +572,18 @@ size is keyed to a test case.
 **S24b pending**: the tiled IR transform and the fixed matmul/conv/stencil
 runtime protocol. The plan deliberately does not rewrite loops yet.
 
+**S25a CLOSED / PASS** (full S09 **57/0/2**, `test_unroll` **10 checks**):
+`planUnroll` derives the unroll factor from the target profile and register
+budget instead of test-specific constants. AArch64 uses up to 4, RV64 uses 2,
+and the VF x UF product is capped at eight lanes; the register cap is
+`registers/(live+1)`. A nonlinear `(live*factor/registers)^2` pressure penalty
+and an 0.8 cliff reject unsafe candidates. Cold/one-trip/empty loops are
+declined; an optional bounded probe can accept/reject the candidate.
+
+**S25b pending**: the actual unroll/vector-unroll transform, per-target
+runtime measurements, and the `transpose`/matmul protocols. The plan records
+candidate, factor, vector factor and rejection reason; it does not rewrite IR.
+
 ## S23 audit fixes (2026-10-20)
 
 An independent review of the S12–S23 delivery found seven issues; all are

@@ -203,6 +203,17 @@ not claim linear time for constructing all SCC summaries. The read-only
 `freshnessExpansionCount()` is a cumulative diagnostic of actual expansions;
 it does not participate in cache validity or invalidation decisions.
 
+## S25a Unroll planning (CLOSED / PASS)
+
+`planUnroll` combines target registers, live values, trip count and a nonlinear
+pressure penalty. AArch64 allows an unroll factor up to 4, RV64 up to 2 (scalar
+register blocking), and the AArch64 VF x UF product is capped at eight lanes.
+The register cap is `registers/(live+1)`; projected live values above the 0.8
+pressure cliff are rejected. Cold/one-trip/empty loops are declined and an
+optional bounded probe may accept or reject the candidate. The plan records
+factor, vector factor, projected live values and reason. It does not rewrite
+the IR; S25b tracks the transform and runtime protocols.
+
 ## S24a Cache-capacity tiling plan (CLOSED / PASS)
 
 `planTiling` converts a nest's iteration count, dimensionality and element size

@@ -31,6 +31,7 @@
 #include "opt/StrengthReduce.h"
 #include "opt/LoopTiling.h"
 #include "opt/LoopBlocking.h"
+#include "opt/LoopUnroll.h"
 #include "structured/AllocaHoist.h"
 #include "structured/FlattenCFG.h"
 #include "structured/IRGen.h"
@@ -80,6 +81,23 @@ bool runS24Pipeline(flat::Module& module, DiagnosticEngine& diags) {
   if (!violations.empty()) {
     diags.report(DiagLevel::Error, SourceLoc(0, 0), "E-S24-VERIFY",
                  "S24 输出违反平面 IR 不变量：\n" + flat::formatViolations(violations));
+    return false;
+  }
+  return true;
+}
+
+bool runS25Pipeline(flat::Module& module, DiagnosticEngine& diags) {
+  flat::FlatPassManager manager;
+  manager.addPass(std::make_unique<flat::LoopUnrollPass>());
+  const flat::PipelineResult result = manager.run(module);
+  if (!result.ok()) {
+    diags.report(DiagLevel::Error, SourceLoc(0, 0), "E-S25-OPT", result.diagnostic);
+    return false;
+  }
+  const std::vector<flat::Violation> violations = flat::verifyFlatModule(module);
+  if (!violations.empty()) {
+    diags.report(DiagLevel::Error, SourceLoc(0, 0), "E-S25-VERIFY",
+                 "S25 输出违反平面 IR 不变量：\n" + flat::formatViolations(violations));
     return false;
   }
   return true;
@@ -272,10 +290,10 @@ std::string CompilationSession::structuredText(bool normalize, bool loopStats) {
 const flat::Module* CompilationSession::flat(bool fromFlat, bool normalize,
                                              bool flatStats, bool mem2reg,
                                              bool s17, bool s19, bool s20,
-                                             bool s24) {
+                                             bool s24, bool s25) {
   if (flat_.ready && flat_.fromFlat == fromFlat && flat_.normalize == normalize &&
       flat_.flatStats == flatStats && flat_.mem2reg == mem2reg &&
-      flat_.s17 == s17 && flat_.s19 == s19 && flat_.s20 == s20 && flat_.s24 == s24)
+      flat_.s17 == s17 && flat_.s19 == s19 && flat_.s20 == s20 && flat_.s24 == s24 && flat_.s25 == s25)
     return flat_.module.get();
   flat_.ready = true;
   flat_.fromFlat = fromFlat;
@@ -286,6 +304,7 @@ const flat::Module* CompilationSession::flat(bool fromFlat, bool normalize,
   flat_.s19 = s19;
   flat_.s20 = s20;
   flat_.s24 = s24;
+  flat_.s25 = s25;
   flat_.module.reset();
   flat_.mem2RegResult = flat::Mem2RegResult{};
 
@@ -316,6 +335,7 @@ const flat::Module* CompilationSession::flat(bool fromFlat, bool normalize,
       if (s19 && !runS19Pipeline(*holder, diags_)) return nullptr;
       if (s20 && !runS20Pipeline(*holder, diags_)) return nullptr;
       if (s24 && !runS24Pipeline(*holder, diags_)) return nullptr;
+      if (s25 && !runS25Pipeline(*holder, diags_)) return nullptr;
     }
     flat_.module = std::move(holder);
     return flat_.module.get();
@@ -366,6 +386,7 @@ const flat::Module* CompilationSession::flat(bool fromFlat, bool normalize,
   if (pipelineClean && s19 && !runS19Pipeline(*fmod, diags_)) return nullptr;
   if (pipelineClean && s20 && !runS20Pipeline(*fmod, diags_)) return nullptr;
   if (pipelineClean && s24 && !runS24Pipeline(*fmod, diags_)) return nullptr;
+  if (pipelineClean && s25 && !runS25Pipeline(*fmod, diags_)) return nullptr;
   flat_.module = std::move(fmod);
   return flat_.module.get();
 }
@@ -388,8 +409,8 @@ std::string CompilationSession::initPlanText() {
 }
 
 std::string CompilationSession::flatText(bool fromFlat, bool normalize,
-                                         bool flatStats, bool mem2reg, bool s17, bool s19, bool s20, bool s24) {
-  const flat::Module* module = flat(fromFlat, normalize, flatStats, mem2reg, s17, s19, s20, s24);
+                                         bool flatStats, bool mem2reg, bool s17, bool s19, bool s20, bool s24, bool s25) {
+  const flat::Module* module = flat(fromFlat, normalize, flatStats, mem2reg, s17, s19, s20, s24, s25);
   if (module == nullptr) return std::string();
   if (flatStats) {
     std::cerr << module->formatStats();
@@ -402,8 +423,8 @@ std::string CompilationSession::flatText(bool fromFlat, bool normalize,
 }
 
 std::string CompilationSession::llvmIrText(bool fromFlat, bool normalize,
-                                           bool flatStats, bool mem2reg, bool s17, bool s19, bool s20, bool s24) {
-  const flat::Module* module = flat(fromFlat, normalize, flatStats, mem2reg, s17, s19, s20, s24);
+                                           bool flatStats, bool mem2reg, bool s17, bool s19, bool s20, bool s24, bool s25) {
+  const flat::Module* module = flat(fromFlat, normalize, flatStats, mem2reg, s17, s19, s20, s24, s25);
   if (module == nullptr || diags_.hasError()) return std::string();
   const std::vector<flat::Violation> violations = flat::verifyFlatModule(*module);
   if (!violations.empty()) {

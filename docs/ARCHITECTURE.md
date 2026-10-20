@@ -203,6 +203,17 @@ not claim linear time for constructing all SCC summaries. The read-only
 `freshnessExpansionCount()` is a cumulative diagnostic of actual expansions;
 it does not participate in cache validity or invalidation decisions.
 
+## S23b Canonical loop interchange (CLOSED / PASS, load-only)
+
+`LoopInterchangePass` matches a perfectly nested canonical pair (outer header,
+inner header, one body; the inner exit increments the outer IV) and swaps the
+loop roles. It rewires all six edges with `CFGEditor::redirectEdge`, passing
+the initial phi values to the new headers and exchanging the two latch
+increments so the new outer latch advances the old outer IV and the new inner
+latch advances the old inner IV. Only load-only bodies (no store/call/alloca)
+are transformed, so the reorder is dependence-free; the plan records legality
+and line traffic. General bodies need affine extraction and are not claimed.
+
 ## S23a Interchange planning (CLOSED / PASS)
 
 `planInterchange` combines dependence legality with a cache-line cost model.

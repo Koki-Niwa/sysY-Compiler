@@ -190,8 +190,15 @@ strides, traffic, hotness and reason; a target line size can change the
 benefit decision. The test includes a hand-checked equivalence oracle over
 legal/illegal directions.
 
-**S23b pending**: the actual structured/F lat IR loop interchange transform and
-runtime evidence. The planner deliberately does not rewrite loops yet.
+**S23b CLOSED / PASS (canonical two-level, load-only body)**:
+`LoopInterchangePass` recognizes a canonical perfectly nested pair (outer
+header -> inner header -> single body; inner exit increments the outer IV) and
+swaps the loop roles: headers exchange incoming phis, the new inner exit and
+new outer latch receive swapped increments, and all six edges are redirected
+through `CFGEditor::redirectEdge` with phi values. The body must contain no
+store/call/alloca, so the reorder is dependence-free; the planner still records
+legality and line-traffic estimates. `test_interchange_transform` covers the
+swap and a store negative (8 checks). Runtime measurements are not claimed.
 
 **S22b CLOSED / PASS (single-block scope)**: `TailRecursionEliminationPass`
 consumes `TailCallAnalysis` and transforms a one-block function whose only

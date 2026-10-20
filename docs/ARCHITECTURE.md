@@ -267,9 +267,9 @@ target runtime are not implemented; the pass is not in the default pipeline.
 
 - integer-add reduction `g = g + f(i,j)`, with exactly one scalar-global
   load/store; i32 addition modulo 2^32 is associative/commutative;
-- map `out[i][j] = f(in[i][j])`, with one read-only global load and one store to
-  a distinct global whose GEP chain indices are exactly the two induction
-  variables; the input is never written and the output address is unique.
+- map with one or more read-only global loads and one store to a distinct global
+  whose GEP chain indices are exactly the two induction variables; the inputs
+  are never written and the output address is unique.
 
 Both require pure body arithmetic (no calls, allocas, memcpy/memset or other
 memory), no loop-defined live-outs, exit without phis, clean latches, and both

@@ -150,35 +150,37 @@ bool matchNest(const Function& function, ReductionNest& nest) {
         !matchInduction(inner->at(0), inner->at(1), nest.innerBound, outer,
                         innerLatch))
       continue;
-    Instruction* load = nullptr;
+    std::vector<Instruction*> loads;
     Instruction* store = nullptr;
     for (Instruction* inst : body->insts()) {
       if (inst->op() == Opcode::Load) {
-        if (load != nullptr) { load = nullptr; break; }
-        load = inst;
+        loads.push_back(inst);
       } else if (inst->op() == Opcode::Store) {
-        if (store != nullptr) { store = nullptr; break; }
+        if (store != nullptr) { loads.clear(); break; }
         store = inst;
       } else if (inst->op() == Opcode::Call || inst->op() == Opcode::Alloca ||
                  inst->op() == Opcode::Phi) {
-        load = nullptr;
+        loads.clear();
         break;
       }
     }
-    if (load == nullptr || store == nullptr || store->numOperands() != 2 ||
-        load->numOperands() != 1)
+    if (loads.empty() || store == nullptr || store->numOperands() != 2)
       continue;
-    const GlobalAddr* loadBase = baseGlobal(load->operand(0));
     const GlobalAddr* storeBase = baseGlobal(store->operand(1));
-    if (loadBase == nullptr || storeBase == nullptr) continue;
-    bool map = loadBase != storeBase;
-    if (map) {
-      bool sawOuter = false, sawInner = false;
-      if (!collectStoreIndices(store->operand(1), outerPhi, inner->at(0), sawOuter,
-                               sawInner) ||
-          !sawOuter || !sawInner)
-        continue;
-    } else {
+    if (storeBase == nullptr) continue;
+    size_t sameAsStore = 0;
+    bool basesValid = true;
+    for (Instruction* load : loads) {
+      if (load->numOperands() != 1) { basesValid = false; break; }
+      const GlobalAddr* base = baseGlobal(load->operand(0));
+      if (base == nullptr) { basesValid = false; break; }
+      if (base == storeBase) ++sameAsStore;
+    }
+    if (!basesValid) continue;
+    bool map = sameAsStore == 0;
+    if (!map) {
+      if (sameAsStore != 1 || loads.size() != 1) continue;
+      Instruction* load = loads.front();
       if (!store->operand(0)->isInst()) continue;
       Instruction* add = const_cast<Instruction*>(
           static_cast<const Instruction*>(store->operand(0)));
@@ -186,11 +188,18 @@ bool matchNest(const Function& function, ReductionNest& nest) {
           (add->operand(0) != load && add->operand(1) != load) ||
           load->useCount() != 1 || load->uses()[0].user != add)
         continue;
+    } else {
+      bool sawOuter = false, sawInner = false;
+      if (!collectStoreIndices(store->operand(1), outerPhi, inner->at(0), sawOuter,
+                               sawInner) ||
+          !sawOuter || !sawInner)
+        continue;
     }
     bool pure = true;
     for (Instruction* inst : body->insts()) {
-      if (inst == load || inst == store || inst == body->terminator()) continue;
       if (inst->op() == Opcode::Load || inst->op() == Opcode::Store ||
+          inst == body->terminator()) continue;
+      if (inst->op() == Opcode::Call || inst->op() == Opcode::Alloca ||
           inst->op() == Opcode::Call || inst->op() == Opcode::Alloca ||
           inst->op() == Opcode::Phi || inst->op() == Opcode::LLVMMemCpy ||
           inst->op() == Opcode::LLVMMemSet) { pure = false; break; }
@@ -234,7 +243,7 @@ bool matchNest(const Function& function, ReductionNest& nest) {
     candidate.outerPhi = outerPhi; candidate.innerPhi = inner->at(0);
     candidate.outerCmp = outer->at(1); candidate.innerCmp = inner->at(1);
     candidate.outerBound = nest.outerBound; candidate.innerBound = nest.innerBound;
-    candidate.global = const_cast<GlobalAddr*>(loadBase);
+    candidate.global = const_cast<GlobalAddr*>(storeBase);
     candidate.map = map;
     nest = candidate;
     return true;

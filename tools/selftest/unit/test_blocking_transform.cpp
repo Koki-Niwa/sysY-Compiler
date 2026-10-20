@@ -140,11 +140,13 @@ struct MapNest {
   const Type* i32 = typePool().i32();
   Function* f = nullptr;
   GlobalAddr* input = nullptr;
+  GlobalAddr* input2 = nullptr;
   GlobalAddr* output = nullptr;
   explicit MapNest(int n) {
     const Type* row = typePool().arrayOf(i32, n);
     const Type* mat = typePool().arrayOf(row, n);
     input = m.globalAddr(m.createGlobal("in", mat));
+    input2 = m.globalAddr(m.createGlobal("in2", mat));
     output = m.globalAddr(m.createGlobal("out", mat));
     f = m.createFunction("main", i32);
     BasicBlock* pre = m.createBlock(f); BasicBlock* outer = m.createBlock(f);
@@ -167,7 +169,11 @@ struct MapNest {
     Instruction* inRow = add(m, body, createGEP(row, input, oi64, {}));
     Instruction* inPtr = add(m, body, createGEP(i32, inRow, ij64, {}));
     Instruction* old = add(m, body, createLoad(i32, inPtr, {}));
-    Instruction* val = add(m, body, createBin(Opcode::Add, old, oi, {}));
+    Instruction* in2Row = add(m, body, createGEP(row, input2, oi64, {}));
+    Instruction* in2Ptr = add(m, body, createGEP(i32, in2Row, ij64, {}));
+    Instruction* second = add(m, body, createLoad(i32, in2Ptr, {}));
+    Instruction* oldSum = add(m, body, createBin(Opcode::Add, old, second, {}));
+    Instruction* val = add(m, body, createBin(Opcode::Add, oldSum, oi, {}));
     Instruction* outRow = add(m, body, createGEP(row, output, oi64, {}));
     Instruction* outPtr = add(m, body, createGEP(i32, outRow, ij64, {}));
     add(m, body, createStore(i32, val, outPtr, {}));

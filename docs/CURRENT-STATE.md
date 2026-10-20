@@ -560,29 +560,44 @@ invented by this document. Full corpus gates may require the workspace's
 external corpus and runtime; standalone clones must remain portable without
 those assets for local checks.
 
-**S24a CLOSED / PASS** (full S09 **57/0/2**, `test_tile` **10 checks**):
+**S24a CLOSED / PASS** (full S09 **57/0/2**, `test_tile` **20 checks**):
 `planTiling` derives a tile from cache capacity and element size: the largest
 power of two whose two-stream working set fits half the cache, bounded by the
 iteration count and a minimum of 8. It declines a full working set that already
 fits, cold nests, too-small caches and empty shapes; an optional bounded probe
 can accept/reject the derived candidate. Tests cover 2-D matmul, 3-D stencil,
-64/32/16 KiB cache variants, rejection paths and both probe outcomes. No block
-size is keyed to a test case.
+64/32/16 KiB cache variants, exact-capacity boundaries, one byte below a
+boundary, overflow saturation, rejection paths and both probe outcomes. Integer
+capacity comparisons replace floating-point roots, so an exact-fit tile selects
+the largest fitting power of two (including the 7-D, 32 MiB-cache regression);
+a unit extent does not iterate over the dimension count.
 
 **S24b pending**: the tiled IR transform and the fixed matmul/conv/stencil
 runtime protocol. The plan deliberately does not rewrite loops yet.
 
-**S25a CLOSED / PASS** (full S09 **57/0/2**, `test_unroll` **10 checks**):
+**S25a PARTIAL — baseline heuristic implemented** (original `867710f`
+delivery reported full S09 **57/0/2**; current `test_unroll` **14 checks**):
 `planUnroll` derives the unroll factor from the target profile and register
 budget instead of test-specific constants. AArch64 uses up to 4, RV64 uses 2,
-and the VF x UF product is capped at eight lanes; the register cap is
+and for AArch64 the caller-selected VF x UF product is capped at eight lanes;
+the register cap is
 `registers/(live+1)`. A nonlinear `(live*factor/registers)^2` pressure penalty
-and an 0.8 cliff reject unsafe candidates. Cold/one-trip/empty loops are
-declined; an optional bounded probe can accept/reject the candidate.
+and a 0.8 cliff decline high-pressure candidates. Cold/one-trip/empty loops are
+declined; an optional bounded probe can accept/reject the candidate. The
+original pressure rejection test exercised only the register cap; paired tests
+now use live=9 and registers=40/41 to cross the actual 0.8 cliff with UF=4.
+The register-cap guard rejects `live >= registers` before `live+1` can
+overflow; SIZE_MAX boundary tests cover rejection and a valid large budget.
+
+The former unqualified CLOSED / PASS label is withdrawn: hotness is supplied by
+the caller, and critical-path input, joint VF/UF candidate selection, BFI
+integration, per-register-bank machine pressure and backend calibration remain
+pending planning work in S25a. A fixed VF product cap is not joint enumeration.
 
 **S25b pending**: the actual unroll/vector-unroll transform, per-target
 runtime measurements, and the `transpose`/matmul protocols. The plan records
-candidate, factor, vector factor and rejection reason; it does not rewrite IR.
+the accepted factor (zero on rejection), vector factor and rejection reason;
+it does not rewrite IR.
 
 ## S23 audit fixes (2026-10-20)
 

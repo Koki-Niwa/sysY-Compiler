@@ -12,7 +12,9 @@ size_t targetLimit(UnrollTarget target) {
   return 1;
 }
 size_t registerLimit(size_t registers, size_t live) {
-  if (registers == 0) return 1;
+  // There must be room for at least one additional value. This guard also
+  // proves live+1 cannot overflow, even for size_t boundary inputs.
+  if (live >= registers) return 1;
   // One extra register for the induction/bounds of the unrolled code.
   return std::max<size_t>(1, registers / std::max<size_t>(1, live + 1));
 }
@@ -44,6 +46,8 @@ UnrollPlan planUnroll(const UnrollContext& context, const UnrollProfile& profile
     return plan;
   }
   // Nonlinear pressure penalty: grow with (live*factor / registers)^2.
+  // The register cap proves factor * (live+1) <= registers for factor >= 2,
+  // so the projected-live multiplication cannot overflow.
   const double ratio = static_cast<double>(context.liveValues * factor) /
                        std::max<size_t>(1, profile.scalarRegisters);
   plan.pressurePenalty = ratio * ratio;

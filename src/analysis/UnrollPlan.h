@@ -11,6 +11,7 @@ enum class UnrollTarget : uint8_t { Generic, AArch64, RV64 };
 struct UnrollProfile {
   UnrollTarget target = UnrollTarget::Generic;
   size_t scalarRegisters = 16;
+  // Caller-selected VF; the baseline planner only caps UF for this width.
   size_t vectorWidth = 1;
 };
 struct UnrollContext {
@@ -30,6 +31,9 @@ struct UnrollPlan {
 };
 using UnrollProbe =
     std::function<std::optional<bool>(size_t factor, size_t projectedLive)>;
+// Baseline heuristic only: hotness is caller-supplied, and no critical-path
+// model, joint VF/UF search or machine-register-bank estimate is implemented.
+// A successful plan is a cost candidate, not proof of transform legality.
 UnrollPlan planUnroll(const UnrollContext& context, const UnrollProfile& profile,
                       const UnrollProbe& probe = {}, size_t probeBudget = 2);
 }}  // namespace sysy::flat

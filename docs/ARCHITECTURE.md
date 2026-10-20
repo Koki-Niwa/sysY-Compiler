@@ -203,16 +203,23 @@ not claim linear time for constructing all SCC summaries. The read-only
 `freshnessExpansionCount()` is a cumulative diagnostic of actual expansions;
 it does not participate in cache validity or invalidation decisions.
 
-## S25a Unroll planning (CLOSED / PASS)
+## S25a Unroll planning (PARTIAL: baseline heuristic implemented)
 
 `planUnroll` combines target registers, live values, trip count and a nonlinear
 pressure penalty. AArch64 allows an unroll factor up to 4, RV64 up to 2 (scalar
 register blocking), and the AArch64 VF x UF product is capped at eight lanes.
-The register cap is `registers/(live+1)`; projected live values above the 0.8
-pressure cliff are rejected. Cold/one-trip/empty loops are declined and an
+The register cap is `registers/(live+1)`; a squared pressure ratio above the 0.8
+cliff is rejected. Cold/one-trip/empty loops are declined and an
 optional bounded probe may accept or reject the candidate. The plan records
-factor, vector factor, projected live values and reason. It does not rewrite
-the IR; S25b tracks the transform and runtime protocols.
+the accepted factor, caller-selected vector factor, projected live values and
+reason. Rejected plans retain factor=0. Hotness is caller-supplied; there is no
+BFI consumer yet. The implementation only caps UF for a fixed VF: it has no
+critical-path input, joint VF/UF candidate search, or per-register-bank machine
+pressure model. Those planning capabilities and backend calibration remain
+pending in S25a; its former unqualified CLOSED / PASS label is withdrawn.
+It does not rewrite the IR; S25b tracks the transform and runtime protocols.
+The cap rejects `live >= registers` before adding the reserved register; for
+UF >= 2 it bounds the projected-live multiplication by the register budget.
 
 ## S24a Cache-capacity tiling plan (CLOSED / PASS)
 
@@ -224,6 +231,11 @@ Full working sets that already fit, cold nests, undersized caches and empty
 shapes are declined. An optional bounded `TileProbe` may accept or reject the
 derived candidate. The planner does not rewrite loops; S24b tracks the tiled
 IR transform and fixed matmul/conv/stencil measurement protocol.
+Capacity decisions compare integer working sets, including exact-fit boundaries;
+overflowing estimates saturate at UINT64_MAX, which exceeds the half-cache
+budget. Candidate search takes at most the size_t bit width in steps; each
+power calculation either returns immediately for extent=1 or saturates within
+64 multiplications. No floating-point root determines feasibility.
 
 ## S23b Canonical loop interchange (CLOSED / PASS, load-only)
 

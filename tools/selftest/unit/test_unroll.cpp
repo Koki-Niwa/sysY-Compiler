@@ -1,6 +1,7 @@
 // S25: unroll-factor planning with register pressure and target profiles.
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include "analysis/UnrollPlan.h"
 using namespace sysy::flat;
 namespace {
@@ -46,8 +47,9 @@ void testRejections() {
   p.scalarRegisters = 8;
   auto plan = planUnroll(context(100, 6, 6), p);
   check(!plan.unroll && plan.factor == 0 &&
-        std::strstr(plan.reason, "pressure") != nullptr,
-        "high live pressure rejects a useful unroll factor");
+        plan.pressurePenalty == 0.0 &&
+        std::strstr(plan.reason, "no useful unroll factor") != nullptr,
+        "register cap rejects before evaluating the pressure cliff");
   p.scalarRegisters = 16;
   plan = planUnroll(context(100, 6, 4, 0.1), p);
   check(!plan.unroll && std::strstr(plan.reason, "cold") != nullptr,
@@ -55,6 +57,45 @@ void testRejections() {
   plan = planUnroll(context(1, 6, 4), p);
   check(!plan.unroll, "trip count below two is not unrolled");
   check(!planUnroll(context(100, 0, 4), p).unroll, "empty body is rejected");
+}
+void testPressureCliff() {
+  UnrollProfile p;
+  p.target = UnrollTarget::AArch64;
+  // Both profiles permit UF=4 via registers/(live+1). Only the nonlinear
+  // penalty separates them: (36/40)^2 = 0.81; (36/41)^2 is about 0.771.
+  p.scalarRegisters = 40;
+  bool called = false;
+  auto plan = planUnroll(context(100, 6, 9), p,
+      [&](size_t, size_t) -> std::optional<bool> {
+        called = true;
+        return true;
+      });
+  check(!plan.unroll && plan.projectedLiveValues == 36 &&
+        plan.pressurePenalty > 0.80 && plan.pressurePenalty < 0.82 &&
+        std::strstr(plan.reason, "cross the pressure cliff") != nullptr &&
+        !called && !plan.probeUsed,
+        "pressure above 0.8 rejects even a probe that would approve");
+  p.scalarRegisters = 41;
+  plan = planUnroll(context(100, 6, 9), p);
+  check(plan.unroll && plan.factor == 4 && plan.projectedLiveValues == 36 &&
+        plan.pressurePenalty > 0.77 && plan.pressurePenalty < 0.78,
+        "pressure below 0.8 retains a register-permitted factor");
+}
+void testRegisterBoundaries() {
+  const size_t max = std::numeric_limits<size_t>::max();
+  UnrollProfile p;
+  p.target = UnrollTarget::AArch64;
+  p.scalarRegisters = max;
+  auto plan = planUnroll(context(100, 6, max), p);
+  check(!plan.unroll && plan.factor == 0 && plan.projectedLiveValues == 0 &&
+        plan.pressurePenalty == 0.0 &&
+        std::strstr(plan.reason, "no useful unroll factor") != nullptr,
+        "SIZE_MAX live values cannot wrap the register-cap denominator");
+  plan = planUnroll(context(100, 6, max / 4), p);
+  check(plan.unroll && plan.factor == 3 &&
+        plan.projectedLiveValues == (max / 4) * 3 &&
+        plan.pressurePenalty > 0.56 && plan.pressurePenalty < 0.57,
+        "large representable register budgets retain a valid capped candidate");
 }
 void testProbe() {
   UnrollProfile p;
@@ -81,6 +122,8 @@ void testProbe() {
 int main() {
   testTargets();
   testRejections();
+  testPressureCliff();
+  testRegisterBoundaries();
   testProbe();
   std::printf("S25_CHECKS=%d failures=%d\n", checks, failures);
   return failures ? 1 : 0;

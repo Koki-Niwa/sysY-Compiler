@@ -1,12 +1,12 @@
-// S25b: pair-unrolling for a canonical even-trip loop.
+// S25b: plan-sized chain unrolling for a canonical loop.
 #ifndef SYSY_OPT_LOOPUNROLL_H
 #define SYSY_OPT_LOOPUNROLL_H
 #include "analysis/UnrollPlan.h"
 #include "opt/FlatPassManager.h"
 namespace sysy { namespace flat {
 // One i32 induction recurrence, one body block, no loop-defined live-outs.
-// The body is cloned once and the loop advances by two steps; odd trips are
-// declined so no tail loop is needed. Not in the default pipeline.
+// The chain length is min(plan.factor, 4); a single tail body handles the
+// remainder. Not in the default pipeline; no vectorization is claimed.
 class LoopUnrollPass final : public FunctionPass {
  public:
   explicit LoopUnrollPass(UnrollProfile profile = {});

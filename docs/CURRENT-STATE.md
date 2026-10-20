@@ -609,17 +609,18 @@ Limits, recorded rather than hidden: there is no per-register-bank machine
 model, no spill estimate and no backend calibration; those belong to S25b
 together with the actual unroll/vector transform and runtime protocols.
 
-**S25b PARTIAL — pair unrolling with a tail**: `LoopUnrollPass` matches a
+**S25b PARTIAL — plan-sized chain unrolling**: `LoopUnrollPass` matches a
 two-block canonical loop (one i32 phi, constant start/bound/positive step, one
-body, no loop-defined live-outs, no body phi/alloca). It clones the body twice:
-a pair loop runs `i`/`i+step` and advances by `2*step`, then a single tail body
-runs the remaining iteration when the trip is odd. Even trips enter the tail
-header with `i >= bound` and execute no tail body. `test_unroll_transform` has
-**59 checks**; CTest `test_unroll_equivalence` executes eight genuinely
-transformed cases (even/odd/step-3, non-aligned, near i32 bounds, wide step)
-and compares FlatExec observables.
-Vectorization, pressure/spill measurements and per-target runtime remain S25b
-follow-up; the pass is not in the default pipeline.
+body, no loop-defined live-outs, no body phi/alloca). The chain length is
+`min(plan.factor, 4)`; the header guard becomes
+`i < bound - (factor-1)*step`, the chain executes `factor` body copies at
+`i..i+(factor-1)*step`, and the header advances by `factor*step`. A single tail
+loop consumes the remainder one body at a time, so all trip counts >= 2 are
+covered. `test_unroll_transform` has **89 checks**; CTest
+`test_unroll_equivalence` executes eight genuinely transformed cases
+(even/odd/step-3, non-aligned, near i32 bounds, wide step) and compares FlatExec
+observables. Vectorization, pressure/spill measurements and per-target runtime
+remain S25b follow-up; the pass is not in the default pipeline.
 
 ## S23 audit fixes (2026-10-20)
 

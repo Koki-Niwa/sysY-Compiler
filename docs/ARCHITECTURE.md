@@ -238,16 +238,16 @@ in the default CLI pipeline and no runtime gain is claimed.
 
 `LoopUnrollPass` matches a two-block canonical loop: an i32 induction phi,
 constant start/bound/positive step, one body and a unique latch, with no
-loop-defined live-outs, body phi or alloca. The body is cloned twice. The pair
-loop guard is `i < bound - step`; the original body executes at `i`, the first
-clone at `i+step`, and the header advances by `2*step`. When the pair guard
-fails, a tail header checks `i < bound` and optionally executes one tail body at
-`i`; this covers odd trip counts and is a no-op for even ones. The clone maps
-the phi to `i+step` (pair) or the tail phi (tail); the old back edge is
-redirected so the header keeps exactly the preheader and the pair edge.
-`test_unroll_equivalence` requires a real IR change and then compares FlatExec
-observables across even, odd, non-aligned, near-bound and wide-step cases. Vectorization, pressure/spill measurements and target runtime are
-not implemented; the pass is not in the default pipeline.
+loop-defined live-outs, body phi or alloca. The chain length is
+`min(plan.factor, 4)`. Its guard is `i < bound - (factor-1)*step`; the original
+body executes at `i`, later chain blocks at `i+k*step`, and the header advances
+by `factor*step`. A single tail header consumes the remainder one body at a
+time, covering every trip count >= 2. The clones map the phi to their `i+k*step`
+value; the old back edge is redirected so the header keeps exactly the
+preheader and the last chain edge. `test_unroll_equivalence` requires a real IR
+change and then compares FlatExec observables across even, odd, non-aligned,
+near-bound and wide-step cases. Vectorization, pressure/spill measurements and
+target runtime are not implemented; the pass is not in the default pipeline.
 
 ## S25a Unroll planning (CLOSED / PASS)
 

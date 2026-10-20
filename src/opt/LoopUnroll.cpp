@@ -176,40 +176,58 @@ PassResult LoopUnrollPass::run(Function& function, PassContext& context) {
     Module& module = context.analyses().module();
     IRMutator& mutator = context.mutator();
     CFGEditor& cfg = context.cfg();
-    BasicBlock* second = module.createBlock(&function);
-    Instruction* placeholder = createUnreachable({});
-    module.ownInst(placeholder);
-    second->addInst(placeholder);
-    // i + step in the second body; the guard proves i+step < bound.
-    Instruction* iPlus = createBin(Opcode::Add, ind.phi,
-                                   module.getIntConst(typePool().i32(), ind.step), {});
-    size_t insertAt = 0;
-    if (mutator.insertInstruction(second, insertAt, iPlus) != MutationResult::Applied)
-      return [] { PassResult p; p.status = PassStatus::Failed;
-                  p.diagnostic = "loop-unroll: i+step rejected"; return p; }();
-    ++insertAt;
-    std::unordered_map<const Value*, Value*> mapping;
-    mapping[ind.phi] = iPlus;
-    for (Instruction* inst : ind.body->insts()) {
-      if (inst == ind.body->terminator()) continue;
-      Instruction* copy = clone(module, mutator, second, insertAt, inst, mapping);
-      if (copy == nullptr)
+    const size_t unroll = std::min<size_t>(plan.factor, 4);
+    if (unroll < 2) continue;
+    const int64_t span = static_cast<int64_t>(unroll - 1) * ind.step;
+    const int64_t limit = ind.bound - span;
+    if (limit < std::numeric_limits<int32_t>::min()) continue;
+    std::vector<BasicBlock*> chain;
+    std::vector<Value*> indices;
+    Value* previous = ind.phi;
+    for (size_t k = 1; k < unroll; ++k) {
+      BasicBlock* link = module.createBlock(&function);
+      Instruction* placeholder = createUnreachable({});
+      module.ownInst(placeholder);
+      link->addInst(placeholder);
+      chain.push_back(link);
+      Instruction* ik = createBin(Opcode::Add, previous,
+                                  module.getIntConst(typePool().i32(), ind.step), {});
+      size_t insertAt = 0;
+      if (mutator.insertInstruction(link, insertAt, ik) != MutationResult::Applied)
         return [] { PassResult p; p.status = PassStatus::Failed;
-                    p.diagnostic = "loop-unroll: body clone rejected"; return p; }();
-      mapping[inst] = copy;
+                    p.diagnostic = "loop-unroll: chain index rejected"; return p; }();
+      ++insertAt;
+      std::unordered_map<const Value*, Value*> mapping;
+      mapping[ind.phi] = ik;
+      for (Instruction* inst : ind.body->insts()) {
+        if (inst == ind.body->terminator()) continue;
+        Instruction* copy = clone(module, mutator, link, insertAt, inst, mapping);
+        if (copy == nullptr)
+          return [] { PassResult p; p.status = PassStatus::Failed;
+                      p.diagnostic = "loop-unroll: body clone rejected"; return p; }();
+        mapping[inst] = copy;
+      }
+      indices.push_back(ik);
+      previous = ik;
     }
-    Instruction* iPlus2 = createBin(Opcode::Add, iPlus,
-                                    module.getIntConst(typePool().i32(), ind.step), {});
-    if (mutator.insertInstruction(second, insertAt, iPlus2) != MutationResult::Applied)
-      return [] { PassResult p; p.status = PassStatus::Failed;
-                  p.diagnostic = "loop-unroll: i+2step rejected"; return p; }();
-    if (cfg.replaceTerminator(second, createBr(ind.phi->parent(), {}),
-                              {{iPlus2}}) != MutationResult::Applied)
-      return [] { PassResult p; p.status = PassStatus::Failed;
-                  p.diagnostic = "loop-unroll: back edge rejected"; return p; }();
-    if (cfg.redirectEdge(ind.body, 0, second, {}) != MutationResult::Applied)
+    if (cfg.redirectEdge(ind.body, 0, chain[0], {}) != MutationResult::Applied)
       return [] { PassResult p; p.status = PassStatus::Failed;
                   p.diagnostic = "loop-unroll: body redirect rejected"; return p; }();
+    for (size_t k = 0; k + 1 < chain.size(); ++k)
+      if (cfg.replaceTerminator(chain[k], createBr(chain[k + 1], {})) !=
+          MutationResult::Applied)
+        return [] { PassResult p; p.status = PassStatus::Failed;
+                    p.diagnostic = "loop-unroll: chain edge rejected"; return p; }();
+    Instruction* lastNext = createBin(
+        Opcode::Add, indices.back(), module.getIntConst(typePool().i32(), ind.step), {});
+    if (mutator.insertInstruction(chain.back(), chain.back()->size() - 1, lastNext) !=
+        MutationResult::Applied)
+      return [] { PassResult p; p.status = PassStatus::Failed;
+                  p.diagnostic = "loop-unroll: final index rejected"; return p; }();
+    if (cfg.replaceTerminator(chain.back(), createBr(ind.phi->parent(), {}),
+                              {{lastNext}}) != MutationResult::Applied)
+      return [] { PassResult p; p.status = PassStatus::Failed;
+                  p.diagnostic = "loop-unroll: back edge rejected"; return p; }();
     // Tail: one final body execution when the pair loop leaves an odd remainder.
     // The even case enters TH with i >= bound and exits without executing TB.
     BasicBlock* tailHeader = module.createBlock(&function);
@@ -258,14 +276,13 @@ PassResult LoopUnrollPass::run(Function& function, PassContext& context) {
         MutationResult::Applied)
       return [] { PassResult p; p.status = PassStatus::Failed;
                   p.diagnostic = "loop-unroll: tail back edge rejected"; return p; }();
-    const int64_t limit = ind.bound - ind.step;
     if (mutator.rewriteOperand(ind.compare, 1,
                                module.getIntConst(typePool().i32(), limit)) !=
         MutationResult::Applied)
       return [] { PassResult p; p.status = PassStatus::Failed;
                   p.diagnostic = "loop-unroll: bound rewrite rejected"; return p; }();
     ++result.stats.counters["unrolled-loops"];
-    result.stats.counters["unroll-factor"] = 2;
+    result.stats.counters["unroll-factor"] = static_cast<long long>(unroll);
     result.status = PassStatus::Applied;
     return result;
   }

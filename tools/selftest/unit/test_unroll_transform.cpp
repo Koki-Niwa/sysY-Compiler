@@ -80,24 +80,35 @@ void runCase(const char* name, int start, int bound, int step, bool liveOut,
           r.invocations[0].stats.counters.count("unrolled-loops") &&
           r.invocations[0].stats.counters.at("unrolled-loops") == 1 &&
           before != dumpModule(loop.m), "unroll actually changed the IR");
+    const size_t factor = static_cast<size_t>(
+        r.invocations[0].stats.counters.at("unroll-factor"));
+    check(factor >= 2 && factor <= 4, "unroll factor is bounded");
     check(loop.header->terminator()->numSuccs() == 2 &&
-          loop.header->terminator()->succ(0) == loop.body &&
-          loop.body->terminator()->numSuccs() == 1 &&
-          loop.body->terminator()->succ(0) != loop.header,
-          "header body edge is preserved and body leaves the pair loop");
-    BasicBlock* second = loop.body->terminator()->succ(0);
-    check(second != loop.exit && second->terminator() != nullptr &&
-          second->terminator()->numSuccs() == 1 &&
-          second->terminator()->succ(0) == loop.header,
-          "second body clone returns to the header");
-    check(loop.header->preds().size() == 2 &&
-          loop.header->preds()[1] == second,
-          "header has the original preheader and the pair back edge");
+          loop.header->terminator()->succ(0) == loop.body,
+          "header body edge is preserved");
+    BasicBlock* cursor = loop.body->terminator()->succ(0);
+    size_t copies = 1;
+    while (cursor != loop.header && copies < 8) {
+      check(cursor->terminator() != nullptr &&
+                cursor->terminator()->numSuccs() == 1,
+            "chain body has one successor");
+      cursor = cursor->terminator()->succ(0);
+      ++copies;
+    }
+    check(cursor == loop.header && copies == factor,
+          "chain has one body per unroll slot");
+    BasicBlock* last = loop.header->preds().empty()
+                           ? nullptr
+                           : loop.header->preds().back();
+    check(loop.header->preds().size() == 2 && last != loop.pre &&
+              last != loop.body && last->terminator()->succ(0) == loop.header,
+          "header has the original preheader and the last chain block");
     size_t stores = 0;
     for (BasicBlock* block : loop.f->blocks())
       for (Instruction* inst : block->insts())
         if (inst->op() == Opcode::Store) ++stores;
-    check(stores == 3, "pair unrolling keeps one store per body copy and tail");
+    check(stores == factor + 1,
+          "one store per unrolled body plus one tail body");
     saveIR(name, before, loop.m);
   } else {
     check(before == dumpModule(loop.m), "unsupported loop is left unchanged");

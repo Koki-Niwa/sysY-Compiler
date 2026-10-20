@@ -203,6 +203,17 @@ not claim linear time for constructing all SCC summaries. The read-only
 `freshnessExpansionCount()` is a cumulative diagnostic of actual expansions;
 it does not participate in cache validity or invalidation decisions.
 
+## S24a Cache-capacity tiling plan (CLOSED / PASS)
+
+`planTiling` converts a nest's iteration count, dimensionality and element size
+into a working-set estimate for two streams (read+write). The tile is the
+largest power of two whose `2 * T^d * elementBytes` fits half of
+`MemoryModel::cacheBytes`, bounded by the iteration count and a minimum of 8.
+Full working sets that already fit, cold nests, undersized caches and empty
+shapes are declined. An optional bounded `TileProbe` may accept or reject the
+derived candidate. The planner does not rewrite loops; S24b tracks the tiled
+IR transform and fixed matmul/conv/stencil measurement protocol.
+
 ## S23b Canonical loop interchange (CLOSED / PASS, load-only)
 
 `LoopInterchangePass` matches a perfectly nested pair with exactly one i32

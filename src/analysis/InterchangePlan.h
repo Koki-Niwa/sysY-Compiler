@@ -7,6 +7,7 @@
 namespace sysy { namespace flat {
 struct MemoryModel {
   size_t cacheLineBytes = 64;
+  size_t cacheBytes = 32768;
   // Lines touched per element for a stream with the given byte stride.
   double linesPerElement(int64_t strideBytes) const;
 };

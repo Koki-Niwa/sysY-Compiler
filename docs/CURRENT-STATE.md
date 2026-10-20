@@ -560,6 +560,18 @@ invented by this document. Full corpus gates may require the workspace's
 external corpus and runtime; standalone clones must remain portable without
 those assets for local checks.
 
+**S24a CLOSED / PASS** (full S09 **57/0/2**, `test_tile` **10 checks**):
+`planTiling` derives a tile from cache capacity and element size: the largest
+power of two whose two-stream working set fits half the cache, bounded by the
+iteration count and a minimum of 8. It declines a full working set that already
+fits, cold nests, too-small caches and empty shapes; an optional bounded probe
+can accept/reject the derived candidate. Tests cover 2-D matmul, 3-D stencil,
+64/32/16 KiB cache variants, rejection paths and both probe outcomes. No block
+size is keyed to a test case.
+
+**S24b pending**: the tiled IR transform and the fixed matmul/conv/stencil
+runtime protocol. The plan deliberately does not rewrite loops yet.
+
 ## S23 audit fixes (2026-10-20)
 
 An independent review of the S12–S23 delivery found seven issues; all are

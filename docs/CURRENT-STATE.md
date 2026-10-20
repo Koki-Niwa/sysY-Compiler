@@ -173,6 +173,18 @@ frequency, instruction count, code-growth/latency estimate, probe use and
 reason. Tests cover probe-approved, probe-declined, no-probe fallback, records
 and inlining inside a loop while preserving its body/back edge.
 
+**S22a CLOSED / PASS** (full S09 **57/0/2**, `test_tailcall` **6 checks**):
+`TailCallAnalysis` classifies every call as not-tail, direct-self-tail,
+mutual-tail or general-tail (the latter two are explicitly backend decisions).
+A direct self tail call is stack-safe only when no argument may capture a
+stack object (transitively via alloca); the result exposes per-call reasons and
+an all-safe flag. `test_tailcall` covers direct/general, non-tail result use,
+mutual recursion and alloca-capturing arguments.
+
+**S22b pending**: the actual tail-recursion-to-loop transform. It needs loop
+phi/edge rewriting (or a slot-based rewrite), and must preserve the stack-safety
+oracle; the analysis deliberately does not claim elimination yet.
+
 **S21b CLOSED / PASS for phi-free loops**: `CFGEditor::replaceTerminator`
 can now add phi-free successor edges as well as drop them.
 `LoopRotatePass` rotates a while loop with a dedicated preheader, one back

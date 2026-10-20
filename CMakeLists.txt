@@ -95,7 +95,8 @@ add_library(sysy_analysis STATIC
   src/analysis/BlockFrequencyAnalysis.cpp
   src/analysis/ValueFacts.cpp
   src/analysis/DependenceAnalysis.cpp
-  src/analysis/ScalarEvolution.cpp)
+  src/analysis/ScalarEvolution.cpp
+  src/analysis/TailCallAnalysis.cpp)
 target_include_directories(sysy_analysis PUBLIC src)
 target_link_libraries(sysy_analysis PUBLIC sysy_ir)
 
@@ -210,6 +211,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   sysy_unit_test(test_s19 sysy_opt)
   sysy_unit_test(test_s20 sysy_opt)
   sysy_unit_test(test_looprotate sysy_opt)
+  sysy_unit_test(test_tailcall sysy_analysis)
 
   add_executable(bench_lexer tools/selftest/unit/bench_lexer.cpp)
   target_include_directories(bench_lexer PRIVATE src)

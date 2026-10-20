@@ -203,6 +203,17 @@ not claim linear time for constructing all SCC summaries. The read-only
 `freshnessExpansionCount()` is a cumulative diagnostic of actual expansions;
 it does not participate in cache validity or invalidation decisions.
 
+## S22a Tail-call classification (CLOSED / PASS)
+
+`TailCallAnalysis` is a Function-scope consumer of `CallGraphAnalysis` and
+`FunctionSummaryAnalysis` (dependency Calls|CFG|Memory). A call is a tail call
+only when it is the operand of the block's `Ret`. Direct self calls are
+`DirectSelfTail`; calls to a recursive callee are `MutualTail`; other/unknown
+callees are `GeneralTail`, whose legality belongs to the backend. A direct
+self tail call is stack-safe only when no argument transitively captures an
+`Alloca`; the analysis returns per-call reasons and an all-safe flag. It does
+not transform the IR yet (S22b).
+
 ## S21a Early inlining with bounded probe (CLOSED / PASS)
 
 `InlineV0Pass` accepts an optional `InlineProbe` with a per-run budget. A

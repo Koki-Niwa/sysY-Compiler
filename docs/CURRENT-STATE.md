@@ -215,11 +215,12 @@ and both negatives (5 checks).
 can now add phi-free successor edges as well as drop them.
 `LoopRotatePass` rotates a while loop with a dedicated preheader, one back
 edge, no header phi and phi-free body/exit targets: it keeps the header as a
-guard, clones the condition (single pure instruction with operands outside the
-loop) into the latch, and turns the latch into `cond ? body : exit`. It does
-not rotate phi-bearing loops yet; those are declined and covered by a negative
-test. `test_looprotate` covers rotation, header back-edge removal, the phi
-negative and a header-side-effect negative (7 checks).
+guard and requires it to contain only the condition (single pure instruction,
+used only by the terminator, operands outside the loop); the latch receives a
+clone of that condition and its terminator becomes `cond ? body : exit`. It
+does not rotate phi-bearing loops yet, and header side effects block rotation;
+`test_looprotate` covers rotation, back-edge removal, the phi negative and a
+header-side-effect negative (7 checks).
 
 **S20b CLOSED / PASS**: signed division by a non-power-of-two constant is
 now lowered with a 32-bit `mulhi` (16-bit limb emulation; Flat integer ops are
@@ -234,8 +235,9 @@ API (indexed/pointer) rather than an IR rewrite.
 **S19 CLOSED / PASS** (full S09 **57/0/2**, `test_s19` **7 checks**):
 `GVNPass` numbers pure instructions in dominator-tree scope (scoped
 availability, commutative operand canonicalization, no cross-sibling merge);
-`DeadStoreEliminationPass` removes an overwritten store in the same block and
-clears pending stores on any load/call; `DeadLoadEliminationPass` removes
+`DeadStoreEliminationPass` removes an overwritten store to the same
+non-escaping stack slot in one block; loads/calls and non-alloca pointers flush
+pending stores (global write traces stay observable); `DeadLoadEliminationPass` removes
 unused loads. `--opt=s19` runs rewrite → GVN → DSE → DLE after mem2reg.
 `test_s19` covers same-block GVN, sibling dominance, commutation, DSE with an
 intervening load, the alloca-only DSE scope and DLE (7 checks). Transpose: 220 → 214 instructions with
@@ -316,7 +318,7 @@ unreachable blocks, Loop-scope caching and CFG invalidation (20 checks).
 
 **S13 CLOSED / PASS** (full S09 **56/0/2**, `test_alias` **37 checks**): `AliasAnalysis`
 is a Module-scope consumer of `CallGraphAnalysis` (dependency mask
-Memory|Calls|Globals|Interface). It resolves pointer provenance to Alloca,
+DataFlow|Memory|Calls|Globals|Interface). It resolves pointer provenance to Alloca,
 Global, Param or Fresh bases with constant byte offsets through GEP/BitCast/Phi,
 and instantiates callee return summaries at call sites, so a call returning a
 parameter resolves to the caller's argument and a call returning a global keeps

@@ -211,8 +211,12 @@ only when it is the operand of the block's `Ret`. Direct self calls are
 `DirectSelfTail`; calls to a recursive callee are `MutualTail`; other/unknown
 callees are `GeneralTail`, whose legality belongs to the backend. A direct
 self tail call is stack-safe only when no argument transitively captures an
-`Alloca`; the analysis returns per-call reasons and an all-safe flag. It does
-not transform the IR yet (S22b).
+`Alloca`; the analysis returns per-call reasons and an all-safe flag. `TailRecursionEliminationPass` (S22b) consumes this analysis for a
+single-block function whose only return is a direct self tail call: it stores
+parameters into entry-block slots, clones the body into a new loop block that
+loads the slots, stores the next arguments back and branches to itself, then
+removes the call. Alloca/phi/multi-block/non-tail calls are declined, so the
+transform stays within the stack-safety oracle.
 
 ## S21a Early inlining with bounded probe (CLOSED / PASS)
 

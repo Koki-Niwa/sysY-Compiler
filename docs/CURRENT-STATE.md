@@ -181,9 +181,14 @@ stack object (transitively via alloca); the result exposes per-call reasons and
 an all-safe flag. `test_tailcall` covers direct/general, non-tail result use,
 mutual recursion and alloca-capturing arguments.
 
-**S22b pending**: the actual tail-recursion-to-loop transform. It needs loop
-phi/edge rewriting (or a slot-based rewrite), and must preserve the stack-safety
-oracle; the analysis deliberately does not claim elimination yet.
+**S22b CLOSED / PASS (single-block scope)**: `TailRecursionEliminationPass`
+consumes `TailCallAnalysis` and transforms a one-block function whose only
+return is a direct self tail call. Parameters are stored in entry-block slots;
+a new loop block loads them, clones the body, stores the next arguments back
+to the slots and branches to itself, so the recursive call disappears and the
+frame does not grow. Functions with an alloca, phi, multiple blocks or a
+non-tail call are declined. `test_tco` covers the transform, entry/loop CFG,
+and both negatives (5 checks).
 
 **S21b CLOSED / PASS for phi-free loops**: `CFGEditor::replaceTerminator`
 can now add phi-free successor edges as well as drop them.

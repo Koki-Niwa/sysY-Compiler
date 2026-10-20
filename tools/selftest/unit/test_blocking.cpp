@@ -83,6 +83,13 @@ int main() {
           "SIZE_MAX trips saturate without overflow");
   }
   {
+    BlockingContext c; c.outerTrip = 100000; c.innerTrip = 100000;
+    c.outerStride = 100000;
+    BlockingPlan p = planBlocking(c, model());
+    check(p.block && p.tileOuter == 64 && p.tileInner == 64,
+          "large trips tile by cache budget, not an arbitrary cap");
+  }
+  {
     BlockingContext c; c.outerTrip = 1024; c.innerTrip = 1024;
     c.elementBytes = 32768;
     BlockingPlan p = planBlocking(c, model());

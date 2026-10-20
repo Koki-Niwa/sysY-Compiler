@@ -43,10 +43,8 @@ BlockingPlan planBlocking(const BlockingContext& context, const MemoryModel& mod
   }
   // Start from the largest power-of-two tile per dimension and shrink the
   // larger tile until the tile footprint fits the half-cache budget.
-  size_t outer = std::min(floorPow2(context.outerTrip),
-                          std::min(context.outerTrip, static_cast<size_t>(4096)));
-  size_t inner = std::min(floorPow2(context.innerTrip),
-                          std::min(context.innerTrip, static_cast<size_t>(4096)));
+  size_t outer = std::min(floorPow2(context.outerTrip), context.outerTrip);
+  size_t inner = std::min(floorPow2(context.innerTrip), context.innerTrip);
   if (outer == 0 || inner == 0) {
     plan.reason = "small";
     return plan;

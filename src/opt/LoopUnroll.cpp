@@ -107,7 +107,7 @@ bool matchUnroll(const Function& function, const LoopEntry& loop, Induction& out
   if (!constantI32(increment->operand(1), step) || step <= 0) return false;
   const int64_t iterations =
       start < bound ? (bound - start + step - 1) / step : 0;
-  if (iterations < 2 || (iterations % 2) != 0) return false;
+  if (iterations < 2) return false;
   if (iterations > std::numeric_limits<int32_t>::max() ||
       start + iterations * step > std::numeric_limits<int32_t>::max())
     return false;
@@ -210,6 +210,54 @@ PassResult LoopUnrollPass::run(Function& function, PassContext& context) {
     if (cfg.redirectEdge(ind.body, 0, second, {}) != MutationResult::Applied)
       return [] { PassResult p; p.status = PassStatus::Failed;
                   p.diagnostic = "loop-unroll: body redirect rejected"; return p; }();
+    // Tail: one final body execution when the pair loop leaves an odd remainder.
+    // The even case enters TH with i >= bound and exits without executing TB.
+    BasicBlock* tailHeader = module.createBlock(&function);
+    BasicBlock* tailBody = module.createBlock(&function);
+    Instruction* thPlaceholder = createUnreachable({});
+    module.ownInst(thPlaceholder);
+    tailHeader->addInst(thPlaceholder);
+    Instruction* tbPlaceholder = createUnreachable({});
+    module.ownInst(tbPlaceholder);
+    tailBody->addInst(tbPlaceholder);
+    if (cfg.redirectEdge(ind.phi->parent(), 1, tailHeader, {}) !=
+        MutationResult::Applied)
+      return [] { PassResult p; p.status = PassStatus::Failed;
+                  p.diagnostic = "loop-unroll: tail header edge rejected"; return p; }();
+    Instruction* tailPhi = createPhi(typePool().i32(), {ind.phi}, {ind.phi->parent()}, {});
+    if (cfg.insertPhi(tailHeader, tailPhi) != MutationResult::Applied)
+      return [] { PassResult p; p.status = PassStatus::Failed;
+                  p.diagnostic = "loop-unroll: tail phi rejected"; return p; }();
+    Instruction* tailCmp = createICmp(IPred::Slt, tailPhi,
+                                      module.getIntConst(typePool().i32(), ind.bound), {});
+    if (mutator.insertInstruction(tailHeader, tailHeader->size() - 1, tailCmp) !=
+        MutationResult::Applied)
+      return [] { PassResult p; p.status = PassStatus::Failed;
+                  p.diagnostic = "loop-unroll: tail compare rejected"; return p; }();
+    if (cfg.replaceTerminator(tailHeader, createCondBr(tailCmp, tailBody, ind.exit, {})) !=
+        MutationResult::Applied)
+      return [] { PassResult p; p.status = PassStatus::Failed;
+                  p.diagnostic = "loop-unroll: tail guard rejected"; return p; }();
+    size_t tailAt = 0;
+    std::unordered_map<const Value*, Value*> tailMapping;
+    tailMapping[ind.phi] = tailPhi;
+    for (Instruction* inst : ind.body->insts()) {
+      if (inst == ind.body->terminator()) continue;
+      Instruction* copy = clone(module, mutator, tailBody, tailAt, inst, tailMapping);
+      if (copy == nullptr)
+        return [] { PassResult p; p.status = PassStatus::Failed;
+                    p.diagnostic = "loop-unroll: tail body rejected"; return p; }();
+      tailMapping[inst] = copy;
+    }
+    Instruction* tailNext = createBin(Opcode::Add, tailPhi,
+                                      module.getIntConst(typePool().i32(), ind.step), {});
+    if (mutator.insertInstruction(tailBody, tailAt, tailNext) != MutationResult::Applied)
+      return [] { PassResult p; p.status = PassStatus::Failed;
+                  p.diagnostic = "loop-unroll: tail increment rejected"; return p; }();
+    if (cfg.replaceTerminator(tailBody, createBr(tailHeader, {}), {{tailNext}}) !=
+        MutationResult::Applied)
+      return [] { PassResult p; p.status = PassStatus::Failed;
+                  p.diagnostic = "loop-unroll: tail back edge rejected"; return p; }();
     const int64_t limit = ind.bound - ind.step;
     if (mutator.rewriteOperand(ind.compare, 1,
                                module.getIntConst(typePool().i32(), limit)) !=

@@ -96,7 +96,7 @@ void runCase(const char* name, int start, int bound, int step, bool liveOut,
     for (BasicBlock* block : loop.f->blocks())
       for (Instruction* inst : block->insts())
         if (inst->op() == Opcode::Store) ++stores;
-    check(stores == 2, "pair unrolling keeps one store per body copy");
+    check(stores == 3, "pair unrolling keeps one store per body copy and tail");
     saveIR(name, before, loop.m);
   } else {
     check(before == dumpModule(loop.m), "unsupported loop is left unchanged");
@@ -108,7 +108,7 @@ int main(int argc, char** argv) {
   if (argc == 2) artifactDir = argv[1];
   runCase("even", 0, 10, 1, false, true);
   runCase("step3", 0, 12, 3, false, true);
-  runCase("odd", 0, 11, 1, false, false);
+  runCase("odd", 0, 11, 1, false, true);
   runCase("live_out", 0, 10, 1, true, false);
   std::printf("S25B_UNROLL_CHECKS=%d FAILURES=%d\n", checks, failures);
   return failures ? 1 : 0;

@@ -13,7 +13,7 @@ from flat_exec_report import observable_same
 
 def check_equivalence(binary, directory):
     subprocess.run([binary, str(directory)], check=True)
-    expected = {"even", "step3"}
+    expected = {"even", "odd", "step3"}
     actual = {p.name.removesuffix(".before.flat")
               for p in directory.glob("*.before.flat")}
     if actual != expected:

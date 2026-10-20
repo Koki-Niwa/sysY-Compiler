@@ -238,12 +238,13 @@ in the default CLI pipeline and no runtime gain is claimed.
 
 `LoopUnrollPass` matches a two-block canonical loop: an i32 induction phi,
 constant start/bound/positive step, one body and a unique latch, with no
-loop-defined live-outs, body phi or alloca. Only even trip counts are accepted;
-the body is cloned once, the header guard becomes `i < bound - step`, the first
-body executes at `i`, the clone at `i+step`, and the header advances by
-`2*step`. The body clone maps the phi to `i+step`; the old back edge is
-redirected so the header keeps exactly the preheader and the new pair edge.
-Odd trips decline without mutation (tail loops are not implemented yet).
+loop-defined live-outs, body phi or alloca. The body is cloned twice. The pair
+loop guard is `i < bound - step`; the original body executes at `i`, the first
+clone at `i+step`, and the header advances by `2*step`. When the pair guard
+fails, a tail header checks `i < bound` and optionally executes one tail body at
+`i`; this covers odd trip counts and is a no-op for even ones. The clone maps
+the phi to `i+step` (pair) or the tail phi (tail); the old back edge is
+redirected so the header keeps exactly the preheader and the pair edge.
 `test_unroll_equivalence` requires a real IR change and then compares FlatExec
 observables. Vectorization, pressure/spill measurements and target runtime are
 not implemented; the pass is not in the default pipeline.

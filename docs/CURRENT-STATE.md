@@ -609,16 +609,16 @@ Limits, recorded rather than hidden: there is no per-register-bank machine
 model, no spill estimate and no backend calibration; those belong to S25b
 together with the actual unroll/vector transform and runtime protocols.
 
-**S25b PARTIAL — pair unrolling**: `LoopUnrollPass` matches a two-block
-canonical loop (one i32 phi, constant start/bound/positive step, one body,
-no loop-defined live-outs, no body phi/alloca) with an **even** trip count. It
-clones the body once and rewrites the header guard to `i < bound - step`; the
-first body runs at `i`, the clone at `i+step`, and the header advances by
-`2*step`. Odd trips are declined (no tail loop yet). `test_unroll_transform`
-has **20 checks**; CTest `test_unroll_equivalence` executes two genuinely
-transformed cases and compares FlatExec observables. Vectorization, odd-trip
-tail handling, pressure/spill measurements and per-target runtime remain
-S25b follow-up; the pass is not in the default pipeline.
+**S25b PARTIAL — pair unrolling with a tail**: `LoopUnrollPass` matches a
+two-block canonical loop (one i32 phi, constant start/bound/positive step, one
+body, no loop-defined live-outs, no body phi/alloca). It clones the body twice:
+a pair loop runs `i`/`i+step` and advances by `2*step`, then a single tail body
+runs the remaining iteration when the trip is odd. Even trips enter the tail
+header with `i >= bound` and execute no tail body. `test_unroll_transform` has
+**24 checks**; CTest `test_unroll_equivalence` executes three genuinely
+transformed cases (even, odd, step-3) and compares FlatExec observables.
+Vectorization, pressure/spill measurements and per-target runtime remain S25b
+follow-up; the pass is not in the default pipeline.
 
 ## S23 audit fixes (2026-10-20)
 

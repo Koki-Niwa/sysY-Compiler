@@ -26,6 +26,12 @@ class CFGEditor {
   // are allowed only when they have no phi; a target that loses this
   // predecessor must also have no phi. Phi rewrites are the caller's job.
   MutationResult replaceTerminator(BasicBlock* block, Instruction* newTerminator);
+  // Same, but for each newly added successor supplies one value per target phi
+  // in block order. `incomingValues` is indexed by successor and may be empty;
+  // an existing successor must have an empty vector.
+  MutationResult replaceTerminator(
+      BasicBlock* block, Instruction* newTerminator,
+      const std::vector<std::vector<Value*>>& incomingValues);
 
  private:
   IRMutator& mutator_;

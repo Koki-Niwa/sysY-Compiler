@@ -572,8 +572,23 @@ capacity comparisons replace floating-point roots, so an exact-fit tile selects
 the largest fitting power of two (including the 7-D, 32 MiB-cache regression);
 a unit extent does not iterate over the dimension count.
 
-**S24b pending**: the tiled IR transform and the fixed matmul/conv/stencil
-runtime protocol. The plan deliberately does not rewrite loops yet.
+**S24b PARTIAL — order-preserving strip-mining**: `LoopTilingPass` rewrites
+a canonical constant-trip loop into a tile header, the original loop body and a
+tile latch. The tile size comes from `planTiling` (cache/element size, hotness);
+the loop order is unchanged because the tile groups consecutive iterations, so
+the transform is safe for ordinary bodies (stores/calls included) without a
+dependence proof. `CFGEditor::replaceTerminator` gained a phi-values overload
+for newly added edges. Tests: `test_cfg_phi_edges` **5** and
+`test_tiling_transform` **10**; an interpreter probe on a 64x64 nested store
+loop produced the same return and global-write trace before/after.
+
+Still missing for S24b: two-dimensional blocking (which reorders tiles and
+needs a dependence-legality proof), matmul/conv/stencil fixed-protocol runtime
+measurements, and target-backed evidence. No runtime gain is claimed.
+
+**S24c pending**: 2D blocking order plus the fixed matmul/conv/stencil runtime
+protocol; the current transform only strip-mines one loop without changing the
+iteration order.
 
 **S25a CLOSED / PASS** (full S09 **57/0/2**, `test_unroll` **18** +
 `test_unroll_advisor` **3** checks): `planUnroll` now consumes a critical-path

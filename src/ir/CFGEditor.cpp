@@ -225,6 +225,12 @@ MutationResult CFGEditor::redirectEdge(BasicBlock* from, size_t index,
 
 MutationResult CFGEditor::replaceTerminator(BasicBlock* block,
                                                Instruction* newTerminator) {
+  return replaceTerminator(block, newTerminator, {});
+}
+
+MutationResult CFGEditor::replaceTerminator(
+    BasicBlock* block, Instruction* newTerminator,
+    const std::vector<std::vector<Value*>>& incomingValues) {
   if (block == nullptr || newTerminator == nullptr ||
       !mutator_.isLiveBlock(block) || newTerminator->parent() != nullptr ||
       newTerminator->lifecycle() != InstructionLifecycle::Detached ||
@@ -243,15 +249,37 @@ MutationResult CFGEditor::replaceTerminator(BasicBlock* block,
     if (!mutator_.valueAvailableInFunction(newTerminator->operand(i), function) ||
         !hasEdge(newTerminator->operand(i), newTerminator, i))
       return MutationResult::Rejected;
-  // Existing targets may lose an edge; a new target is allowed only when it
-  // has no phi (the caller is responsible for any phi rewrite elsewhere).
-  for (size_t s = 0; s < newTerminator->numSuccs(); ++s) {
+  const size_t successorCount = newTerminator->numSuccs();
+  if (!incomingValues.empty() && incomingValues.size() != successorCount)
+    return MutationResult::Rejected;
+  std::vector<BasicBlock*> addedTargets;
+  std::vector<std::vector<Value*>> addedValues;
+  for (size_t s = 0; s < successorCount; ++s) {
     BasicBlock* target = newTerminator->succ(s);
     if (target == nullptr || target->parent() != function) return MutationResult::Rejected;
-    if (hasSuccessor(block, target, newTerminator->numSuccs())) continue;
-    for (Instruction* inst : target->insts())
-      if (inst != nullptr && inst->op() == Opcode::Phi)
+    const bool added = !hasSuccessor(block, target, successorCount);
+    std::vector<Value*> supplied;
+    if (!incomingValues.empty()) supplied = incomingValues[s];
+    if (!added) {
+      if (!supplied.empty()) return MutationResult::Rejected;
+      continue;
+    }
+    std::vector<Instruction*> phis;
+    if (!readPhis(target, phis)) return MutationResult::Rejected;
+    if (supplied.size() != phis.size()) return MutationResult::Rejected;
+    for (size_t i = 0; i < supplied.size(); ++i) {
+      if (supplied[i] == nullptr || supplied[i]->type() != phis[i]->type() ||
+          !mutator_.valueAvailableInFunction(supplied[i], function))
         return MutationResult::Rejected;
+    }
+    const auto duplicate = std::find(addedTargets.begin(), addedTargets.end(), target);
+    if (duplicate != addedTargets.end()) {
+      if (addedValues[static_cast<size_t>(duplicate - addedTargets.begin())] != supplied)
+        return MutationResult::Rejected;
+    } else {
+      addedTargets.push_back(target);
+      addedValues.push_back(std::move(supplied));
+    }
   }
   for (size_t s = 0; s < old->numSuccs(); ++s) {
     BasicBlock* target = old->succ(s);
@@ -277,7 +305,22 @@ MutationResult CFGEditor::replaceTerminator(BasicBlock* block,
   if (!mutator_.module().ownInst(newTerminator)) return MutationResult::Rejected;
   if (!mutator_.rawErase(old)) return MutationResult::Rejected;
   block->addInst(newTerminator);
-  mutator_.commit(MutationKind::CFG, {function});
+  bool phiChanged = false;
+  for (size_t i = 0; i < addedTargets.size(); ++i) {
+    // The pred list already grew, so readPhis (which enforces a phi/pred count
+    // match) is no longer usable here; the phis were validated before the edit.
+    size_t phiIndex = 0;
+    for (Instruction* inst : addedTargets[i]->insts()) {
+      if (inst->op() != Opcode::Phi) continue;
+      Incoming pairs = incoming(inst);
+      pairs.emplace_back(block, addedValues[i][phiIndex++]);
+      writeIncoming(inst, std::move(pairs));
+      phiChanged = true;
+    }
+  }
+  MutationKind kinds = MutationKind::CFG;
+  if (phiChanged) kinds |= MutationKind::DataFlow;
+  mutator_.commit(kinds, {function});
   return MutationResult::Applied;
 }
 

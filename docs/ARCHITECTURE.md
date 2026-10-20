@@ -203,6 +203,19 @@ not claim linear time for constructing all SCC summaries. The read-only
 `freshnessExpansionCount()` is a cumulative diagnostic of actual expansions;
 it does not participate in cache validity or invalidation decisions.
 
+## S24b Order-preserving strip-mining (PARTIAL)
+
+`LoopTilingPass` matches a canonical constant-trip loop (one i32 induction phi,
+constant start/bound/positive step, one latch) and strip-mines it: a tile header
+guards the original loop, the original loop runs `i` from the tile start to
+`min(start+T, bound)`, and a tile latch advances by `T` (clamped to the bound to
+avoid i32 overflow). The tile size comes from `planTiling`; because tile groups
+contain consecutive iterations, the iteration order and side-effect sequence are
+unchanged, so no dependence proof is needed. `CFGEditor::replaceTerminator`
+accepts phi values for newly added edges, and all header rewrites are
+prevalidated. Two-dimensional blocking (which reorders tiles) and fixed
+matmul/conv/stencil runtime measurements remain S24c.
+
 ## S25a Unroll planning (CLOSED / PASS)
 
 `planUnroll` combines target registers, live values, trip count and a

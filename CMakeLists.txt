@@ -127,7 +127,8 @@ add_library(sysy_opt STATIC
   src/opt/DuplicatePhiCoalescing.cpp
   src/opt/LoopTiling.cpp
   src/opt/LoopUnroll.cpp
-  src/opt/LoopBlocking.cpp)
+  src/opt/LoopBlocking.cpp
+  src/opt/MatmulBlocking.cpp)
 target_include_directories(sysy_opt PUBLIC src)
 target_link_libraries(sysy_opt PUBLIC sysy_analysis)
 
@@ -229,6 +230,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   sysy_unit_test(test_tile sysy_analysis)
   sysy_unit_test(test_blocking sysy_analysis)
   sysy_unit_test(test_loop_canonicalization sysy_opt)
+  sysy_unit_test(test_matmul_match sysy_opt)
   sysy_unit_test(test_unroll sysy_analysis)
   sysy_unit_test(test_unroll_advisor sysy_analysis)
   sysy_unit_test(test_interchange_transform sysy_opt)

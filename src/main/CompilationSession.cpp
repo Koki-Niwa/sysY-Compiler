@@ -32,6 +32,7 @@
 #include "opt/LoopTiling.h"
 #include "opt/LoopBlocking.h"
 #include "opt/MatmulBlocking.h"
+#include "opt/ConvBlocking.h"
 #include "opt/LoopUnroll.h"
 #include "opt/AllocaGEPCanonicalization.h"
 #include "opt/DuplicatePhiCoalescing.h"
@@ -148,6 +149,7 @@ bool runS24cPipeline(flat::Module& module, DiagnosticEngine& diags, bool stats) 
   flat::FlatPassManager manager;
   manager.addPass(std::make_unique<flat::DeadCodeEliminationPass>());
   manager.addPass(std::make_unique<flat::MatmulBlockingPass>());
+  manager.addPass(std::make_unique<flat::ConvBlockingPass>());
   flat::PassManagerOptions options; options.instrument = stats;
   const flat::PipelineResult result = manager.run(module, options);
   if (!result.ok()) {

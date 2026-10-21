@@ -129,7 +129,8 @@ add_library(sysy_opt STATIC
   src/opt/LoopUnroll.cpp
   src/opt/LoopBlocking.cpp
   src/opt/MatmulBlocking.cpp
-  src/opt/MatmulMatch.cpp)
+  src/opt/MatmulMatch.cpp
+  src/opt/ConvBlocking.cpp)
 target_include_directories(sysy_opt PUBLIC src)
 target_link_libraries(sysy_opt PUBLIC sysy_analysis)
 
@@ -263,12 +264,12 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
       $<TARGET_FILE:compiler>
       "${CMAKE_CURRENT_SOURCE_DIR}/tools/selftest/fixtures/conv_offset.sy")
   set_tests_properties(test_conv_equivalence PROPERTIES TIMEOUT 120)
-  add_test(NAME test_unsupported_conv
+  add_test(NAME test_conv_nested_equivalence
     COMMAND "${Python3_EXECUTABLE}"
-      "${CMAKE_CURRENT_SOURCE_DIR}/tools/selftest/unsupported_conv.py"
+      "${CMAKE_CURRENT_SOURCE_DIR}/tools/selftest/conv_nested_equivalence.py"
       $<TARGET_FILE:compiler>
-      "${CMAKE_CURRENT_SOURCE_DIR}/tools/selftest/fixtures/conv_nested_unsupported.sy")
-  set_tests_properties(test_unsupported_conv PROPERTIES TIMEOUT 120)
+      "${CMAKE_CURRENT_SOURCE_DIR}/tools/selftest/fixtures/conv_nested_const.sy")
+  set_tests_properties(test_conv_nested_equivalence PROPERTIES TIMEOUT 120)
   add_test(NAME test_unroll_equivalence
     COMMAND "${Python3_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/tools/selftest/unroll_equivalence.py"

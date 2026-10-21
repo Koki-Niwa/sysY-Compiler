@@ -648,9 +648,9 @@ actual rewrites (64x64x64, 65x67x7, 67x65x5), checks every C element against an
 independent arithmetic oracle, compares memory/return/input state and requires
 reordered stores. `test_stencil_equivalence` exercises a 64x64 1-D 9-tap stencil;
 `test_conv_equivalence` exercises a flattened 2-D 3x3 convolution with an
-offset table, both with full output oracles. A nested-K conv fixture is a
-no-change negative control; this is not a general multi-dimensional
-convolution claim. `matmul_bench.py` provides a fixed native-host Clang -O0
+offset table, both with full output oracles. A canonical nested-K 2-D conv
+(ki/kj accumulator chain) is also blocked and checked with a 4096-cell oracle;
+this is not a general multi-dimensional convolution claim. `matmul_bench.py` provides a fixed native-host Clang -O0
 pipeline comparison with full-C correctness, warmups/repeats, median/spread,
 compile time/RSS and output sizes. It includes canonicalization/DCE effects;
 its timings do not isolate the blocking pass or establish A53/BOOM performance.

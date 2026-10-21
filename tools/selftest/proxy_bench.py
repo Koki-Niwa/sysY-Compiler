@@ -44,7 +44,7 @@ def main():
     ap.add_argument("--reps", type=int, default=5)
     args = ap.parse_args()
     cases = (("unroll", os.path.join(BENCH, "unroll.sy"), "--opt=s25"),
-             ("blocking", os.path.join(BENCH, "blocking.sy"), "--opt=s24"))
+             ("blocking", os.path.join(BENCH, "blocking.sy"), "--opt=s24b"))
     print("QEMU_AARCH64_PROXY (not A53/BOOM hardware)")
     for name, source, flag in cases:
         base_dir, base = build(args.compiler, source, [])

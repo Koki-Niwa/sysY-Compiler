@@ -118,16 +118,17 @@ std::vector<std::string> verify(const Module& module) {
     std::set<uint32_t> blockIds;
     for (size_t b = 0; b < function.blocks.size(); ++b) {
       const Block& block = function.blocks[b];
-      if (b == 0 && block.id != 0) errors.push_back(function.name + ": entry is not B0");
       if (block.id != b) {
         errors.push_back(function.name + ": block ids must be contiguous (B" +
                          std::to_string(b) + " expected)");
         continue;
       }
       if (!blockIds.insert(block.id).second)
-        errors.push_back(function.name + ": duplicate block B" + std::to_string(block.id));
+        errors.push_back(function.name + ": duplicate block B" +
+                         std::to_string(block.id));
       if (block.instructions.empty()) {
-        errors.push_back(function.name + ": empty block B" + std::to_string(block.id));
+        errors.push_back(function.name + ": empty block B" +
+                         std::to_string(block.id));
         continue;
       }
       bool terminatorSeen = false;
@@ -135,20 +136,19 @@ std::vector<std::string> verify(const Module& module) {
         if (terminatorSeen)
           errors.push_back(function.name + ": instruction after terminator");
         if (isTerminator(inst.opcode)) terminatorSeen = true;
-        if (inst.opcode == Opcode::Phi && terminatorSeen)
-          errors.push_back(function.name + ": phi after terminator");
       }
       if (!terminatorSeen)
         errors.push_back(function.name + ": block B" + std::to_string(block.id) +
                          " has no terminator");
-      if (block.instructions.back().opcode == Opcode::Br &&
-          (block.instructions.back().operands.size() != 1 ||
-           block.instructions.back().operands[0].kind != OperandKind::Block))
+      const Instr& term = block.instructions.back();
+      if (term.opcode == Opcode::Br &&
+          (term.operands.size() != 1 ||
+           term.operands[0].kind != OperandKind::Block))
         errors.push_back(function.name + ": malformed br");
-      if (block.instructions.back().opcode == Opcode::CondBr &&
-          (block.instructions.back().operands.size() != 3 ||
-           block.instructions.back().operands[1].kind != OperandKind::Block ||
-           block.instructions.back().operands[2].kind != OperandKind::Block))
+      if (term.opcode == Opcode::CondBr &&
+          (term.operands.size() != 3 ||
+           term.operands[1].kind != OperandKind::Block ||
+           term.operands[2].kind != OperandKind::Block))
         errors.push_back(function.name + ": malformed condbr");
     }
     const auto succ = successors(function);
@@ -161,39 +161,127 @@ std::vector<std::string> verify(const Module& module) {
           preds[target].push_back(static_cast<uint32_t>(b));
       }
     }
-    std::map<uint32_t, Reg> defs;
-    for (const Block& block : function.blocks) {
-      for (const Instr& inst : block.instructions) {
-        if (inst.def) {
-          if (!hasDef(inst.opcode))
-            errors.push_back(function.name + ": unexpected def on terminator");
-          if (inst.def->type == Type::Void)
-            errors.push_back(function.name + ": void def");
-          const auto it = defs.find(inst.def->id);
-          if (it != defs.end() && !(it->second == *inst.def))
-            errors.push_back(function.name + ": register id reused with different type/class");
-          else
-            defs[inst.def->id] = *inst.def;
+    // Dominator sets over reachable blocks; unreachable blocks are rejected
+    // because no definition can dominate their uses.
+    const size_t count = function.blocks.size();
+    std::vector<bool> reachable(count, false);
+    std::vector<uint32_t> work{0};
+    reachable[0] = true;
+    while (!work.empty()) {
+      const uint32_t b = work.back();
+      work.pop_back();
+      for (uint32_t target : succ[b])
+        if (target < count && !reachable[target]) {
+          reachable[target] = true;
+          work.push_back(target);
+        }
+    }
+    for (size_t b = 0; b < count; ++b)
+      if (!reachable[b])
+        errors.push_back(function.name + ": unreachable block B" + std::to_string(b));
+    std::vector<std::set<uint32_t>> dominators(count);
+    for (size_t b = 0; b < count; ++b)
+      if (reachable[b]) {
+        if (b == 0) dominators[b] = {0};
+        else for (size_t i = 0; i < count; ++i) dominators[b].insert(i);
+      }
+    bool changed = true;
+    while (changed) {
+      changed = false;
+      for (size_t b = 1; b < count; ++b) {
+        if (!reachable[b] || preds[b].empty()) continue;
+        std::set<uint32_t> next;
+        bool first = true;
+        for (uint32_t pred : preds[b]) {
+          if (!reachable[pred]) continue;
+          if (first) { next = dominators[pred]; first = false; }
+          else {
+            std::set<uint32_t> intersection;
+            for (uint32_t value : next)
+              if (dominators[pred].count(value)) intersection.insert(value);
+            next = std::move(intersection);
+          }
+        }
+        next.insert(static_cast<uint32_t>(b));
+        if (next != dominators[b]) {
+          dominators[b] = std::move(next);
+          changed = true;
+        }
+      }
+    }
+    auto dominates = [&](uint32_t definition, uint32_t use) {
+      return reachable[use] && dominators[use].count(definition) != 0;
+    };
+    struct Def {
+      Reg reg;
+      uint32_t block = 0;
+      size_t index = 0;
+    };
+    std::map<uint32_t, Def> defs;
+    for (size_t b = 0; b < count; ++b) {
+      for (size_t i = 0; i < function.blocks[b].instructions.size(); ++i) {
+        const Instr& inst = function.blocks[b].instructions[i];
+        if (!inst.def) continue;
+        if (!hasDef(inst.opcode))
+          errors.push_back(function.name + ": unexpected def on terminator");
+        if (inst.def->type == Type::Void)
+          errors.push_back(function.name + ": void def");
+        const auto found = defs.find(inst.def->id);
+        if (found != defs.end())
+          errors.push_back(function.name + ": duplicate definition of r" +
+                           std::to_string(inst.def->id));
+        else
+          defs[inst.def->id] = Def{*inst.def, static_cast<uint32_t>(b), i};
+      }
+    }
+    auto checkUse = [&](const Reg& reg, uint32_t block, size_t index,
+                        bool phiValue, uint32_t phiPred) {
+      const auto found = defs.find(reg.id);
+      if (found == defs.end()) {
+        errors.push_back(function.name + ": use of undefined register r" +
+                         std::to_string(reg.id));
+        return;
+      }
+      if (!(found->second.reg == reg))
+        errors.push_back(function.name + ": register type/class mismatch");
+      if (phiValue) {
+        if (!dominates(found->second.block, phiPred))
+          errors.push_back(function.name + ": phi value does not dominate predecessor");
+      } else if (!dominates(found->second.block, block) ||
+                 (found->second.block == block && found->second.index >= index)) {
+        errors.push_back(function.name + ": use does not follow a dominating definition");
+      }
+    };
+    for (size_t b = 0; b < count; ++b) {
+      const Block& block = function.blocks[b];
+      for (size_t i = 0; i < block.instructions.size(); ++i) {
+        const Instr& inst = block.instructions[i];
+        if (inst.opcode == Opcode::Phi) {
+          if (inst.operands.size() != preds[b].size() * 2) {
+            errors.push_back(function.name + ": phi arity does not match predecessors");
+          } else {
+            for (size_t pair = 0; pair < preds[b].size(); ++pair) {
+              const Operand& value = inst.operands[pair * 2];
+              const Operand& edge = inst.operands[pair * 2 + 1];
+              if (value.kind != OperandKind::Reg || edge.kind != OperandKind::Block ||
+                  edge.index != preds[b][pair])
+                errors.push_back(function.name + ": malformed phi edge pair");
+              else
+                checkUse(value.reg, static_cast<uint32_t>(b), i, true, edge.index);
+            }
+          }
+          continue;
         }
         for (const Operand& operand : inst.operands) {
-          if (operand.kind == OperandKind::Reg && operand.reg.id != 0) {
-            const auto it = defs.find(operand.reg.id);
-            if (it == defs.end())
-              errors.push_back(function.name + ": use of undefined register");
-            else if (!(it->second == operand.reg))
-              errors.push_back(function.name + ": register type/class mismatch");
-          }
+          if (operand.kind == OperandKind::Reg)
+            checkUse(operand.reg, static_cast<uint32_t>(b), i, false, 0);
           if (operand.kind == OperandKind::Frame && operand.index >= function.frameSlots)
             errors.push_back(function.name + ": frame index out of range");
         }
         if (inst.mem.valid) {
           if (inst.mem.size == 0) errors.push_back(function.name + ": zero memory size");
-          if (inst.mem.base.id != 0 && defs.find(inst.mem.base.id) == defs.end())
-            errors.push_back(function.name + ": undefined memory base");
-        }
-        if (inst.opcode == Opcode::Phi) {
-          if (inst.operands.size() != preds[block.id].size() * 2)
-            errors.push_back(function.name + ": phi arity does not match predecessors");
+          if (inst.mem.base.id != 0)
+            checkUse(inst.mem.base, static_cast<uint32_t>(b), i, false, 0);
         }
       }
     }

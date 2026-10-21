@@ -63,6 +63,10 @@ int main() {
   bad.functions[0].blocks[0].instructions[1] = br(9);
   check(!verify(bad).empty(), "out-of-range branch target is rejected");
   bad = m;
+  bad.functions[0].blocks[0].instructions.insert(
+      bad.functions[0].blocks[0].instructions.begin() + 1, add(3, 2, 2));
+  check(!verify(bad).empty(), "use before its definition is rejected");
+  bad = m;
   bad.functions[0].blocks[1].instructions.pop_back();
   check(!verify(bad).empty(), "missing terminator is rejected");
   bad = m;

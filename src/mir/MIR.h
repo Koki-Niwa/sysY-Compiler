@@ -87,5 +87,11 @@ struct Liveness {
   std::vector<std::set<uint32_t>> liveOut;
 };
 Liveness analyzeLiveness(const Function& function);
+// SSA virtual-register interference over the liveness result. Pairs that are
+// simultaneously live get an undirected edge; no coloring/RA is performed.
+struct InterferenceGraph {
+  std::vector<std::set<uint32_t>> neighbors;
+};
+InterferenceGraph buildInterference(const Function& function, const Liveness& liveness);
 }}  // namespace sysy::mir
 #endif

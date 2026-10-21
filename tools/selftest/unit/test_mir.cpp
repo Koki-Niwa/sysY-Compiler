@@ -94,6 +94,28 @@ int main() {
         "definition is live-out of its block and not live-in");
   check(live.liveIn[1].count(1) && live.liveOut[1].empty(),
         "entry use is live-in but return leaves nothing live-out");
+  Module im;
+  im.name = "i";
+  Function iff;
+  iff.name = "f";
+  Block ib;
+  ib.id = 0;
+  ib.instructions = {copy(1, 1), copy(2, 2), br(1)};
+  Block ib2;
+  ib2.id = 1;
+  Instr ret3;
+  ret3.opcode = Opcode::Ret;
+  ret3.operands.push_back(Operand::makeReg(Reg{3, Type::I32, RegClass::GPR}));
+  ib2.instructions = {add(3, 1, 2), ret3};
+  iff.blocks = {ib, ib2};
+  im.functions.push_back(iff);
+  Liveness ilive = analyzeLiveness(im.functions[0]);
+  InterferenceGraph graph = buildInterference(im.functions[0], ilive);
+  check(graph.neighbors.size() > 3 && graph.neighbors[1].count(2) &&
+            graph.neighbors[2].count(1),
+        "simultaneously live virtual registers interfere");
+  check(!graph.neighbors[3].count(1) && !graph.neighbors[3].count(2),
+        "defined result does not interfere with its own inputs");
   Module rich;
   rich.name = "rich";
   Function rf;

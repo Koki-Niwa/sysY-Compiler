@@ -373,3 +373,34 @@ Liveness analyzeLiveness(const Function& function) {
   return result;
 }
 }}  // namespace sysy::mir
+
+namespace sysy { namespace mir {
+InterferenceGraph buildInterference(const Function& function,
+                                    const Liveness& liveness) {
+  InterferenceGraph graph;
+  uint32_t maxId = 0;
+  for (const Block& block : function.blocks)
+    for (const Instr& inst : block.instructions) {
+      if (inst.def) maxId = std::max(maxId, inst.def->id);
+      for (const Operand& operand : inst.operands)
+        if (operand.kind == OperandKind::Reg) maxId = std::max(maxId, operand.reg.id);
+      if (inst.mem.valid) maxId = std::max(maxId, inst.mem.base.id);
+    }
+  graph.neighbors.resize(maxId + 1);
+  auto link = [&](uint32_t a, uint32_t b) {
+    if (a == 0 || b == 0 || a == b) return;
+    graph.neighbors[a].insert(b);
+    graph.neighbors[b].insert(a);
+  };
+  for (size_t b = 0; b < liveness.liveIn.size(); ++b) {
+    for (uint32_t a : liveness.liveIn[b])
+      for (uint32_t c : liveness.liveIn[b]) link(a, c);
+    for (uint32_t a : liveness.liveOut[b])
+      for (uint32_t c : liveness.liveOut[b]) link(a, c);
+    for (const Instr& inst : function.blocks[b].instructions)
+      if (inst.def)
+        for (uint32_t live : liveness.liveOut[b]) link(inst.def->id, live);
+  }
+  return graph;
+}
+}}  // namespace sysy::mir

@@ -106,5 +106,12 @@ struct Allocation {
   size_t colors = 0;
 };
 Allocation greedyColor(const InterferenceGraph& graph, size_t maxColors);
+// Map spilled virtual ids to frame slots. No load/store rewrite is performed.
+struct SpillPlan {
+  std::vector<int> slot;              // virtual id -> frame id, -1 if not spilled
+  std::vector<FrameObject> objects;
+};
+SpillPlan planSpills(const Allocation& allocation, uint32_t slotBytes = 8,
+                     uint32_t alignment = 8);
 }}  // namespace sysy::mir
 #endif

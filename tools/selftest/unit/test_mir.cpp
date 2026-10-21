@@ -164,6 +164,15 @@ int main() {
   Allocation shared = greedyColor(independent, 1);
   check(!shared.spilled[1] && !shared.spilled[2],
         "non-interfering registers may share one color");
+  SpillPlan spillPlan = planSpills(one, 8, 8);
+  const size_t spilledId = one.spilled[1] ? 1 : 2;
+  check(spillPlan.slot[spilledId] >= 0 &&
+            spillPlan.objects.size() == 1 &&
+            spillPlan.objects[0].spill && spillPlan.objects[0].size == 8 &&
+            spillPlan.objects[0].align == 8,
+        "spilled virtual register gets an aligned frame slot");
+  SpillPlan noSpills = planSpills(alloc);
+  check(noSpills.objects.empty(), "non-spilling allocation needs no spill slot");
   Module rich;
   rich.name = "rich";
   Function rf;

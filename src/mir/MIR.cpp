@@ -328,8 +328,19 @@ Liveness analyzeLiveness(const Function& function) {
   result.liveIn.resize(count);
   result.liveOut.resize(count);
   std::vector<std::set<uint32_t>> use(count), def(count);
+  std::map<std::pair<uint32_t, uint32_t>, std::set<uint32_t>> phiUse;
   for (size_t b = 0; b < count; ++b) {
     for (const Instr& inst : function.blocks[b].instructions) {
+      if (inst.opcode == Opcode::Phi) {
+        if (inst.def) def[b].insert(inst.def->id);
+        for (size_t pair = 0; pair + 1 < inst.operands.size(); pair += 2) {
+          const Operand& value = inst.operands[pair];
+          const Operand& edge = inst.operands[pair + 1];
+          if (value.kind == OperandKind::Reg && edge.kind == OperandKind::Block)
+            phiUse[{static_cast<uint32_t>(b), edge.index}].insert(value.reg.id);
+        }
+        continue;
+      }
       for (const Operand& operand : inst.operands)
         if (operand.kind == OperandKind::Reg && !def[b].count(operand.reg.id))
           use[b].insert(operand.reg.id);
@@ -357,9 +368,21 @@ Liveness analyzeLiveness(const Function& function) {
     changed = false;
     for (size_t b = count; b-- > 0;) {
       std::set<uint32_t> out;
-      for (size_t target : successors(b))
-        if (target < count) out.insert(result.liveIn[target].begin(),
-                                       result.liveIn[target].end());
+      for (size_t target : successors(b)) {
+        if (target >= count) continue;
+        std::set<uint32_t> edge = result.liveIn[target];
+        const auto found = phiUse.find({static_cast<uint32_t>(target),
+                                        static_cast<uint32_t>(b)});
+        if (found != phiUse.end())
+          edge.insert(found->second.begin(), found->second.end());
+        auto& slot = result.edgeLive[{static_cast<uint32_t>(b),
+                                      static_cast<uint32_t>(target)}];
+        if (slot != edge) {
+          slot = edge;
+          changed = true;
+        }
+        out.insert(edge.begin(), edge.end());
+      }
       std::set<uint32_t> in = use[b];
       for (uint32_t id : out)
         if (!def[b].count(id)) in.insert(id);
@@ -372,9 +395,6 @@ Liveness analyzeLiveness(const Function& function) {
   }
   return result;
 }
-}}  // namespace sysy::mir
-
-namespace sysy { namespace mir {
 InterferenceGraph buildInterference(const Function& function,
                                     const Liveness& liveness) {
   InterferenceGraph graph;

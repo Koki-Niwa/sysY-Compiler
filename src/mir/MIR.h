@@ -4,6 +4,7 @@
 #define SYSY_MIR_MIR_H
 #include <cstdint>
 #include <optional>
+#include <map>
 #include <set>
 #include <string>
 #include <vector>
@@ -85,6 +86,9 @@ std::vector<std::string> verify(const Module& module);
 struct Liveness {
   std::vector<std::set<uint32_t>> liveIn;
   std::vector<std::set<uint32_t>> liveOut;
+  // Live values on a specific CFG edge, including phi operands that belong to
+  // that predecessor. Key is (predecessor block, successor block).
+  std::map<std::pair<uint32_t, uint32_t>, std::set<uint32_t>> edgeLive;
 };
 Liveness analyzeLiveness(const Function& function);
 // SSA virtual-register interference over the liveness result. Pairs that are

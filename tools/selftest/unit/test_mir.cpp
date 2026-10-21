@@ -23,6 +23,13 @@ Instr add(uint32_t dst, uint32_t a, uint32_t b) {
 Instr br(uint32_t target) {
   Instr i; i.opcode = Opcode::Br; i.operands.push_back(Operand::makeBlock(target)); return i;
 }
+Instr condbr(uint32_t cond, uint32_t yes, uint32_t no) {
+  Instr i; i.opcode = Opcode::CondBr;
+  i.operands.push_back(Operand::makeReg(Reg{cond, Type::I32, RegClass::GPR}));
+  i.operands.push_back(Operand::makeBlock(yes));
+  i.operands.push_back(Operand::makeBlock(no));
+  return i;
+}
 Module module() {
   Module m; m.name = "t";
   Function f; f.name = "main"; f.frameSlots = 1;
@@ -116,6 +123,33 @@ int main() {
         "simultaneously live virtual registers interfere");
   check(!graph.neighbors[3].count(1) && !graph.neighbors[3].count(2),
         "defined result does not interfere with its own inputs");
+  Module diamond;
+  diamond.name = "d";
+  Function df;
+  df.name = "f";
+  Block d0; d0.id = 0;
+  d0.instructions = {copy(1, 1), copy(2, 2), copy(4, 0), condbr(4, 1, 2)};
+  Block d1; d1.id = 1; d1.instructions = {br(3)};
+  Block d2; d2.id = 2; d2.instructions = {br(3)};
+  Block d3; d3.id = 3;
+  Instr phi;
+  phi.opcode = Opcode::Phi;
+  phi.def = Reg{3, Type::I32, RegClass::GPR};
+  phi.operands = {Operand::makeReg(Reg{1, Type::I32, RegClass::GPR}),
+                  Operand::makeBlock(1),
+                  Operand::makeReg(Reg{2, Type::I32, RegClass::GPR}),
+                  Operand::makeBlock(2)};
+  Instr dret; dret.opcode = Opcode::Ret;
+  dret.operands.push_back(Operand::makeReg(Reg{3, Type::I32, RegClass::GPR}));
+  d3.instructions = {phi, dret};
+  df.blocks = {d0, d1, d2, d3};
+  diamond.functions.push_back(df);
+  Liveness dlive = analyzeLiveness(diamond.functions[0]);
+  check(dlive.liveIn[3].empty(),
+        "phi defs are local, so no phi operand appears in block live-in");
+  check(dlive.edgeLive[{1, 3}] == std::set<uint32_t>{1} &&
+            dlive.edgeLive[{2, 3}] == std::set<uint32_t>{2},
+        "phi operands are live only on their predecessor edge");
   Module rich;
   rich.name = "rich";
   Function rf;

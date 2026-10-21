@@ -87,6 +87,35 @@ int main() {
   bad.functions[0].blocks[0].instructions[0].mem =
       MemOperand{true, Reg{0, Type::I32, RegClass::GPR}, 0, 4, 2, true};
   check(verify(bad).empty(), "RegMask and volatile/alias memory facts are accepted");
+  Module rich;
+  rich.name = "rich";
+  Function rf;
+  rf.name = "f";
+  rf.frameSlots = 1;
+  rf.frameObjects = {{0, 8, 8, true}};
+  Block rb0;
+  rb0.id = 0;
+  Instr load;
+  load.opcode = Opcode::Load;
+  load.def = Reg{1, Type::I32, RegClass::GPR};
+  load.mem = MemOperand{true, Reg{0, Type::I32, RegClass::GPR}, 0, 4, 2, true};
+  load.clobbers = {RegMask{RegClass::GPR, 0x3}};
+  rb0.instructions = {load, br(1)};
+  Block rb1;
+  rb1.id = 1;
+  Instr rret;
+  rret.opcode = Opcode::Ret;
+  rret.operands.push_back(Operand::makeReg(Reg{1, Type::I32, RegClass::GPR}));
+  rb1.instructions = {rret};
+  rf.blocks = {rb0, rb1};
+  rich.functions.push_back(rf);
+  const std::string richText = dump(rich);
+  auto richParsed = parse(richText);
+  check(richParsed.has_value(), "MIR frame/mask/memory facts parse back");
+  check(richParsed && dump(*richParsed) == richText,
+        "MIR frame/mask/memory dump is byte-identical");
+  check(richParsed && verify(*richParsed).empty(),
+        "MIR frame/mask/memory parsed module verifies");
   std::printf("MIR_CHECKS=%d FAILURES=%d\n", checks, failures);
   return failures ? 1 : 0;
 }

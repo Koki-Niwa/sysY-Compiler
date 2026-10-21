@@ -88,6 +88,10 @@ std::string dump(const Module& module) {
   out << "mir " << module.name << "\n";
   for (const Function& function : module.functions) {
     out << "func " << function.name << " frame=" << function.frameSlots << "\n";
+    for (const FrameObject& object : function.frameObjects)
+      out << "frameobj " << object.id << " size=" << object.size
+          << " align=" << object.align << " spill=" << (object.spill ? 1 : 0)
+          << "\n";
     for (const Block& block : function.blocks) {
       out << "B" << block.id << ":\n";
       for (const Instr& inst : block.instructions) {
@@ -95,9 +99,16 @@ std::string dump(const Module& module) {
         if (inst.def) out << " " << regName(*inst.def);
         for (const Operand& operand : inst.operands)
           out << " " << operandName(operand);
-        if (inst.mem.valid)
+        if (inst.mem.valid) {
           out << " mem[" << regName(inst.mem.base) << "+" << inst.mem.offset
-              << ":" << inst.mem.size << "]";
+              << ":" << inst.mem.size;
+          if (inst.mem.aliasClass != 0) out << ":alias=" << inst.mem.aliasClass;
+          if (inst.mem.isVolatile) out << ":volatile";
+          out << "]";
+        }
+        for (const RegMask& mask : inst.clobbers)
+          out << " clobber=" << (mask.cls == RegClass::GPR ? "g" : "f")
+              << ":0x" << std::hex << mask.bits << std::dec;
         out << "\n";
       }
     }
@@ -362,7 +373,7 @@ bool parseMem(const std::string& token, MemOperand& mem) {
   if (!startsWith(token, "mem[") || token.back() != ']') return false;
   const std::string body = token.substr(4, token.size() - 5);
   const size_t plus = body.find('+');
-  const size_t colon = body.rfind(':');
+  const size_t colon = body.find(':', plus + 1);
   if (plus == std::string::npos || colon == std::string::npos || plus > colon)
     return false;
   Reg base;
@@ -373,13 +384,32 @@ bool parseMem(const std::string& token, MemOperand& mem) {
       offset = std::stoll(body.substr(plus + 1, colon - plus - 1));
     } catch (...) { return false; }
   }
-  const std::string size = body.substr(colon + 1);
+  const std::string rest = body.substr(colon + 1);
+  const size_t next = rest.find(':');
+  const std::string size = rest.substr(0, next);
   if (size.empty()) return false;
   for (char ch : size) if (ch < '0' || ch > '9') return false;
   mem.valid = true;
   mem.base = base;
   mem.offset = offset;
   mem.size = static_cast<uint32_t>(std::stoul(size));
+  if (next != std::string::npos) {
+    std::string tail = rest.substr(next + 1);
+    size_t begin = 0;
+    while (begin <= tail.size()) {
+      const size_t end = tail.find(':', begin);
+      const std::string part = tail.substr(begin, end == std::string::npos
+                                                    ? std::string::npos
+                                                    : end - begin);
+      if (part == "volatile") mem.isVolatile = true;
+      else if (startsWith(part, "alias=")) {
+        try { mem.aliasClass = static_cast<uint32_t>(std::stoul(part.substr(6))); }
+        catch (...) { return false; }
+      } else return false;
+      if (end == std::string::npos) break;
+      begin = end + 1;
+    }
+  }
   return true;
 }
 }  // namespace
@@ -406,6 +436,32 @@ std::optional<Module> parse(const std::string& text, std::string* error) {
     if (!headerSeen) {
       if (error) *error = "missing mir header";
       return std::nullopt;
+    }
+    if (startsWith(line, "frameobj ")) {
+      if (function == nullptr) {
+        if (error) *error = "frame object before function";
+        return std::nullopt;
+      }
+      std::istringstream objectLine(line.substr(9));
+      FrameObject object;
+      std::string idToken, sizeToken, alignToken, spillToken;
+      if (!(objectLine >> idToken >> sizeToken >> alignToken >> spillToken) ||
+          !startsWith(sizeToken, "size=") || !startsWith(alignToken, "align=") ||
+          !startsWith(spillToken, "spill=")) {
+        if (error) *error = "malformed frame object";
+        return std::nullopt;
+      }
+      try {
+        object.id = static_cast<uint32_t>(std::stoul(idToken));
+        object.size = static_cast<uint32_t>(std::stoul(sizeToken.substr(5)));
+        object.align = static_cast<uint32_t>(std::stoul(alignToken.substr(6)));
+        object.spill = std::stoul(spillToken.substr(6)) != 0;
+      } catch (...) {
+        if (error) *error = "malformed frame object field";
+        return std::nullopt;
+      }
+      function->frameObjects.push_back(object);
+      continue;
     }
     if (startsWith(line, "func ")) {
       std::istringstream header(line.substr(5));
@@ -468,6 +524,25 @@ std::optional<Module> parse(const std::string& text, std::string* error) {
       inst.def = def;
     }
     while (tokens >> token) {
+      if (startsWith(token, "clobber=")) {
+        const std::string body = token.substr(8);
+        const size_t colon = body.find(':');
+        if (colon == std::string::npos || (body.substr(0, colon) != "g" &&
+                                            body.substr(0, colon) != "f")) {
+          if (error) *error = "malformed clobber";
+          return std::nullopt;
+        }
+        RegMask mask;
+        mask.cls = body.substr(0, colon) == "g" ? RegClass::GPR : RegClass::FPR;
+        try {
+          mask.bits = std::stoull(body.substr(colon + 1), nullptr, 0);
+        } catch (...) {
+          if (error) *error = "malformed clobber bits";
+          return std::nullopt;
+        }
+        inst.clobbers.push_back(mask);
+        continue;
+      }
       if (startsWith(token, "mem[")) {
         if (!parseMem(token, inst.mem)) {
           if (error) *error = "malformed memory operand";

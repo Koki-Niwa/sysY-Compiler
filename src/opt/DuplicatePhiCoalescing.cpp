@@ -30,7 +30,8 @@ PassResult DuplicatePhiCoalescingPass::run(Function& function,
             break;
           }
         if (!same) continue;
-        if (context.mutator().replaceUses(b, a) != MutationResult::Applied)
+        const MutationResult replaced = context.mutator().replaceUses(b, a);
+        if (replaced != MutationResult::Applied && replaced != MutationResult::NoChange)
           return [] { PassResult p; p.status = PassStatus::Failed;
                       p.diagnostic = "phi-coalescing: replaceUses rejected"; return p; }();
         if (context.cfg().erasePhi(b) != MutationResult::Applied)

@@ -277,6 +277,71 @@ void testArrayReduction() {
         "array reduction uses the reduction path");
   saveIR("array_reduction", before, nest.m);
 }
+
+struct NestedReduction {
+  Module m;
+  const Type* i32 = typePool().i32();
+  Function* f = nullptr;
+  GlobalAddr* g = nullptr;
+  BasicBlock* outer = nullptr;
+  BasicBlock* innerPre = nullptr;
+  BasicBlock* inner = nullptr;
+  BasicBlock* body = nullptr;
+  BasicBlock* innerLatch = nullptr;
+  BasicBlock* outerLatch = nullptr;
+  BasicBlock* exit = nullptr;
+  explicit NestedReduction(int n) {
+    g = m.globalAddr(m.createGlobal("g", i32));
+    f = m.createFunction("main", i32);
+    BasicBlock* pre = m.createBlock(f);
+    outer = m.createBlock(f); innerPre = m.createBlock(f);
+    inner = m.createBlock(f); body = m.createBlock(f);
+    innerLatch = m.createBlock(f); outerLatch = m.createBlock(f);
+    exit = m.createBlock(f);
+    add(m, pre, createBr(outer, {}));
+    Instruction* oi = add(m, outer, createPhi(i32, {m.getIntConst(i32, 0), nullptr},
+                                              {pre, outerLatch}, {}));
+    Instruction* oc = add(m, outer, createICmp(IPred::Slt, oi,
+                                               m.getIntConst(i32, n), {}));
+    add(m, outer, createCondBr(oc, innerPre, exit, {}));
+    add(m, innerPre, createBr(inner, {}));
+    Instruction* ij = add(m, inner, createPhi(i32, {m.getIntConst(i32, 0), nullptr},
+                                              {innerPre, innerLatch}, {}));
+    Instruction* ic = add(m, inner, createICmp(IPred::Slt, ij,
+                                               m.getIntConst(i32, n), {}));
+    add(m, inner, createCondBr(ic, body, outerLatch, {}));
+    Instruction* old = add(m, body, createLoad(i32, g, {}));
+    Instruction* value = add(m, body, createBin(Opcode::Mul, oi, ij, {}));
+    Instruction* sum = add(m, body, createBin(Opcode::Add, old, value, {}));
+    add(m, body, createStore(i32, sum, g, {}));
+    add(m, body, createBr(innerLatch, {}));
+    Instruction* jn = add(m, innerLatch, createBin(Opcode::Add, ij,
+                                                   m.getIntConst(i32, 1), {}));
+    add(m, innerLatch, createBr(inner, {}));
+    Instruction* in = add(m, outerLatch, createBin(Opcode::Add, oi,
+                                                   m.getIntConst(i32, 1), {}));
+    add(m, outerLatch, createBr(outer, {}));
+    add(m, exit, createRet(m.getIntConst(i32, 0), {}));
+    oi->setOperand(1, in);
+    ij->setOperand(1, jn);
+    m.rebuildCFG(); m.rebuildUseDef();
+  }
+};
+void testNestedPreheader() {
+  NestedReduction nest(128);
+  check(verifyFlatModule(nest.m).empty(), "nested-preheader fixture verifies");
+  const std::string before = dumpModule(nest.m);
+  FlatPassManager pm; pm.addPass(std::make_unique<LoopBlockingPass>());
+  PassManagerOptions options; options.verifyEach = true; options.instrument = true;
+  const auto r = pm.run(nest.m, options);
+  check(r.ok() && r.changed && before != dumpModule(nest.m) &&
+            verifyFlatModule(nest.m).empty(),
+        "nested preheader/trampoline loop is blocked");
+  check(r.invocations.size() == 1 &&
+            r.invocations[0].stats.counters.at("blocked-reductions") == 1,
+        "nested blocking counter recorded");
+  saveIR("nested", before, nest.m);
+}
 }  // namespace
 int main(int argc, char** argv) {
   if (argc > 2) return 2;
@@ -298,6 +363,7 @@ int main(int argc, char** argv) {
   runCase("exit_phi", 128, 128, false, false, false, false, false, false, true);
   testMap();
   testArrayReduction();
+  testNestedPreheader();
   std::printf("S24C_BLOCKING_TRANSFORM_CHECKS=%d FAILURES=%d\n", checks, failures);
   return failures ? 1 : 0;
 }

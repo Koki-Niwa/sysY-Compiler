@@ -93,6 +93,18 @@ bool collectStoreIndices(const Value* ptr, const Instruction* outer,
   if (index != nullptr && index->isConstant()) return true;
   return false;
 }
+BasicBlock* skipTrampolines(BasicBlock* block) {
+  for (size_t steps = 0; block != nullptr && steps < 8; ++steps) {
+    if (block->size() != 1) return block;
+    Instruction* term = block->terminator();
+    if (term == nullptr || term->op() != Opcode::Br || term->numSuccs() != 1)
+      return block;
+    BasicBlock* next = term->succ(0);
+    if (next == nullptr || next == block) return block;
+    block = next;
+  }
+  return block;
+}
 bool matchNest(const Function& function, ReductionNest& nest) {
   for (BasicBlock* outer : function.blocks()) {
     if (outer->size() != 3 || outer->at(0)->op() != Opcode::Phi ||
@@ -100,7 +112,8 @@ bool matchNest(const Function& function, ReductionNest& nest) {
         outer->at(2)->numSuccs() != 2)
       continue;
     Instruction* outerPhi = outer->at(0);
-    BasicBlock* inner = outer->at(2)->succ(0);
+    BasicBlock* innerEntry = outer->at(2)->succ(0);
+    BasicBlock* inner = skipTrampolines(innerEntry);
     BasicBlock* exit = outer->at(2)->succ(1);
     BasicBlock* innerLatch = nullptr;
     if (inner == nullptr || inner->parent() != &function || inner->size() != 3 ||
@@ -108,7 +121,7 @@ bool matchNest(const Function& function, ReductionNest& nest) {
         inner->at(2)->numSuccs() != 2)
       continue;
     BasicBlock* body = inner->at(2)->succ(0);
-    BasicBlock* outerLatch = inner->at(2)->succ(1);
+    BasicBlock* outerLatch = skipTrampolines(inner->at(2)->succ(1));
     if (body == nullptr || outerLatch == nullptr ||
         body->parent() != &function || body->size() < 3 ||
         body->terminator() == nullptr || body->terminator()->op() != Opcode::Br ||
@@ -146,8 +159,11 @@ bool matchNest(const Function& function, ReductionNest& nest) {
         break;
       }
     if (pre == nullptr) continue;
+    Instruction* innerPhi = inner->at(0);
+    BasicBlock* innerPre = innerPhi->succ(0) == innerLatch ? innerPhi->succ(1)
+                                                          : innerPhi->succ(0);
     if (!matchInduction(outerPhi, outer->at(1), nest.outerBound, pre, outerLatch) ||
-        !matchInduction(inner->at(0), inner->at(1), nest.innerBound, outer,
+        !matchInduction(innerPhi, inner->at(1), nest.innerBound, innerPre,
                         innerLatch))
       continue;
     std::vector<Instruction*> loads;

@@ -612,17 +612,16 @@ dimensions to be strictly partial. The reduction is legal because i32 addition i
 associative/commutative; the map is legal because the input is never written and
 the output address is unique per `(i,j)`. The pass consumes `BlockingPlan`,
 builds i0/j0/i/j, clones the body, and neutralizes the now-unreachable original
-header phis. `test_blocking_transform` has **53 checks**; CTest
-`test_blocking_equivalence` executes 128x128 reduction, 65x63 partial reduction,
-128x128 map and an in-place array reduction, requiring identical final memory/return (write order differs).
+header phis. `test_blocking_transform` has **56 checks**; CTest
+`test_blocking_equivalence` executes exact/partial reductions, scalar/array
+reduction, a 128x128 map and a nested-preheader reduction, requiring identical final memory/return (write order differs).
 This is not matmul/conv accumulation and has no target runtime; the transforms
 are available only through opt-in pipelines (`--opt=s24` for blocking/tiling,
 `--opt=s25` for unrolling), never by default. Both and their combination pass the
 540-file corpus with zero observable differences (349 exact + 70 loop-count +
-121 skip); 50 loops in 38 files actually tiled. S24b remains order-preserving
-strip-mining; nested blocking patterns still do not fire on the corpus because
-frontend nests retain three-block latches and an inner preheader block between
-the outer header and inner header.
+121 skip); 50 loops in 38 files actually tiled and **12 maps blocked**. S24b remains order-preserving strip-mining. Empty inner-preheader trampolines
+are transparent, so those maps block; broader nested canonicalization and
+matmul/conv accumulation remain open.
 
 **S25a CLOSED / PASS** (full S09 **57/0/2**, `test_unroll` **20** +
 `test_unroll_advisor` **13** checks): `planUnroll` now consumes a critical-path

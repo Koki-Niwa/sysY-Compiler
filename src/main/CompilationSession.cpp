@@ -95,7 +95,9 @@ bool runDuplicatePhiCoalescing(flat::Module& module, DiagnosticEngine& diags) {
 }
 
 bool runS24Pipeline(flat::Module& module, DiagnosticEngine& diags, bool stats) {
+
   flat::FlatPassManager manager;
+  manager.addPass(std::make_unique<flat::DeadCodeEliminationPass>());
   manager.addPass(std::make_unique<flat::LoopBlockingPass>());
   manager.addPass(std::make_unique<flat::LoopTilingPass>());
   flat::PassManagerOptions options; options.instrument = stats;

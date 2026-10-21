@@ -55,7 +55,7 @@ class CompilationSession {
   // Flat IR. The product path always normalizes, hoists allocas and verifies
   // before flattening; `mem2reg` then runs through the F04 wrapper.
   const flat::Module* flat(bool fromFlat, bool normalize, bool flatStats,
-                           bool mem2reg, bool s17, bool s19, bool s20, bool s24, bool s24b, bool s25);
+                           bool mem2reg, bool s17, bool s19, bool s20, bool s24, bool s24b, bool s24c, bool s25);
 
   // Text artifacts. These are the only functions that own dump formatting.
   std::string tokensText();
@@ -64,9 +64,9 @@ class CompilationSession {
   std::string initPlanText();
   std::string structuredText(bool normalize, bool loopStats);
   std::string flatText(bool fromFlat, bool normalize, bool flatStats,
-                       bool mem2reg, bool s17, bool s19, bool s20, bool s24, bool s24b, bool s25);
+                       bool mem2reg, bool s17, bool s19, bool s20, bool s24, bool s24b, bool s24c, bool s25);
   std::string llvmIrText(bool fromFlat, bool normalize, bool flatStats,
-                         bool mem2reg, bool s17, bool s19, bool s20, bool s24, bool s24b, bool s25);
+                         bool mem2reg, bool s17, bool s19, bool s20, bool s24, bool s24b, bool s24c, bool s25);
 
  private:
   bool materializeAst();
@@ -104,6 +104,7 @@ class CompilationSession {
     bool s20 = false;
     bool s24 = false;
     bool s24b = false;
+    bool s24c = false;
     bool s25 = false;
     flat::Mem2RegResult mem2RegResult;
     std::unique_ptr<flat::Module> module;

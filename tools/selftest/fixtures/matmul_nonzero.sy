@@ -1,0 +1,31 @@
+int A[32][32];
+int B[32][32];
+int C[32][32];
+int main() {
+  int i = 0;
+  while (i < 32) {
+    int j = 0;
+    while (j < 32) {
+      A[i][j] = (i * 7 + j * 3) % 11 - 5;
+      B[i][j] = (i * 5 + j * 2) % 13 - 6;
+      j = j + 1;
+    }
+    i = i + 1;
+  }
+  i = 0;
+  while (i < 32) {
+    int j = 0;
+    while (j < 32) {
+      int s = 0;
+      int k = 0;
+      while (k < 32) {
+        s = s + A[i][k] * B[k][j];
+        k = k + 1;
+      }
+      C[i][j] = s;
+      j = j + 1;
+    }
+    i = i + 1;
+  }
+  return C[3][4] + C[7][9] + C[31][31];
+}

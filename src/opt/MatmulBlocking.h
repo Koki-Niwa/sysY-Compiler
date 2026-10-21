@@ -4,6 +4,7 @@
 #define SYSY_OPT_MATMULBLOCKING_H
 #include <cstddef>
 #include <optional>
+#include "opt/FlatPassManager.h"
 namespace sysy { namespace flat {
 class Function;
 struct MatmulCandidate {
@@ -14,5 +15,11 @@ struct MatmulCandidate {
 // Returns nullopt unless O/J/K are canonical positive constant-trip loops,
 // K has a local accumulator, and C[i][j] is the only canonical output store.
 std::optional<MatmulCandidate> matchMatmulNest(const Function& function);
+
+class MatmulBlockingPass : public FunctionPass {
+ public:
+  MatmulBlockingPass();
+  PassResult run(Function& function, PassContext& context) override;
+};
 }}  // namespace sysy::flat
 #endif

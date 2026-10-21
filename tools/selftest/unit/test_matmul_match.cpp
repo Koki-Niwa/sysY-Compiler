@@ -2,6 +2,8 @@
 #include <cstdio>
 #include <string>
 #include "ir/FlatDump.h"
+#include "ir/FlatVerifier.h"
+#include "opt/FlatPassManager.h"
 #include "opt/MatmulBlocking.h"
 using namespace sysy::flat;
 namespace {
@@ -94,10 +96,27 @@ L12:
       check(candidate && candidate->outerBound == 64 &&
                 candidate->innerBound == 64 && candidate->reductionBound == 64,
             "matmul bounds are 64x64x64");
+      if (candidate) {
+        const std::string before = dumpModule(*module);
+        FlatPassManager pm;
+        pm.addPass(std::make_unique<MatmulBlockingPass>());
+        PassManagerOptions options;
+        options.verifyEach = true;
+        options.instrument = true;
+        const auto run = pm.run(*module, options);
+        const auto violations = verifyFlatModule(*module);
+        check(run.ok() && run.changed && violations.empty(),
+              "matmul nest is blocked and verifies");
+        check(run.invocations.size() == 1 &&
+                  run.invocations[0].stats.counters.count("blocked-matmul") &&
+                  run.invocations[0].stats.counters.at("blocked-matmul") == 1,
+              "matmul blocking counter recorded");
+        check(before != dumpModule(*module), "matmul IR changed");
+      }
     }
     std::string bad = text;
     const std::string from = "store i32 %3, ptr[i32] %36";
-    const std::string to = "store i32 %30, ptr[i32] %36";
+    const std::string to = "store i32 %0, ptr[i32] %36";
     const size_t at = bad.find(from);
     if (at != std::string::npos) bad.replace(at, from.size(), to);
     Module* badModule = parseFlatModule(bad, diags);
@@ -105,6 +124,11 @@ L12:
     if (badModule != nullptr && !badModule->functions().empty()) {
       check(!matchMatmulNest(*badModule->functions().front()).has_value(),
             "store of the product, not the accumulator, is rejected");
+      FlatPassManager pm;
+      pm.addPass(std::make_unique<MatmulBlockingPass>());
+      const auto run = pm.run(*badModule);
+      check(run.ok() && !run.changed && verifyFlatModule(*badModule).empty(),
+            "negative matmul IR is left unchanged");
       delete badModule;
     }
     delete module;

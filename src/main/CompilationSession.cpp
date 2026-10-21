@@ -31,6 +31,7 @@
 #include "opt/StrengthReduce.h"
 #include "opt/LoopTiling.h"
 #include "opt/LoopBlocking.h"
+#include "opt/MatmulBlocking.h"
 #include "opt/LoopUnroll.h"
 #include "opt/AllocaGEPCanonicalization.h"
 #include "opt/DuplicatePhiCoalescing.h"
@@ -139,6 +140,30 @@ bool runS24bPipeline(flat::Module& module, DiagnosticEngine& diags, bool stats) 
     for (const auto& invocation : result.invocations)
       for (const auto& [key, value] : invocation.stats.counters)
         std::cerr << "s24b " << invocation.passName << " " << key << "=" << value
+                  << "\n";
+  return true;
+}
+
+bool runS24cPipeline(flat::Module& module, DiagnosticEngine& diags, bool stats) {
+  flat::FlatPassManager manager;
+  manager.addPass(std::make_unique<flat::DeadCodeEliminationPass>());
+  manager.addPass(std::make_unique<flat::MatmulBlockingPass>());
+  flat::PassManagerOptions options; options.instrument = stats;
+  const flat::PipelineResult result = manager.run(module, options);
+  if (!result.ok()) {
+    diags.report(DiagLevel::Error, SourceLoc(0, 0), "E-S24C-OPT", result.diagnostic);
+    return false;
+  }
+  const std::vector<flat::Violation> violations = flat::verifyFlatModule(module);
+  if (!violations.empty()) {
+    diags.report(DiagLevel::Error, SourceLoc(0, 0), "E-S24C-VERIFY",
+                 "S24c 输出违反平面 IR 不变量：\n" + flat::formatViolations(violations));
+    return false;
+  }
+  if (stats)
+    for (const auto& invocation : result.invocations)
+      for (const auto& [key, value] : invocation.stats.counters)
+        std::cerr << "s24c " << invocation.passName << " " << key << "=" << value
                   << "\n";
   return true;
 }
@@ -353,10 +378,11 @@ std::string CompilationSession::structuredText(bool normalize, bool loopStats) {
 const flat::Module* CompilationSession::flat(bool fromFlat, bool normalize,
                                              bool flatStats, bool mem2reg,
                                              bool s17, bool s19, bool s20,
-                                             bool s24, bool s24b, bool s25) {
+                                             bool s24, bool s24b, bool s24c,
+                                             bool s25) {
   if (flat_.ready && flat_.fromFlat == fromFlat && flat_.normalize == normalize &&
       flat_.flatStats == flatStats && flat_.mem2reg == mem2reg &&
-      flat_.s17 == s17 && flat_.s19 == s19 && flat_.s20 == s20 && flat_.s24 == s24 && flat_.s24b == s24b && flat_.s25 == s25)
+      flat_.s17 == s17 && flat_.s19 == s19 && flat_.s20 == s20 && flat_.s24 == s24 && flat_.s24b == s24b && flat_.s24c == s24c && flat_.s25 == s25)
     return flat_.module.get();
   flat_.ready = true;
   flat_.fromFlat = fromFlat;
@@ -368,6 +394,7 @@ const flat::Module* CompilationSession::flat(bool fromFlat, bool normalize,
   flat_.s20 = s20;
   flat_.s24 = s24;
   flat_.s24b = s24b;
+  flat_.s24c = s24c;
   flat_.s25 = s25;
   flat_.module.reset();
   flat_.mem2RegResult = flat::Mem2RegResult{};
@@ -382,7 +409,7 @@ const flat::Module* CompilationSession::flat(bool fromFlat, bool normalize,
                     "读回的平面 IR 违反不变量：\n" + flat::formatViolations(violations));
     }
     if (!diags_.hasError()) {
-      if ((s24 || s24b || s25) && !runAllocaGEPCanonicalization(*holder, diags_))
+      if ((s24 || s24b || s24c || s25) && !runAllocaGEPCanonicalization(*holder, diags_))
         return nullptr;
       flat_.mem2RegResult = flat::runMem2Reg(*holder, flat::Mem2RegOptions{mem2reg, false});
       if (!flat_.mem2RegResult.success) {
@@ -397,11 +424,12 @@ const flat::Module* CompilationSession::flat(bool fromFlat, bool normalize,
         return nullptr;
       }
       if (flatStats) reportMem2RegStats(flat_.mem2RegResult);
-      if ((s24 || s24b || s25) && !runDuplicatePhiCoalescing(*holder, diags_)) return nullptr;
+      if ((s24 || s24b || s24c || s25) && !runDuplicatePhiCoalescing(*holder, diags_)) return nullptr;
       if (s17 && !runS17Pipeline(*holder, diags_)) return nullptr;
       if (s19 && !runS19Pipeline(*holder, diags_)) return nullptr;
       if (s20 && !runS20Pipeline(*holder, diags_)) return nullptr;
       if (s24b && !runS24bPipeline(*holder, diags_, optStats_)) return nullptr;
+      if (s24c && !runS24cPipeline(*holder, diags_, optStats_)) return nullptr;
       if (s24 && !runS24Pipeline(*holder, diags_, optStats_)) return nullptr;
       if (s25 && !runS25Pipeline(*holder, diags_, optStats_)) return nullptr;
     }
@@ -435,7 +463,7 @@ const flat::Module* CompilationSession::flat(bool fromFlat, bool normalize,
     }
   }
   if (pipelineClean && mem2reg) {
-    if ((s24 || s24b || s25) && !runAllocaGEPCanonicalization(*fmod, diags_)) return nullptr;
+    if ((s24 || s24b || s24c || s25) && !runAllocaGEPCanonicalization(*fmod, diags_)) return nullptr;
     // Same one-wrapper contract as pre-F05: run, then one output verification.
     flat_.mem2RegResult = flat::runMem2Reg(*fmod, flat::Mem2RegOptions{true, flatStats});
     if (!flat_.mem2RegResult.success) {
@@ -450,12 +478,13 @@ const flat::Module* CompilationSession::flat(bool fromFlat, bool normalize,
       return nullptr;
     }
     if (flatStats) reportMem2RegStats(flat_.mem2RegResult);
-    if ((s24 || s24b || s25) && !runDuplicatePhiCoalescing(*fmod, diags_)) return nullptr;
+    if ((s24 || s24b || s24c || s25) && !runDuplicatePhiCoalescing(*fmod, diags_)) return nullptr;
   }
   if (pipelineClean && s17 && !runS17Pipeline(*fmod, diags_)) return nullptr;
   if (pipelineClean && s19 && !runS19Pipeline(*fmod, diags_)) return nullptr;
   if (pipelineClean && s20 && !runS20Pipeline(*fmod, diags_)) return nullptr;
   if (pipelineClean && s24b && !runS24bPipeline(*fmod, diags_, optStats_)) return nullptr;
+  if (pipelineClean && s24c && !runS24cPipeline(*fmod, diags_, optStats_)) return nullptr;
   if (pipelineClean && s24 && !runS24Pipeline(*fmod, diags_, optStats_)) return nullptr;
   if (pipelineClean && s25 && !runS25Pipeline(*fmod, diags_, optStats_)) return nullptr;
   flat_.module = std::move(fmod);
@@ -480,8 +509,8 @@ std::string CompilationSession::initPlanText() {
 }
 
 std::string CompilationSession::flatText(bool fromFlat, bool normalize,
-                                         bool flatStats, bool mem2reg, bool s17, bool s19, bool s20, bool s24, bool s24b, bool s25) {
-  const flat::Module* module = flat(fromFlat, normalize, flatStats, mem2reg, s17, s19, s20, s24, s24b, s25);
+                                         bool flatStats, bool mem2reg, bool s17, bool s19, bool s20, bool s24, bool s24b, bool s24c, bool s25) {
+  const flat::Module* module = flat(fromFlat, normalize, flatStats, mem2reg, s17, s19, s20, s24, s24b, s24c, s25);
   if (module == nullptr) return std::string();
   if (flatStats) {
     std::cerr << module->formatStats();
@@ -494,8 +523,8 @@ std::string CompilationSession::flatText(bool fromFlat, bool normalize,
 }
 
 std::string CompilationSession::llvmIrText(bool fromFlat, bool normalize,
-                                           bool flatStats, bool mem2reg, bool s17, bool s19, bool s20, bool s24, bool s24b, bool s25) {
-  const flat::Module* module = flat(fromFlat, normalize, flatStats, mem2reg, s17, s19, s20, s24, s24b, s25);
+                                           bool flatStats, bool mem2reg, bool s17, bool s19, bool s20, bool s24, bool s24b, bool s24c, bool s25) {
+  const flat::Module* module = flat(fromFlat, normalize, flatStats, mem2reg, s17, s19, s20, s24, s24b, s24c, s25);
   if (module == nullptr || diags_.hasError()) return std::string();
   const std::vector<flat::Violation> violations = flat::verifyFlatModule(*module);
   if (!violations.empty()) {

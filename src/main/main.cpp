@@ -84,6 +84,7 @@ struct Options {
   bool s20 = false;             // --opt=s20：licm + strength-reduce + dce
   bool s24 = false;             // --opt=s24：loop tiling
   bool s24b = false;            // --opt=s24b：blocked reduction/map
+  bool s24c = false;            // --opt=s24c：matmul/conv accum blocking
   bool s25 = false;             // --opt=s25：plan-sized loop unrolling
   bool flatStats = false;       // --dump-flat-stats：把平面 IR 统计打到 stderr
   bool optStats = false;        // --dump-opt-stats：把 s24/s25 pass counters 打到 stderr
@@ -162,6 +163,7 @@ bool parseCommandLine(int argc, char** argv, Options& opts) {
     if (a == "--opt=s20")      { opts.s20 = true; continue; }
     if (a == "--opt=s24")      { opts.s24 = true; continue; }
     if (a == "--opt=s24b")     { opts.s24b = true; continue; }
+    if (a == "--opt=s24c")     { opts.s24c = true; continue; }
     if (a == "--opt=s25")      { opts.s25 = true; continue; }
     if (a == "--dump-flat-stats") { opts.flatStats = true; continue; }
     if (a == "--dump-opt-stats") { opts.optStats = true; continue; }
@@ -199,6 +201,8 @@ bool parseCommandLine(int argc, char** argv, Options& opts) {
     throw UsageError("--opt=s24 requires --emit=flat-ir or --emit=llvm-ir");
   if (opts.s24b && opts.emit != EmitKind::FlatIr && opts.emit != EmitKind::LlvmIr)
     throw UsageError("--opt=s24b requires --emit=flat-ir or --emit=llvm-ir");
+  if (opts.s24c && opts.emit != EmitKind::FlatIr && opts.emit != EmitKind::LlvmIr)
+    throw UsageError("--opt=s24c requires --emit=flat-ir or --emit=llvm-ir");
   if (opts.s25 && opts.emit != EmitKind::FlatIr && opts.emit != EmitKind::LlvmIr)
     throw UsageError("--opt=s25 requires --emit=flat-ir or --emit=llvm-ir");
 
@@ -242,10 +246,10 @@ std::string emitArtifact(CompilationSession& session, const Options& opts) {
       return session.structuredText(opts.normalize, opts.loopStats);
     case EmitKind::FlatIr:
       return session.flatText(opts.fromFlat, opts.normalize, opts.flatStats,
-                              opts.mem2reg, opts.s17, opts.s19, opts.s20, opts.s24, opts.s24b, opts.s25);
+                              opts.mem2reg, opts.s17, opts.s19, opts.s20, opts.s24, opts.s24b, opts.s24c, opts.s25);
     case EmitKind::LlvmIr:
       return session.llvmIrText(opts.fromFlat, opts.normalize, opts.flatStats,
-                                opts.mem2reg || opts.optLevel >= 1, opts.s17, opts.s19, opts.s20, opts.s24, opts.s24b, opts.s25);
+                                opts.mem2reg || opts.optLevel >= 1, opts.s17, opts.s19, opts.s20, opts.s24, opts.s24b, opts.s24c, opts.s25);
     case EmitKind::Nothing:
       break;
   }

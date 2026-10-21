@@ -244,6 +244,12 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
       "${CMAKE_CURRENT_SOURCE_DIR}/tools/selftest/tiling_equivalence.py"
       $<TARGET_FILE:test_tiling_transform>)
   set_tests_properties(test_tiling_equivalence PROPERTIES TIMEOUT 60)
+  add_test(NAME test_matmul_equivalence
+    COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/tools/selftest/matmul_equivalence.py"
+      $<TARGET_FILE:compiler>
+      "${CMAKE_CURRENT_SOURCE_DIR}/tools/selftest/fixtures/matmul_const64.sy")
+  set_tests_properties(test_matmul_equivalence PROPERTIES TIMEOUT 120)
   add_test(NAME test_unroll_equivalence
     COMMAND "${Python3_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/tools/selftest/unroll_equivalence.py"

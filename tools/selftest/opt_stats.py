@@ -18,7 +18,7 @@ def one_file(compiler, path, flags, timeout):
              "--dump-opt-stats", "-o", out],
             capture_output=True, text=True, timeout=timeout)
         stats = [line for line in proc.stderr.splitlines()
-                 if line.startswith(("s24 ", "s24b ", "s25 "))]
+                 if line.startswith(("s24 ", "s24b ", "s24c ", "s25 "))]
         return proc.returncode == 0, stats
     except subprocess.TimeoutExpired:
         return False, []

@@ -25,6 +25,7 @@ void testGEP() {
   Instruction* zero = add(m, entry, createCast(Opcode::SExt,
                                                m.getIntConst(i32, 0), {}));
   Instruction* gep = add(m, entry, createGEP(i32, slot, zero, {}));
+  Instruction* deadGep = add(m, entry, createGEP(i32, slot, zero, {}));
   add(m, entry, createStore(i32, m.getIntConst(i32, 7), gep, {}));
   Instruction* load = add(m, entry, createLoad(i32, gep, {}));
   add(m, entry, createRet(load, {}));
@@ -38,9 +39,10 @@ void testGEP() {
         "zero-index alloca GEP is folded");
   check(r.invocations.size() == 1 &&
             r.invocations[0].stats.counters.count("folded-geps") &&
-            r.invocations[0].stats.counters.at("folded-geps") == 1,
+            r.invocations[0].stats.counters.at("folded-geps") == 2,
         "GEP fold counter recorded");
-  check(gep->parent() == nullptr, "folded GEP is erased");
+  check(gep->parent() == nullptr && deadGep->parent() == nullptr,
+        "used and unused folded GEPs are erased");
 }
 void testPhi() {
   Module m; const Type* i32 = typePool().i32();

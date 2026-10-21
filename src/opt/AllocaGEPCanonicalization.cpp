@@ -36,7 +36,8 @@ PassResult AllocaGEPCanonicalizationPass::run(Function& function,
     }
   for (Instruction* inst : candidates) {
     Value* base = inst->operand(0);
-    if (context.mutator().replaceUses(inst, base) != MutationResult::Applied)
+    const MutationResult replaced = context.mutator().replaceUses(inst, base);
+    if (replaced != MutationResult::Applied && replaced != MutationResult::NoChange)
       return [] { PassResult p; p.status = PassStatus::Failed;
                   p.diagnostic = "alloca-gep: replaceUses rejected"; return p; }();
     if (context.mutator().eraseInstruction(inst) != MutationResult::Applied)

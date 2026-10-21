@@ -24,6 +24,17 @@ struct UnrollContext {
   size_t criticalPath = 0;
   double hotness = 0.0;
 };
+struct UnrollPressure {
+  size_t projectedLive = 0;
+  size_t excessLive = 0;
+  size_t spillSlots = 0;
+  size_t stackBytes = 0;
+  bool spills = false;
+};
+// Static register-pressure estimate, not a backend spill measurement. One
+// excess live value is modeled as one 8-byte spill slot; multiplication and
+// subtraction saturate at SIZE_MAX.
+UnrollPressure estimateUnrollPressure(size_t live, size_t factor, size_t registers);
 struct UnrollPlan {
   bool unroll = false;
   size_t factor = 0;
@@ -31,6 +42,7 @@ struct UnrollPlan {
   double pressurePenalty = 0.0;
   size_t vectorFactor = 1;
   double estimatedGain = 0.0;
+  UnrollPressure pressure;
   bool probeUsed = false;
   const char* reason = "";
 };

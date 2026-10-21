@@ -124,6 +124,22 @@ void testRegisterBoundaries() {
         plan.pressurePenalty > 0.56 && plan.pressurePenalty < 0.57,
         "large representable register budgets retain a valid capped candidate");
 }
+void testStaticSpillModel() {
+  auto pressure = estimateUnrollPressure(4, 4, 32);
+  check(pressure.projectedLive == 16 && pressure.excessLive == 0 &&
+            pressure.stackBytes == 0 && !pressure.spills,
+        "register-fitted projection has no modeled spill");
+  pressure = estimateUnrollPressure(10, 4, 32);
+  check(pressure.projectedLive == 40 && pressure.excessLive == 8 &&
+            pressure.spillSlots == 8 && pressure.stackBytes == 64 &&
+            pressure.spills,
+        "excess live values get one modeled 8-byte slot each");
+  const size_t max = std::numeric_limits<size_t>::max();
+  pressure = estimateUnrollPressure(max / 2, 4, 32);
+  check(pressure.projectedLive == max && pressure.excessLive == max - 32 &&
+            pressure.stackBytes == max && pressure.spills,
+        "pressure product and stack bytes saturate");
+}
 void testProbe() {
   UnrollProfile p;
   p.scalarRegisters = 32;
@@ -161,6 +177,7 @@ int main() {
   testCriticalPathAndJoint();
   testPressureCliff();
   testRegisterBoundaries();
+  testStaticSpillModel();
   testProbe();
   testVectorWidthBoundary();
   std::printf("S25_CHECKS=%d failures=%d\n", checks, failures);

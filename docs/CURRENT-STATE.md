@@ -655,7 +655,7 @@ Convolution, target-calibrated tile costs, own-backend runtime and real target
 hardware remain open. Current full-gate status is recorded in the versioned
 review report; the interrupted `5e0fd6b` run is not acceptance evidence.
 
-**S25a CLOSED / PASS** (full S09 **57/0/2**, `test_unroll` **20** +
+**S25a CLOSED / PASS** (full S09 **57/0/2**, `test_unroll` **23** +
 `test_unroll_advisor` **13** checks): `planUnroll` now consumes a critical-path
 estimate (capping UF at body/criticalPath), enumerates power-of-two VF
 candidates jointly with UF for AArch64 (product at most eight) and scalar

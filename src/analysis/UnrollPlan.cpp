@@ -1,9 +1,15 @@
 #include "analysis/UnrollPlan.h"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <vector>
 namespace sysy { namespace flat {
 namespace {
+size_t saturatingMul(size_t a, size_t b) {
+  if (a != 0 && b > std::numeric_limits<size_t>::max() / a)
+    return std::numeric_limits<size_t>::max();
+  return a * b;
+}
 size_t targetLimit(UnrollTarget target) {
   switch (target) {
     case UnrollTarget::AArch64: return 4;
@@ -31,6 +37,17 @@ struct Candidate {
   double penalty = 0.0;
 };
 }  // namespace
+UnrollPressure estimateUnrollPressure(size_t live, size_t factor, size_t registers) {
+  UnrollPressure pressure;
+  pressure.projectedLive = saturatingMul(live, factor);
+  pressure.excessLive = pressure.projectedLive > registers
+                            ? pressure.projectedLive - registers : 0;
+  pressure.spillSlots = pressure.excessLive;
+  pressure.stackBytes = saturatingMul(pressure.excessLive, 8);
+  pressure.spills = pressure.excessLive != 0;
+  return pressure;
+}
+
 UnrollPlan planUnroll(const UnrollContext& context, const UnrollProfile& profile,
                       const UnrollProbe& probe, size_t probeBudget) {
   UnrollPlan plan;
@@ -111,6 +128,8 @@ UnrollPlan planUnroll(const UnrollContext& context, const UnrollProfile& profile
   }
   plan.unroll = true;
   plan.factor = best.factor;
+  plan.pressure = estimateUnrollPressure(context.liveValues, best.factor,
+                                         profile.scalarRegisters);
   plan.vectorFactor = best.vector;
   plan.estimatedGain = best.gain;
   plan.reason = "hot loop with a register-safe VF/UF candidate";

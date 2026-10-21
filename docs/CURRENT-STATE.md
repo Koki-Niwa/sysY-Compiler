@@ -646,7 +646,9 @@ exit-phi rejection and direct J-to-K insertion are also covered.
 `test_matmul_match` has **78 checks**. `test_matmul_equivalence` executes three
 actual rewrites (64x64x64, 65x67x7, 67x65x5), checks every C element against an
 independent arithmetic oracle, compares memory/return/input state and requires
-reordered stores. `matmul_bench.py` provides a fixed native-host Clang -O0
+reordered stores. `test_stencil_equivalence` exercises a 64x64 1-D 9-tap
+stencil/output-stationary reduction with a full output oracle; this is not a
+general convolution claim. `matmul_bench.py` provides a fixed native-host Clang -O0
 pipeline comparison with full-C correctness, warmups/repeats, median/spread,
 compile time/RSS and output sizes. It includes canonicalization/DCE effects;
 its timings do not isolate the blocking pass or establish A53/BOOM performance.

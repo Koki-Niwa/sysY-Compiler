@@ -187,6 +187,7 @@ PassResult MatmulBlockingPass::run(Function& function, PassContext& context) {
   if (replaceTerm(cfg, mutator, lt1, createBr(t1, {}), {{i0Next}}) !=
       MutationResult::Applied) return fail;
   ++result.stats.counters["blocked-matmul"];
+  ++result.stats.counters["blocked-output-reductions"];
   result.stats.counters["tile-outer"] = static_cast<long long>(tileOuter);
   result.stats.counters["tile-inner"] = static_cast<long long>(tileInner);
   result.status = PassStatus::Applied;

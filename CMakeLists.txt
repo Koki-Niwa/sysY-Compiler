@@ -251,6 +251,12 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
       $<TARGET_FILE:compiler>
       "${CMAKE_CURRENT_SOURCE_DIR}/tools/selftest/fixtures/matmul_const64.sy")
   set_tests_properties(test_matmul_equivalence PROPERTIES TIMEOUT 120)
+  add_test(NAME test_stencil_equivalence
+    COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/tools/selftest/stencil_equivalence.py"
+      $<TARGET_FILE:compiler>
+      "${CMAKE_CURRENT_SOURCE_DIR}/tools/selftest/fixtures/stencil1d.sy")
+  set_tests_properties(test_stencil_equivalence PROPERTIES TIMEOUT 120)
   add_test(NAME test_unroll_equivalence
     COMMAND "${Python3_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/tools/selftest/unroll_equivalence.py"

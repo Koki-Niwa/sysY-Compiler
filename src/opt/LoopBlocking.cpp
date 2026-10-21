@@ -65,34 +65,6 @@ const GlobalAddr* baseGlobal(const Value* value) {
              ? static_cast<const GlobalAddr*>(value)
              : nullptr;
 }
-bool collectStoreIndices(const Value* ptr, const Instruction* outer,
-                         const Instruction* inner, bool& sawOuter, bool& sawInner) {
-  if (ptr == nullptr) return false;
-  if (ptr->isGlobalAddr()) return true;
-  if (!ptr->isInst()) return false;
-  const auto* inst = static_cast<const Instruction*>(ptr);
-  if (inst->op() != Opcode::GEP || inst->numOperands() < 2) return false;
-  if (!collectStoreIndices(inst->operand(0), outer, inner, sawOuter, sawInner))
-    return false;
-  const Value* index = inst->operand(1);
-  while (index != nullptr && index->isInst() &&
-         (static_cast<const Instruction*>(index)->op() == Opcode::SExt ||
-          static_cast<const Instruction*>(index)->op() == Opcode::ZExt)) {
-    index = static_cast<const Instruction*>(index)->operand(0);
-  }
-  if (index == outer) {
-    if (sawOuter) return false;
-    sawOuter = true;
-    return true;
-  }
-  if (index == inner) {
-    if (sawInner) return false;
-    sawInner = true;
-    return true;
-  }
-  if (index != nullptr && index->isConstant()) return true;
-  return false;
-}
 BasicBlock* skipTrampolines(BasicBlock* block) {
   for (size_t steps = 0; block != nullptr && steps < 8; ++steps) {
     if (block->size() != 1) return block;
@@ -104,6 +76,44 @@ BasicBlock* skipTrampolines(BasicBlock* block) {
     block = next;
   }
   return block;
+}
+bool indexMatches(const Value* value, const Instruction* expected) {
+  while (value != nullptr && value->isInst()) {
+    const auto* inst = static_cast<const Instruction*>(value);
+    if (inst->op() != Opcode::SExt && inst->op() != Opcode::ZExt) break;
+    value = inst->operand(0);
+  }
+  return value == expected;
+}
+bool canonicalStoreAddress(const Instruction* store, const Instruction* outer,
+                           const Instruction* inner, size_t outerBound,
+                           size_t innerBound) {
+  if (store == nullptr || store->numOperands() != 2) return false;
+  const Value* pointer = store->operand(1);
+  if (pointer == nullptr || !pointer->isInst()) return false;
+  const auto* innerGep = static_cast<const Instruction*>(pointer);
+  if (innerGep->op() != Opcode::GEP || innerGep->numOperands() != 2 ||
+      innerGep->srcElemType() != typePool().i32())
+    return false;
+  if (!indexMatches(innerGep->operand(1), inner)) return false;
+  const Value* outerValue = innerGep->operand(0);
+  if (outerValue == nullptr || !outerValue->isInst()) return false;
+  const auto* outerGep = static_cast<const Instruction*>(outerValue);
+  if (outerGep->op() != Opcode::GEP || outerGep->numOperands() != 2 ||
+      outerGep->srcElemType() == nullptr ||
+      outerGep->srcElemType()->kind != TypeKind::Array ||
+      outerGep->srcElemType()->elem != typePool().i32())
+    return false;
+  if (!indexMatches(outerGep->operand(1), outer)) return false;
+  const Value* base = outerGep->operand(0);
+  if (base == nullptr || !base->isGlobalAddr()) return false;
+  const auto* global = static_cast<const GlobalAddr*>(base);
+  const Type* object = global->type() == nullptr ? nullptr : global->type()->elem;
+  if (object == nullptr || object->kind != TypeKind::Array ||
+      object->elem != outerGep->srcElemType() ||
+      static_cast<size_t>(object->len) < outerBound)
+    return false;
+  return static_cast<size_t>(outerGep->srcElemType()->len) >= innerBound;
 }
 bool matchNest(const Function& function, ReductionNest& nest) {
   for (BasicBlock* outer : function.blocks()) {
@@ -197,6 +207,9 @@ bool matchNest(const Function& function, ReductionNest& nest) {
     if (!map) {
       if (sameAsStore != 1 || loads.size() != 1) continue;
       Instruction* load = loads.front();
+      // Associativity is not enough for shifted accesses such as
+      // a[i][j+1] = a[i+1][j] + 1; the accumulator address must be identical.
+      if (load->operand(0) != store->operand(1)) continue;
       if (!store->operand(0)->isInst()) continue;
       Instruction* add = const_cast<Instruction*>(
           static_cast<const Instruction*>(store->operand(0)));
@@ -205,10 +218,9 @@ bool matchNest(const Function& function, ReductionNest& nest) {
           load->useCount() != 1 || load->uses()[0].user != add)
         continue;
     } else {
-      bool sawOuter = false, sawInner = false;
-      if (!collectStoreIndices(store->operand(1), outerPhi, inner->at(0), sawOuter,
-                               sawInner) ||
-          !sawOuter || !sawInner)
+      if (!canonicalStoreAddress(store, outerPhi, inner->at(0),
+                                 static_cast<size_t>(nest.outerBound),
+                                 static_cast<size_t>(nest.innerBound)))
         continue;
     }
     bool pure = true;
@@ -216,7 +228,6 @@ bool matchNest(const Function& function, ReductionNest& nest) {
       if (inst->op() == Opcode::Load || inst->op() == Opcode::Store ||
           inst == body->terminator()) continue;
       if (inst->op() == Opcode::Call || inst->op() == Opcode::Alloca ||
-          inst->op() == Opcode::Call || inst->op() == Opcode::Alloca ||
           inst->op() == Opcode::Phi || inst->op() == Opcode::LLVMMemCpy ||
           inst->op() == Opcode::LLVMMemSet) { pure = false; break; }
     }

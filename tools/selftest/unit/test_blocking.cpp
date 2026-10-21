@@ -19,24 +19,25 @@ int main() {
     BlockingContext c; c.dependenceFree = true; c.outerTrip = 1024; c.innerTrip = 1024; c.outerStride = 1024;
     c.innerStride = 1;
     BlockingPlan p = planBlocking(c, model());
-    check(p.block && p.tileOuter == 64 && p.tileInner == 64,
-          "1024x1024 uses a 64x64 element tile");
-    check(p.workingSetBytes == 64 * 64 * 4, "tile footprint is exact");
+    check(p.block && p.tileOuter == 32 && p.tileInner == 64,
+          "1024x1024 uses a 32x64 element tile");
+    check(p.workingSetBytes == 32 * 5 * 64, "tile footprint is exact");
     check(p.outerTileFirst, "row-major keeps i-tile first");
     check(p.reason != nullptr && std::string(p.reason) == "blocked", "reason blocked");
   }
   {
     BlockingContext c; c.dependenceFree = true; c.outerTrip = 64; c.innerTrip = 64; c.outerStride = 64;
     BlockingPlan p = planBlocking(c, model());
-    check(!p.block, "64x64 exactly fits the half-cache budget");
-    check(p.workingSetBytes == 64 * 64 * 4, "fits working set recorded");
-    check(std::string(p.reason) == "fits", "reason fits");
+    check(p.block && p.tileOuter == 32 && p.tileInner == 64,
+          "64x64 is conservatively blocked by row alignment");
+    check(p.workingSetBytes == 32 * 5 * 64, "tile footprint recorded");
+    check(std::string(p.reason) == "blocked", "reason blocked");
   }
   {
     BlockingContext c; c.dependenceFree = true; c.outerTrip = 65; c.innerTrip = 64; c.outerStride = 64;
     BlockingPlan p = planBlocking(c, model());
-    check(p.block && p.tileOuter == 64 && p.tileInner == 64,
-          "one element over budget blocks with a 64x64 tile");
+    check(p.block && p.tileOuter == 32 && p.tileInner == 64,
+          "one element over budget blocks with a 32x64 tile");
   }
   {
     BlockingContext c; c.dependenceFree = true; c.outerTrip = 65; c.innerTrip = 63; c.outerStride = 63;
@@ -47,8 +48,8 @@ int main() {
   {
     BlockingContext c; c.dependenceFree = true; c.outerTrip = 128; c.innerTrip = 128; c.outerStride = 128;
     BlockingPlan p = planBlocking(c, model());
-    check(p.block && p.tileOuter == 64 && p.tileInner == 64,
-          "128x128 chooses 64x64");
+    check(p.block && p.tileOuter == 32 && p.tileInner == 64,
+          "128x128 chooses 32x64");
   }
   {
     BlockingContext c; c.dependenceFree = true; c.outerTrip = 1024; c.innerTrip = 1024;
@@ -86,7 +87,7 @@ int main() {
     BlockingContext c; c.dependenceFree = true; c.outerTrip = 100000; c.innerTrip = 100000;
     c.outerStride = 100000;
     BlockingPlan p = planBlocking(c, model());
-    check(p.block && p.tileOuter == 64 && p.tileInner == 64,
+    check(p.block && p.tileOuter == 32 && p.tileInner == 64,
           "large trips tile by cache budget, not an arbitrary cap");
   }
   {
@@ -108,6 +109,14 @@ int main() {
     BlockingPlan p = planBlocking(c, model());
     check(!p.block && std::string(p.reason) == "minimum tile",
           "strided rows are charged per cache line, not raw element bytes");
+  }
+  {
+    BlockingContext c; c.dependenceFree = true; c.outerTrip = 128; c.innerTrip = 128;
+    c.outerStride = 129; c.innerStride = 1;
+    BlockingPlan p = planBlocking(c, model());
+    check(p.block && p.tileOuter == 32 && p.tileInner == 64 &&
+              p.workingSetBytes <= 16384,
+          "non-line-multiple row stride gets the conservative alignment bound");
   }
   std::printf("S24C_BLOCKING_CHECKS=%d FAILURES=%d\n", checks, failures);
   return failures ? 1 : 0;

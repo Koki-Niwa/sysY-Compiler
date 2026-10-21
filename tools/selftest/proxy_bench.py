@@ -52,16 +52,16 @@ def main():
         opt_dir, opt = build(args.compiler, source, [flag])
         if base is None or opt is None:
             print(f"{name}: build failed")
-            continue
+            return 1
         base_t, base_r = run(base, args.reps)
         opt_t, opt_r = run(opt, args.reps)
         if len(set(base_r + opt_r)) != 1:
             print(f"{name}: return differs {base_r} vs {opt_r}")
-            continue
+            return 1
         delta = (opt_t - base_t) / base_t * 100.0
         print(f"{name}: base={base_t*1000:.2f}ms opt={opt_t*1000:.2f}ms "
               f"delta={delta:+.2f}% return={base_r[0]}")
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

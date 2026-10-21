@@ -67,12 +67,16 @@ def main():
         files = files[:args.limit]
     flags = args.flags.split()
     base_steps = opt_steps = 0
-    comparable = 0
+    comparable = errors = mismatches = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.jobs)) as ex:
         for base, opt in ex.map(
                 lambda path: one_file(args.compiler, path, flags, args.seed,
                                       args.timeout), files):
-            if base is None or opt is None or not observable_same(base[1], opt[1]):
+            if base is None or opt is None:
+                errors += 1
+                continue
+            if not observable_same(base[1], opt[1]):
+                mismatches += 1
                 continue
             comparable += 1
             base_steps += base[0]
@@ -80,9 +84,11 @@ def main():
     delta = opt_steps - base_steps
     pct = (100.0 * delta / base_steps) if base_steps else 0.0
     print(f"OPT_STEPS flags={' '.join(flags)} files={comparable} "
+          f"errors={errors} observable_mismatches={mismatches} "
           f"base_steps={base_steps} opt_steps={opt_steps} "
           f"delta={delta:+d} ({pct:+.2f}%)")
+    return 1 if mismatches else 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

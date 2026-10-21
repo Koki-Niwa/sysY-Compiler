@@ -142,11 +142,12 @@ struct MapNest {
   GlobalAddr* input = nullptr;
   GlobalAddr* input2 = nullptr;
   GlobalAddr* output = nullptr;
-  explicit MapNest(int n) {
+  explicit MapNest(int n, bool flatOutput = false) {
     const Type* inRowTy = typePool().arrayOf(i32, n + 1);
     const Type* inMat = typePool().arrayOf(inRowTy, n + 1);
     const Type* outRowTy = typePool().arrayOf(i32, n);
-    const Type* outMat = typePool().arrayOf(outRowTy, n);
+    const Type* outMat = flatOutput ? typePool().arrayOf(i32, n * n)
+                                    : typePool().arrayOf(outRowTy, n);
     input = m.globalAddr(m.createGlobal("in", inMat));
     input2 = m.globalAddr(m.createGlobal("in2", inMat));
     output = m.globalAddr(m.createGlobal("out", outMat));
@@ -220,8 +221,8 @@ struct ArrayReduction {
   const Type* i32 = typePool().i32();
   Function* f = nullptr;
   GlobalAddr* acc = nullptr;
-  explicit ArrayReduction(int n) {
-    const Type* row = typePool().arrayOf(i32, n);
+  explicit ArrayReduction(int n, bool shifted = false) {
+    const Type* row = typePool().arrayOf(i32, n + (shifted ? 1 : 0));
     const Type* mat = typePool().arrayOf(row, n);
     acc = m.globalAddr(m.createGlobal("acc", mat));
     f = m.createFunction("main", i32);
@@ -244,7 +245,14 @@ struct ArrayReduction {
     Instruction* j64 = add(m, body, createCast(Opcode::SExt, ij, {}));
     Instruction* rowPtr = add(m, body, createGEP(row, acc, i64, {}));
     Instruction* ptr = add(m, body, createGEP(i32, rowPtr, j64, {}));
-    Instruction* old = add(m, body, createLoad(i32, ptr, {}));
+    Instruction* loadPtr = ptr;
+    if (shifted) {
+      Instruction* jNext = add(m, body, createBin(Opcode::Add, ij,
+                                                   m.getIntConst(i32, 1), {}));
+      Instruction* jNext64 = add(m, body, createCast(Opcode::SExt, jNext, {}));
+      loadPtr = add(m, body, createGEP(i32, rowPtr, jNext64, {}));
+    }
+    Instruction* old = add(m, body, createLoad(i32, loadPtr, {}));
     Instruction* value = add(m, body, createBin(Opcode::Mul, oi, ij, {}));
     Instruction* sum = add(m, body, createBin(Opcode::Add, old, value, {}));
     add(m, body, createStore(i32, sum, ptr, {}));
@@ -261,6 +269,26 @@ struct ArrayReduction {
     m.rebuildCFG(); m.rebuildUseDef();
   }
 };
+void testShiftedReductionRejected() {
+  ArrayReduction nest(128, true);
+  check(verifyFlatModule(nest.m).empty(), "shifted-reduction fixture verifies");
+  const std::string before = dumpModule(nest.m);
+  FlatPassManager pm; pm.addPass(std::make_unique<LoopBlockingPass>());
+  const auto r = pm.run(nest.m);
+  check(r.ok() && !r.changed && before == dumpModule(nest.m) &&
+            verifyFlatModule(nest.m).empty(),
+        "shifted accumulator addresses are not a reduction");
+}
+void testFlatMapRejected() {
+  MapNest nest(128, true);
+  check(verifyFlatModule(nest.m).empty(), "flat-map fixture verifies");
+  const std::string before = dumpModule(nest.m);
+  FlatPassManager pm; pm.addPass(std::make_unique<LoopBlockingPass>());
+  const auto r = pm.run(nest.m);
+  check(r.ok() && !r.changed && before == dumpModule(nest.m) &&
+            verifyFlatModule(nest.m).empty(),
+        "non-canonical flat map address is declined");
+}
 void testArrayReduction() {
   ArrayReduction nest(128);
   check(verifyFlatModule(nest.m).empty(), "array-reduction fixture verifies");
@@ -362,7 +390,9 @@ int main(int argc, char** argv) {
   runCase("header_operand", 128, 128, false, false, false, false, false, true);
   runCase("exit_phi", 128, 128, false, false, false, false, false, false, true);
   testMap();
+  testFlatMapRejected();
   testArrayReduction();
+  testShiftedReductionRejected();
   testNestedPreheader();
   std::printf("S24C_BLOCKING_TRANSFORM_CHECKS=%d FAILURES=%d\n", checks, failures);
   return failures ? 1 : 0;

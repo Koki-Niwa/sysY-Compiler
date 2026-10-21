@@ -594,7 +594,7 @@ measurements, and target-backed evidence. No runtime gain is claimed.
 (`tileOuter`, `tileInner`), records the tile footprint, chooses row-major or
 column-major blocked order from unit strides, and declines dependence, cold,
 small, fitted and over-capacity cases. Footprints are cache-line upper bounds,
-not raw element bytes; `dependenceFree` defaults to false so callers must opt in. `test_blocking` has **19 checks**
+not raw element bytes; `dependenceFree` defaults to false so callers must opt in. `test_blocking` has **20 checks**
 (exact half-cache line footprint, one element above/below, large-trip sizing,
 column-major, dependence, cold, SIZE_MAX saturation, oversized element). This layer does **not** rewrite
 IR and is not yet consumed by a transform.
@@ -612,9 +612,9 @@ dimensions to be strictly partial. The reduction is legal because i32 addition i
 associative/commutative; the map is legal because the input is never written and
 the output address is unique per `(i,j)`. The pass consumes `BlockingPlan`,
 builds i0/j0/i/j, clones the body, and neutralizes the now-unreachable original
-header phis. `test_blocking_transform` has **56 checks**; CTest
+header phis. `test_blocking_transform` has **60 checks**; CTest
 `test_blocking_equivalence` executes exact/partial reductions, scalar/array
-reduction, a 128x128 map and a nested-preheader reduction, requiring identical final memory/return (write order differs).
+reduction, a 128x128 map, a nested-preheader reduction and shifted/flat-map negatives, requiring identical final memory/return (write order differs).
 This is not matmul/conv accumulation and has no target runtime; the transforms
 are available only through opt-in pipelines (`--opt=s24` for tiling, `--opt=s24b` for blocking,
 `--opt=s25` for unrolling), never by default. Both and their combination pass the

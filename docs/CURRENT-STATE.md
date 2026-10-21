@@ -649,7 +649,8 @@ independent arithmetic oracle, compares memory/return/input state and requires
 reordered stores. `test_stencil_equivalence` exercises a 64x64 1-D 9-tap stencil;
 `test_conv_equivalence` exercises a flattened 2-D 3x3 convolution with an
 offset table, both with full output oracles. A canonical nested-K 2-D conv
-(ki/kj accumulator chain) is also blocked and checked with a 4096-cell oracle;
+(ki/kj accumulator chain) is also blocked for 3x3 and 5x7 kernels and checked
+with 4096-cell oracles;
 this is not a general multi-dimensional convolution claim. `matmul_bench.py` provides a fixed native-host Clang -O0
 pipeline comparison with full-C correctness, warmups/repeats, median/spread,
 compile time/RSS and output sizes. It includes canonicalization/DCE effects;

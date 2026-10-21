@@ -64,7 +64,16 @@ bool parseMem(const std::string& token, MemOperand& mem) {
   if (plus == std::string::npos || colon == std::string::npos || plus > colon)
     return false;
   Reg base;
-  if (!parseReg(body.substr(0, plus), base)) return false;
+  bool frameBase = false;
+  uint32_t frame = 0;
+  const std::string baseText = body.substr(0, plus);
+  if (startsWith(baseText, "frame")) {
+    try { frame = static_cast<uint32_t>(std::stoul(baseText.substr(5))); }
+    catch (...) { return false; }
+    frameBase = true;
+  } else if (!parseReg(baseText, base)) {
+    return false;
+  }
   int64_t offset = 0;
   if (!body.substr(plus + 1, colon - plus - 1).empty()) {
     try {
@@ -78,6 +87,8 @@ bool parseMem(const std::string& token, MemOperand& mem) {
   for (char ch : size) if (ch < '0' || ch > '9') return false;
   mem.valid = true;
   mem.base = base;
+  mem.frameBase = frameBase;
+  mem.frame = frame;
   mem.offset = offset;
   mem.size = static_cast<uint32_t>(std::stoul(size));
   if (next != std::string::npos) {

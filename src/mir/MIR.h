@@ -37,6 +37,8 @@ struct MemOperand {
   uint32_t size = 0;
   uint32_t aliasClass = 0;
   bool isVolatile = false;
+  bool frameBase = false;  // base is a FrameObject, not a Reg
+  uint32_t frame = 0;
 };
 // Register-mask fact for call/clobber boundaries; bits index registers within
 // the class, not virtual register ids.
@@ -113,5 +115,9 @@ struct SpillPlan {
 };
 SpillPlan planSpills(const Allocation& allocation, uint32_t slotBytes = 8,
                      uint32_t alignment = 8);
+// Rewrite non-phi functions: each spilled def gets a frame store after it and
+// each spilled use gets a fresh frame load before the user. Phi functions are
+// rejected; this is a correctness prototype, not a production allocator.
+bool rewriteSpills(Function& function, const SpillPlan& plan, size_t* errorCount = nullptr);
 }}  // namespace sysy::mir
 #endif

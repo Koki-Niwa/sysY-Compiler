@@ -173,6 +173,27 @@ int main() {
         "spilled virtual register gets an aligned frame slot");
   SpillPlan noSpills = planSpills(alloc);
   check(noSpills.objects.empty(), "non-spilling allocation needs no spill slot");
+  Module spilledModule;
+  spilledModule.name = "spilled";
+  Function spilled = im.functions[0];
+  size_t spillErrors = 0;
+  check(rewriteSpills(spilled, spillPlan, &spillErrors) && spillErrors == 0,
+        "spill rewrite succeeds for a non-phi function");
+  spilledModule.functions.push_back(spilled);
+  check(verify(spilledModule).empty() && !spilled.frameObjects.empty(),
+        "rewritten spill function verifies with frame objects");
+  size_t loads = 0, stores = 0;
+  for (const Block& block : spilled.blocks)
+    for (const Instr& inst : block.instructions) {
+      if (inst.opcode == Opcode::Load) ++loads;
+      if (inst.opcode == Opcode::Store) ++stores;
+    }
+  check(loads > 0 && stores > 0, "spill rewrite emits frame loads and stores");
+  const std::string spilledText = dump(spilledModule);
+  auto spilledParsed = parse(spilledText);
+  check(spilledParsed && dump(*spilledParsed) == spilledText &&
+            verify(*spilledParsed).empty(),
+        "frame-based spill memory round-trips through dump/parse");
   Module rich;
   rich.name = "rich";
   Function rf;

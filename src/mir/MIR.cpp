@@ -100,8 +100,12 @@ std::string dump(const Module& module) {
         for (const Operand& operand : inst.operands)
           out << " " << operandName(operand);
         if (inst.mem.valid) {
-          out << " mem[" << regName(inst.mem.base) << "+" << inst.mem.offset
-              << ":" << inst.mem.size;
+          out << " mem[";
+          if (inst.mem.frameBase)
+            out << "frame" << inst.mem.frame;
+          else
+            out << regName(inst.mem.base);
+          out << "+" << inst.mem.offset << ":" << inst.mem.size;
           if (inst.mem.aliasClass != 0) out << ":alias=" << inst.mem.aliasClass;
           if (inst.mem.isVolatile) out << ":volatile";
           out << "]";
@@ -474,5 +478,92 @@ SpillPlan planSpills(const Allocation& allocation, uint32_t slotBytes,
     plan.objects.push_back(object);
   }
   return plan;
+}
+}}  // namespace sysy::mir
+
+namespace sysy { namespace mir {
+bool rewriteSpills(Function& function, const SpillPlan& plan,
+                   size_t* errorCount) {
+  if (errorCount) *errorCount = 0;
+  auto fail = [&]() {
+    if (errorCount) ++*errorCount;
+    return false;
+  };
+  if (!function.frameObjects.empty()) return fail();
+  uint32_t nextReg = 1;
+  for (const Block& block : function.blocks)
+    for (const Instr& inst : block.instructions) {
+      if (inst.def) nextReg = std::max(nextReg, inst.def->id + 1);
+      for (const Operand& operand : inst.operands)
+        if (operand.kind == OperandKind::Reg)
+          nextReg = std::max(nextReg, operand.reg.id + 1);
+    }
+  auto sizeOf = [](Type type) -> uint32_t {
+    switch (type) {
+      case Type::I32: return 4;
+      case Type::I64: return 8;
+      case Type::F32: return 4;
+      case Type::Void: return 0;
+    }
+    return 0;
+  };
+  auto frameMem = [&](uint32_t frame, uint32_t size) {
+    MemOperand mem;
+    mem.valid = true;
+    mem.frameBase = true;
+    mem.frame = frame;
+    mem.size = size;
+    return mem;
+  };
+  for (Block& block : function.blocks) {
+    std::vector<Instr> rewritten;
+    for (Instr inst : block.instructions) {
+      if (inst.opcode == Opcode::Phi) return fail();
+      auto emitLoad = [&](const Reg& original) -> std::optional<Reg> {
+        if (original.id == 0 || static_cast<size_t>(original.id) >= plan.slot.size() ||
+            plan.slot[original.id] < 0)
+          return std::nullopt;
+        const uint32_t size = sizeOf(original.type);
+        if (size == 0) return std::nullopt;
+        Instr load;
+        load.opcode = Opcode::Load;
+        load.def = Reg{nextReg++, original.type, original.cls};
+        load.mem = frameMem(static_cast<uint32_t>(plan.slot[original.id]), size);
+        const Reg replacement = *load.def;
+        rewritten.push_back(std::move(load));
+        return replacement;
+      };
+      for (Operand& operand : inst.operands) {
+        if (operand.kind != OperandKind::Reg) continue;
+        const auto replacement = emitLoad(operand.reg);
+        if (replacement) operand.reg = *replacement;
+      }
+      if (inst.mem.valid && !inst.mem.frameBase && inst.mem.base.id != 0) {
+        const auto replacement = emitLoad(inst.mem.base);
+        if (replacement) inst.mem.base = *replacement;
+      }
+      if (inst.def && inst.def->id != 0 &&
+          static_cast<size_t>(inst.def->id) < plan.slot.size() &&
+          plan.slot[inst.def->id] >= 0) {
+        const uint32_t size = sizeOf(inst.def->type);
+        if (size == 0) return fail();
+        rewritten.push_back(inst);
+        Instr store;
+        store.opcode = Opcode::Store;
+        store.operands.push_back(Operand::makeReg(*inst.def));
+        store.mem = frameMem(static_cast<uint32_t>(plan.slot[inst.def->id]), size);
+        rewritten.push_back(std::move(store));
+      } else {
+        rewritten.push_back(inst);
+      }
+    }
+    block.instructions = std::move(rewritten);
+  }
+  for (const FrameObject& object : plan.objects) {
+    FrameObject copy = object;
+    copy.id = static_cast<uint32_t>(function.frameObjects.size());
+    function.frameObjects.push_back(copy);
+  }
+  return true;
 }
 }}  // namespace sysy::mir

@@ -73,6 +73,20 @@ int main() {
   bad.functions[0].blocks[1].instructions[0].operands[0] =
       Operand::makeReg(Reg{1, Type::I64, RegClass::GPR});
   check(!verify(bad).empty(), "register type mismatch is rejected");
+  bad = m;
+  bad.functions[0].frameObjects = {{0, 8, 16, true}};
+  check(verify(bad).empty(), "aligned frame object and spill flag are accepted");
+  bad.functions[0].frameObjects[0].align = 3;
+  check(!verify(bad).empty(), "non-power-of-two frame alignment is rejected");
+  bad = m;
+  bad.functions[0].frameObjects = {{0, 8, 8, false}, {0, 4, 4, false}};
+  check(!verify(bad).empty(), "duplicate frame object id is rejected");
+  bad = m;
+  bad.functions[0].blocks[0].instructions[0].clobbers.push_back(
+      RegMask{RegClass::FPR, 0x3});
+  bad.functions[0].blocks[0].instructions[0].mem =
+      MemOperand{true, Reg{0, Type::I32, RegClass::GPR}, 0, 4, 2, true};
+  check(verify(bad).empty(), "RegMask and volatile/alias memory facts are accepted");
   std::printf("MIR_CHECKS=%d FAILURES=%d\n", checks, failures);
   return failures ? 1 : 0;
 }

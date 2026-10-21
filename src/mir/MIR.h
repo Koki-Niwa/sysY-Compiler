@@ -33,6 +33,20 @@ struct MemOperand {
   Reg base;
   int64_t offset = 0;
   uint32_t size = 0;
+  uint32_t aliasClass = 0;
+  bool isVolatile = false;
+};
+// Register-mask fact for call/clobber boundaries; bits index registers within
+// the class, not virtual register ids.
+struct RegMask {
+  RegClass cls = RegClass::GPR;
+  uint64_t bits = 0;
+};
+struct FrameObject {
+  uint32_t id = 0;
+  uint32_t size = 0;
+  uint32_t align = 1;
+  bool spill = false;
 };
 enum class Opcode : uint8_t {
   Add, Sub, Mul, Div, Copy, Load, Store, Br, CondBr, Ret, Phi
@@ -42,6 +56,7 @@ struct Instr {
   std::optional<Reg> def;
   std::vector<Operand> operands;
   MemOperand mem;
+  std::vector<RegMask> clobbers;
 };
 struct Block {
   uint32_t id = 0;
@@ -51,6 +66,7 @@ struct Function {
   std::string name;
   std::vector<Block> blocks;
   uint32_t frameSlots = 0;
+  std::vector<FrameObject> frameObjects;
 };
 struct Module {
   std::string name;

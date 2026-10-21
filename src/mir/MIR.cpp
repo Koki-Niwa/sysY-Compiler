@@ -115,6 +115,18 @@ std::vector<std::string> verify(const Module& module) {
       errors.push_back(function.name + ": no blocks");
       continue;
     }
+    std::set<uint32_t> frameIds;
+    for (size_t i = 0; i < function.frameObjects.size(); ++i) {
+      const FrameObject& object = function.frameObjects[i];
+      if (object.id != i)
+        errors.push_back(function.name + ": frame object ids must be contiguous");
+      if (!frameIds.insert(object.id).second)
+        errors.push_back(function.name + ": duplicate frame object");
+      if (object.size == 0)
+        errors.push_back(function.name + ": zero-sized frame object");
+      if (object.align == 0 || (object.align & (object.align - 1)) != 0)
+        errors.push_back(function.name + ": frame alignment must be a power of two");
+    }
     std::set<uint32_t> blockIds;
     for (size_t b = 0; b < function.blocks.size(); ++b) {
       const Block& block = function.blocks[b];
@@ -275,14 +287,22 @@ std::vector<std::string> verify(const Module& module) {
         for (const Operand& operand : inst.operands) {
           if (operand.kind == OperandKind::Reg)
             checkUse(operand.reg, static_cast<uint32_t>(b), i, false, 0);
-          if (operand.kind == OperandKind::Frame && operand.index >= function.frameSlots)
-            errors.push_back(function.name + ": frame index out of range");
+          if (operand.kind == OperandKind::Frame) {
+            const uint32_t limit = function.frameObjects.empty()
+                ? function.frameSlots
+                : static_cast<uint32_t>(function.frameObjects.size());
+            if (operand.index >= limit)
+              errors.push_back(function.name + ": frame index out of range");
+          }
         }
         if (inst.mem.valid) {
           if (inst.mem.size == 0) errors.push_back(function.name + ": zero memory size");
           if (inst.mem.base.id != 0)
             checkUse(inst.mem.base, static_cast<uint32_t>(b), i, false, 0);
         }
+        for (const RegMask& mask : inst.clobbers)
+          if (mask.cls != RegClass::GPR && mask.cls != RegClass::FPR)
+            errors.push_back(function.name + ": invalid register mask class");
       }
     }
   }

@@ -128,7 +128,8 @@ add_library(sysy_opt STATIC
   src/opt/LoopTiling.cpp
   src/opt/LoopUnroll.cpp
   src/opt/LoopBlocking.cpp
-  src/opt/MatmulBlocking.cpp)
+  src/opt/MatmulBlocking.cpp
+  src/opt/MatmulMatch.cpp)
 target_include_directories(sysy_opt PUBLIC src)
 target_link_libraries(sysy_opt PUBLIC sysy_analysis)
 

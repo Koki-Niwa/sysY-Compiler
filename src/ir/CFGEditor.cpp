@@ -34,6 +34,22 @@ bool sortedUnique(const std::vector<BasicBlock*>& blocks) {
 }
 } // namespace
 
+BasicBlock* CFGEditor::createBlock(Function* function) {
+  Module& module = mutator_.module();
+  const auto& functions = module.functions();
+  if (function == nullptr ||
+      std::find(functions.begin(), functions.end(), function) == functions.end() ||
+      function->parent() != &module || function->isDeclaration())
+    return nullptr;
+  BasicBlock* block = module.createBlock(function);
+  if (block == nullptr) return nullptr;
+  Instruction* placeholder = createUnreachable({});
+  module.ownInst(placeholder);
+  block->addInst(placeholder);
+  mutator_.commit(MutationKind::CFG | MutationKind::DataFlow, {function});
+  return block;
+}
+
 bool CFGEditor::readPhis(BasicBlock* block, std::vector<Instruction*>& phis) const {
   if (!mutator_.isLiveBlock(block) || !sortedUnique(block->preds())) return false;
   bool pastPhi = false;

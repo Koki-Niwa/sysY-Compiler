@@ -243,7 +243,9 @@ over-capacity cases; otherwise it shrinks power-of-two tile dimensions until the
 tile footprint fits half the cache, and picks blocked order from the unit-stride
 dimension (row-major i-tile first, or column-major j-tile first). The plan is
 deterministic, saturating and has exact half-cache boundary tests. It does not
-rewrite IR; the blocked transform and runtime protocol remain S24c-b.
+rewrite IR; `LoopBlockingPass` and `MatmulBlockingPass` consume this plan.
+Unknown row alignment is charged conservatively, and even the extra-line
+addition saturates for zero/one-byte line sizes.
 
 ## S25b Pair unrolling (PARTIAL)
 
@@ -280,6 +282,44 @@ headers' now-unreachable phis. `test_blocking_equivalence` checks final
 memory/return for exact and partial reductions and a map, and requires a
 different global write trace. This is not matmul/conv accumulation and has no
 target runtime; S24b remains order-preserving strip-mining.
+
+## S24c-c Canonical matmul blocking (PARTIAL)
+
+`MatmulMatch.cpp` owns the read-only legality proof; its private
+`MatmulNest` result supplies the rewrite in `MatmulBlocking.cpp`. The public
+`matchMatmulNest` exposes only the three trip bounds. Accepted Flat IR has
+canonical zero-based i32 O/J/K induction, an integer-add K accumulator seeded
+with zero, read-only global inputs, and one C[i][j] store whose nested array
+layout proves distinct output addresses. Accumulator uses are confined to the
+update and final store. K iteration order is preserved for every output cell.
+
+Before any edit the matcher verifies controlling comparison operands, exact
+predecessor sets, a single unconditional outer preheader, clean induction
+latches, no live-outs, a phi-free exit and closed retained operands. Empty paths
+are transparent only when single-entry and at most eight blocks long. Header,
+body, latch and exit roles must be distinct. These conditions are edit
+preconditions as well as semantic legality; unproved shapes return NoChange
+without changing IR.
+
+The pass processes at most one nest per function per invocation. It consumes
+`BlockingPlan`, makes both tile dimensions partial (halving a full extent when
+possible), rejects tiles below eight and checks i32 bound-plus-tile overflow.
+Eight new blocks implement tile-I/tile-J/I/J and their latches. New J enters K
+directly through the phi-aware CFG editor, supplying zero for both K phis.
+Original O/J phi uses are neutralized in dead blocks and replaced in retained
+blocks using `IRMutator::rewriteOperand`. CFG and dataflow revisions invalidate
+all analyses; no analyses are preserved. No instruction-growth fixpoint runs.
+An unexpected editor rejection reports `matmul-blocking: rewrite rejected`
+and stops the pipeline; there is no general rollback of an already started
+rewrite. Known shape refusals happen before block creation.
+
+`--opt=s24c` runs canonicalization/DCE plus this pass and is never default.
+Tests require actual transformation, verified SSA, unchanged IR on rejection,
+and complete matrix arithmetic equality for square and two-axis tail cases.
+The dedicated `matmul_bench.py` measures the complete opt-in pipeline through
+native Clang -O0, records per-case samples and compile resources, and checks
+all C cells after every call. It does not isolate DCE/canonicalization costs or
+establish A53/BOOM/cache benefits. Convolution and own-backend runtime are open.
 
 ## S25a Unroll planning (CLOSED / PASS)
 

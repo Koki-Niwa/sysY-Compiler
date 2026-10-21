@@ -594,10 +594,11 @@ measurements, and target-backed evidence. No runtime gain is claimed.
 (`tileOuter`, `tileInner`), records the tile footprint, chooses row-major or
 column-major blocked order from unit strides, and declines dependence, cold,
 small, fitted and over-capacity cases. Footprints are cache-line upper bounds,
-not raw element bytes; `dependenceFree` defaults to false so callers must opt in. `test_blocking` has **20 checks**
+not raw element bytes; `dependenceFree` defaults to false so callers must opt in. `test_blocking` has **22 checks**
 (exact half-cache line footprint, one element above/below, large-trip sizing,
-column-major, dependence, cold, SIZE_MAX saturation, oversized element). This layer does **not** rewrite
-IR and is not yet consumed by a transform.
+column-major, dependence, cold, SIZE_MAX saturation, oversized element, and
+zero/one-byte cache-line saturation). This planner does not rewrite IR;
+`LoopBlockingPass` and `MatmulBlockingPass` consume it.
 
 **S24c-b PARTIAL — blocked reduction and map**: `LoopBlockingPass` matches a
 canonical two-level nest with either:
@@ -621,7 +622,38 @@ are available only through opt-in pipelines (`--opt=s24` for tiling, `--opt=s24b
 540-file corpus with zero observable differences (349 exact + 70 loop-count +
 121 skip); 50 loops in 38 files actually tiled and **12 maps blocked**. S24b remains order-preserving strip-mining. Empty inner-preheader trampolines
 are transparent, so those maps block; broader nested canonicalization and
-matmul/conv accumulation remain open.
+general convolution accumulation remain open; canonical matmul is described below.
+
+**S24c-c PARTIAL — canonical matmul accumulation**: opt-in `--opt=s24c`
+performs canonicalization, DCE and `MatmulBlockingPass`. `MatmulMatch.cpp`
+proves an O/J/K nest with zero-based unit-step constant trips, a local i32
+accumulator in K, read-only global inputs and one unique canonical C[i][j]
+store. Every header must branch on its matched comparison. Exact predecessor
+sets, bounded empty trampoline paths, clean induction latches, an unconditional
+outer preheader, no live-outs and a phi-free exit are checked before editing.
+The retained K region cannot depend on definitions in discarded blocks.
+
+The transform builds tile-I/tile-J/I/J loops and preserves each output's K
+iteration order. The new J edge goes directly to K with explicit zero seed
+values for both phis, including when the original nest has no K preheader.
+Live operand changes use the tracked mutator. Unsupported shapes decline with
+identical IR; unexpected editor failures abort the pipeline, without a general
+structural rollback claim.
+
+The review of `5e0fd6b` reproduced wrong-code from an unrelated header condition
+and invalid SSA from a conditional outer preheader. Both are now guarded;
+exit-phi rejection and direct J-to-K insertion are also covered.
+`test_matmul_match` has **78 checks**. `test_matmul_equivalence` executes three
+actual rewrites (64x64x64, 65x67x7, 67x65x5), checks every C element against an
+independent arithmetic oracle, compares memory/return/input state and requires
+reordered stores. `matmul_bench.py` provides a fixed native-host Clang -O0
+pipeline comparison with full-C correctness, warmups/repeats, median/spread,
+compile time/RSS and output sizes. It includes canonicalization/DCE effects;
+its timings do not isolate the blocking pass or establish A53/BOOM performance.
+The ordinary corpus has no known matmul firing; fixtures carry this evidence.
+Convolution, target-calibrated tile costs, own-backend runtime and real target
+hardware remain open. Current full-gate status is recorded in the versioned
+review report; the interrupted `5e0fd6b` run is not acceptance evidence.
 
 **S25a CLOSED / PASS** (full S09 **57/0/2**, `test_unroll` **20** +
 `test_unroll_advisor` **13** checks): `planUnroll` now consumes a critical-path

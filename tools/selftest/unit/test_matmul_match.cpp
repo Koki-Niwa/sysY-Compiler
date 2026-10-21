@@ -1,5 +1,7 @@
 // S24c-c matcher: canonical matmul nest and a local-accumulator negative.
 #include <cstdio>
+#include <memory>
+#include <optional>
 #include <string>
 #include "ir/FlatDump.h"
 #include "ir/FlatVerifier.h"
@@ -13,6 +15,108 @@ void check(bool ok, const char* what) {
   ++checks;
   if (!ok) ++failures;
   std::printf("%s: %s\n", ok ? "PASS" : "FAIL", what);
+}
+
+std::string replaceOnce(const std::string& text, const std::string& from,
+                        const std::string& to) {
+  const size_t at = text.find(from);
+  if (at == std::string::npos) return text;
+  std::string result = text;
+  result.replace(at, from.size(), to);
+  return result;
+}
+
+std::string replaceAll(std::string text, const std::string& from,
+                       const std::string& to) {
+  if (from.empty()) return text;
+  size_t at = 0;
+  while ((at = text.find(from, at)) != std::string::npos) {
+    text.replace(at, from.size(), to);
+    at += to.size();
+  }
+  return text;
+}
+
+std::string addConstantFlag(const std::string& text) {
+  return replaceOnce(text, "L0:\n  br L1 @line 6",
+                     "L0:\n  %40 = icmp slt i32 %4, %4 @line 6\n"
+                     "  br L1 @line 6");
+}
+
+void rejectFixture(const std::string& name, const std::string& text) {
+  sysy::DiagnosticEngine diags;
+  Module* module = parseFlatModule(text, diags);
+  check(module != nullptr, (name + ": parses").c_str());
+  if (module == nullptr) return;
+  const auto inputViolations = verifyFlatModule(*module);
+  check(inputViolations.empty(), (name + ": input verifies").c_str());
+  Function* function = module->findFunction("main");
+  check(function != nullptr && !matchMatmulNest(*function).has_value(),
+        (name + ": matcher rejects").c_str());
+  if (function != nullptr) {
+    const std::string before = dumpModule(*module);
+    FlatPassManager pm;
+    pm.addPass(std::make_unique<MatmulBlockingPass>());
+    PassManagerOptions options;
+    options.verifyEach = true;
+    options.instrument = true;
+    const auto run = pm.run(*module, options);
+    check(run.ok() && !run.changed && run.invocations.size() == 1 &&
+              run.invocations.front().reportedStatus == PassStatus::NoChange &&
+              dumpModule(*module) == before && verifyFlatModule(*module).empty(),
+          (name + ": pass is no-change and atomic").c_str());
+  }
+  delete module;
+}
+
+void acceptFixture(const std::string& name, const std::string& text,
+                   bool requireDirectJToK = false,
+                   const std::string& reductionLabel = "L9",
+                   size_t expectedConditionalEdgesToK = 1) {
+  sysy::DiagnosticEngine diags;
+  Module* module = parseFlatModule(text, diags);
+  check(module != nullptr, (name + ": parses").c_str());
+  if (module == nullptr) return;
+  check(verifyFlatModule(*module).empty(), (name + ": input verifies").c_str());
+  Function* function = module->findFunction("main");
+  const auto candidate = function == nullptr ? std::nullopt :
+                                              matchMatmulNest(*function);
+  check(candidate.has_value(), (name + ": matcher accepts").c_str());
+  check(candidate && candidate->outerBound == 64 &&
+            candidate->innerBound == 64 && candidate->reductionBound == 64,
+        (name + ": bounds are 64x64x64").c_str());
+  if (function != nullptr) {
+    const std::string before = dumpModule(*module);
+    FlatPassManager pm;
+    pm.addPass(std::make_unique<MatmulBlockingPass>());
+    PassManagerOptions options;
+    options.verifyEach = true;
+    options.instrument = true;
+    const auto run = pm.run(*module, options);
+    check(run.ok() && run.changed && !run.invocations.empty() &&
+              run.invocations.front().reportedStatus == PassStatus::Applied &&
+              verifyFlatModule(*module).empty() && dumpModule(*module) != before,
+          (name + ": pass applies and output verifies").c_str());
+    if (requireDirectJToK) {
+      size_t conditionalEdgesToK = 0;
+      const std::string after = dumpModule(*module);
+      size_t lineStart = 0;
+      while (lineStart < after.size()) {
+        const size_t lineEnd = after.find('\n', lineStart);
+        const std::string line = after.substr(
+            lineStart, lineEnd == std::string::npos ? std::string::npos :
+                                                         lineEnd - lineStart);
+        if (line.find("br i1") != std::string::npos &&
+            line.find("label " + reductionLabel) != std::string::npos)
+          ++conditionalEdgesToK;
+        if (lineEnd == std::string::npos) break;
+        lineStart = lineEnd + 1;
+      }
+      check(conditionalEdgesToK == expectedConditionalEdgesToK,
+            "blocked matmul has a direct conditional J-to-K edge");
+    }
+  }
+  delete module;
 }
 }  // namespace
 int main() {
@@ -84,55 +188,114 @@ L12:
   store i32 %3, ptr[i32] %36 @line 15
   br L7 @line 8
 })";
-  sysy::DiagnosticEngine diags;
-  Module* module = parseFlatModule(text, diags);
-  check(module != nullptr, "matmul fixture parses");
-  if (module != nullptr) {
-    Function* function = module->findFunction("main");
-    check(function != nullptr, "matmul function exists");
-    if (function != nullptr) {
-      const auto candidate = matchMatmulNest(*function);
-      check(candidate.has_value(), "canonical matmul nest is recognized");
-      check(candidate && candidate->outerBound == 64 &&
-                candidate->innerBound == 64 && candidate->reductionBound == 64,
-            "matmul bounds are 64x64x64");
-      if (candidate) {
-        const std::string before = dumpModule(*module);
-        FlatPassManager pm;
-        pm.addPass(std::make_unique<MatmulBlockingPass>());
-        PassManagerOptions options;
-        options.verifyEach = true;
-        options.instrument = true;
-        const auto run = pm.run(*module, options);
-        const auto violations = verifyFlatModule(*module);
-        check(run.ok() && run.changed && violations.empty(),
-              "matmul nest is blocked and verifies");
-        check(run.invocations.size() == 1 &&
-                  run.invocations[0].stats.counters.count("blocked-matmul") &&
-                  run.invocations[0].stats.counters.at("blocked-matmul") == 1,
-              "matmul blocking counter recorded");
-        check(before != dumpModule(*module), "matmul IR changed");
-      }
-    }
-    std::string bad = text;
-    const std::string from = "store i32 %3, ptr[i32] %36";
-    const std::string to = "store i32 %0, ptr[i32] %36";
-    const size_t at = bad.find(from);
-    if (at != std::string::npos) bad.replace(at, from.size(), to);
-    Module* badModule = parseFlatModule(bad, diags);
-    check(badModule != nullptr, "negative fixture parses");
-    if (badModule != nullptr && !badModule->functions().empty()) {
-      check(!matchMatmulNest(*badModule->functions().front()).has_value(),
-            "store of the product, not the accumulator, is rejected");
-      FlatPassManager pm;
-      pm.addPass(std::make_unique<MatmulBlockingPass>());
-      const auto run = pm.run(*badModule);
-      check(run.ok() && !run.changed && verifyFlatModule(*badModule).empty(),
-            "negative matmul IR is left unchanged");
-      delete badModule;
-    }
-    delete module;
-  }
+  acceptFixture("canonical matmul", text, true);
+
+  std::string directJToK = replaceOnce(
+      text, "br i1 %15, label L6, label L8",
+      "br i1 %15, label L9, label L8");
+  directJToK = replaceAll(directJToK, "(%4 L6)", "(%4 L5)");
+  directJToK = replaceOnce(directJToK, "L6:\n  br L9 @line 11\n", "");
+  // Keep Flat IR's block indices dense after removing the K preheader.
+  for (int label = 12; label >= 7; --label)
+    directJToK = replaceAll(directJToK, "L" + std::to_string(label),
+                            "Q" + std::to_string(label));
+  for (int label = 7; label <= 12; ++label)
+    directJToK = replaceAll(directJToK, "Q" + std::to_string(label),
+                            "L" + std::to_string(label - 1));
+  acceptFixture("direct J-to-K input", directJToK, true, "L8", 2);
+
+  // Every loop header must branch on the ICmp that was matched against its
+  // induction phi. A dominating constant i1 keeps these inputs verifier-valid
+  // while making the stale compare genuinely unused.
+  rejectFixture("outer uses an unused compare", replaceOnce(
+      addConstantFlag(text), "br i1 %5, label L2, label L4",
+      "br i1 %40, label L2, label L4"));
+  rejectFixture("inner uses an unused compare", replaceOnce(
+      addConstantFlag(text), "br i1 %15, label L6, label L8",
+      "br i1 %40, label L6, label L8"));
+  rejectFixture("reduction uses an unused compare", replaceOnce(
+      addConstantFlag(text), "br i1 %17, label L10, label L12",
+      "br i1 %40, label L10, label L12"));
+
+  rejectFixture("conditional outer preheader", replaceOnce(
+      text, "L0:\n  br L1 @line 6",
+      "L0:\n  %40 = icmp slt i32 %4, %4 @line 6\n"
+      "  br i1 %40, label L4, label L1 @line 6"));
+
+  std::string exitPhi = replaceOnce(
+      text, "L4:\n  %9 = sext i32 %4 to i64 @line 20",
+      "L4:\n  %40 = phi i32 [(%4 L1)] @line 20\n"
+      "  %9 = sext i32 %4 to i64 @line 20");
+  exitPhi = replaceOnce(exitPhi, "ret i32 %13 @line 20",
+                        "ret i32 %40 @line 20");
+  rejectFixture("exit has a phi", exitPhi);
+
+  std::string skippedPathDefinition = replaceOnce(
+      text, "L2:\n  br L5 @line 8",
+      "L2:\n  %40 = add i32 %4, %8 @line 8\n"
+      "  br L5 @line 8");
+  skippedPathDefinition = replaceOnce(
+      skippedPathDefinition, "%31 = add i32 %3, %30 @line 12",
+      "%41 = add i32 %40, %30 @line 12\n"
+      "  %31 = add i32 %3, %41 @line 12");
+  rejectFixture("skipped path definition feeds retained body",
+                skippedPathDefinition);
+
+  rejectFixture("outer latch has an unused pure definition", replaceOnce(
+      text, "L3:\n  %7 = add i32 %0, %8 @line 6",
+      "L3:\n  %40 = add i32 %4, %8 @line 6\n"
+      "  %7 = add i32 %0, %8 @line 6"));
+  rejectFixture("inner latch has an unused pure definition", replaceOnce(
+      text, "L7:\n  %16 = add i32 %1, %8 @line 8",
+      "L7:\n  %40 = add i32 %4, %8 @line 8\n"
+      "  %16 = add i32 %1, %8 @line 8"));
+  rejectFixture("reduction latch has an unused pure definition", replaceOnce(
+      text, "L11:\n  %32 = add i32 %2, %8 @line 11",
+      "L11:\n  %40 = add i32 %4, %8 @line 11\n"
+      "  %32 = add i32 %2, %8 @line 11"));
+
+  std::string extraEntry = replaceOnce(
+      addConstantFlag(text), "%0 = phi i32 [(%4 L0), (%7 L3)] @line 6",
+      "%0 = phi i32 [(%4 L0), (%7 L3), (%4 L8)] @line 6");
+  extraEntry = replaceOnce(extraEntry, "L8:\n  br L3 @line 6",
+                           "L8:\n  br i1 %40, label L1, label L3 @line 6");
+  rejectFixture("outer has an additional entry", extraEntry);
+
+  std::string extraOutputStore = replaceOnce(
+      text, "  store i32 %3, ptr[i32] %36 @line 15",
+      "  store i32 %1, ptr[i32] %36 @line 15\n"
+      "  store i32 %3, ptr[i32] %36 @line 15");
+  rejectFixture("output has an additional store", extraOutputStore);
+
+  std::string inputWrite = replaceOnce(
+      text, "  br L11 @line 11",
+      "  store i32 %23, ptr[i32] %22 @line 12\n"
+      "  br L11 @line 11");
+  rejectFixture("body writes an input", inputWrite);
+
+  std::string accumulatorLiveOut = replaceOnce(
+      text, "L7:\n  %16 = add i32 %1, %8 @line 8",
+      "L7:\n  %16 = add i32 %1, %8 @line 8\n"
+      "  %40 = add i32 %3, %4 @line 8");
+  rejectFixture("accumulator has a live-out use in J latch",
+                accumulatorLiveOut);
+
+  rejectFixture("noncanonical C index", replaceOnce(
+      text, "%35 = sext i32 %1 to i64 @line 15",
+      "%35 = sext i32 %0 to i64 @line 15"));
+
+  rejectFixture("store of non-accumulator is rejected", replaceOnce(
+      text, "store i32 %3, ptr[i32] %36",
+      "store i32 %0, ptr[i32] %36"));
+
+  const std::string swappedPhiOrder = replaceOnce(
+      text,
+      "  %2 = phi i32 [(%4 L6), (%32 L11)] @line 11\n"
+      "  %3 = phi i32 [(%4 L6), (%31 L11)] @line 9",
+      "  %3 = phi i32 [(%4 L6), (%31 L11)] @line 9\n"
+      "  %2 = phi i32 [(%4 L6), (%32 L11)] @line 11");
+  acceptFixture("swapped reduction phi order", swappedPhiOrder, true);
+
   std::printf("MATMUL_MATCH_CHECKS=%d FAILURES=%d\n", checks, failures);
   return failures ? 1 : 0;
 }

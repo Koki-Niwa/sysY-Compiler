@@ -42,7 +42,7 @@ size_t lineFootprint(size_t outer, size_t inner, size_t outerStride,
   // The row base has unknown alignment; charge one extra line so a row
   // crossing a line boundary cannot be undercounted.
   const size_t linesPerRow =
-      span == 0 ? 0 : 1 + saturatingAdd(span, lineBytes - 1) / lineBytes;
+      span == 0 ? 0 : saturatingAdd(1, saturatingAdd(span, lineBytes - 1) / lineBytes);
   return saturatingMul(rows, saturatingMul(linesPerRow, lineBytes));
 }
 size_t tileBytes(size_t outer, size_t inner, const BlockingContext& context,

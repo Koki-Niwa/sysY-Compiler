@@ -9,6 +9,10 @@ namespace sysy { namespace flat {
 class CFGEditor {
  public:
   explicit CFGEditor(IRMutator& mutator) : mutator_(mutator) {}
+  // Append an unreachable-terminated block to an owned function definition.
+  // Reject null/foreign/declaration functions without changing IR. A successful
+  // creation records one CFG + DataFlow mutation; all later edits are tracked.
+  BasicBlock* createBlock(Function* function);
   MutationResult rewritePhiValue(Instruction* phi, BasicBlock* pred, Value* value);
   MutationResult insertPhi(BasicBlock* block, Instruction* phi);
   MutationResult insertPhiBatch(

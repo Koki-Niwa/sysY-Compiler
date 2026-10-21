@@ -62,11 +62,12 @@ PassResult TailRecursionEliminationPass::run(Function& function, PassContext& co
   for (Instruction* inst : entry->insts())
     if (inst != ret) originals.push_back(inst);
   Module& module = context.analyses().module();
-  BasicBlock* loop = module.createBlock(&function);
-  // Placeholder terminator so tracked insertions can target the new block.
-  Instruction* placeholder = createUnreachable({});
-  module.ownInst(placeholder);
-  loop->addInst(placeholder);
+  BasicBlock* loop = context.cfg().createBlock(&function);
+  if (loop == nullptr) {
+    result.status = PassStatus::Failed;
+    result.diagnostic = "tail-recursion: loop block rejected";
+    return result;
+  }
   std::unordered_map<const Value*, Value*> mapping;
   size_t insertAt = 0;
   std::vector<std::pair<Instruction*, Instruction*>> slots;

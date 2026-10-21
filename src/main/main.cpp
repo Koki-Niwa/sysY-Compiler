@@ -84,7 +84,7 @@ struct Options {
   bool s20 = false;             // --opt=s20：licm + strength-reduce + dce
   bool s24 = false;             // --opt=s24：loop tiling
   bool s24b = false;            // --opt=s24b：blocked reduction/map
-  bool s24c = false;            // --opt=s24c：matmul/conv accum blocking
+  bool s24c = false;            // --opt=s24c：canonical matmul accumulation blocking
   bool s25 = false;             // --opt=s25：plan-sized loop unrolling
   bool flatStats = false;       // --dump-flat-stats：把平面 IR 统计打到 stderr
   bool optStats = false;        // --dump-opt-stats：把 s24/s25 pass counters 打到 stderr

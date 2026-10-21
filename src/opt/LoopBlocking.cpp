@@ -352,13 +352,13 @@ PassResult LoopBlockingPass::run(Function& function, PassContext& context) {
   Module& module = context.analyses().module();
   IRMutator& mutator = context.mutator();
   CFGEditor& cfg = context.cfg();
+  auto fail = [] { PassResult p; p.status = PassStatus::Failed;
+                   p.diagnostic = "loop-blocking: rewrite rejected"; return p; }();
   const std::vector<std::string> names{"T1", "T2", "I", "J", "NB", "LJ", "LI", "LT2", "LT1"};
   std::unordered_map<std::string, BasicBlock*> blocksByName;
   for (const std::string& name : names) {
-    BasicBlock* block = module.createBlock(&function);
-    Instruction* placeholder = createUnreachable({});
-    module.ownInst(placeholder);
-    block->addInst(placeholder);
+    BasicBlock* block = cfg.createBlock(&function);
+    if (block == nullptr) return fail;
     blocksByName[name] = block;
   }
   BasicBlock* t1 = blocksByName["T1"]; BasicBlock* t2 = blocksByName["T2"];
@@ -366,8 +366,6 @@ PassResult LoopBlockingPass::run(Function& function, PassContext& context) {
   BasicBlock* nb = blocksByName["NB"]; BasicBlock* lj = blocksByName["LJ"];
   BasicBlock* li = blocksByName["LI"]; BasicBlock* lt2 = blocksByName["LT2"];
   BasicBlock* lt1 = blocksByName["LT1"];
-  auto fail = [] { PassResult p; p.status = PassStatus::Failed;
-                   p.diagnostic = "loop-blocking: rewrite rejected"; return p; }();
   if (cfg.redirectEdge(nest.pre, 0, t1, {}) != MutationResult::Applied) return fail;
   Instruction* i0 = createPhi(typePool().i32(), {module.getIntConst(typePool().i32(), 0)},
                               {nest.pre}, {});

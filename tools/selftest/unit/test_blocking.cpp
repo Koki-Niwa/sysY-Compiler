@@ -118,6 +118,17 @@ int main() {
               p.workingSetBytes <= 16384,
           "non-line-multiple row stride gets the conservative alignment bound");
   }
+  for (size_t lineBytes : {size_t{0}, size_t{1}}) {
+    BlockingContext c;
+    c.dependenceFree = true;
+    c.outerTrip = c.innerTrip = 2;
+    c.outerStride = std::numeric_limits<size_t>::max();
+    c.innerStride = std::numeric_limits<size_t>::max() / 4;
+    const BlockingPlan p = planBlocking(c, MemoryModel{lineBytes, 32768});
+    check(!p.block && p.workingSetBytes == std::numeric_limits<size_t>::max() &&
+              std::string(p.reason) != "fits",
+          "zero/one-byte cache lines cannot wrap a saturated footprint to zero");
+  }
   std::printf("S24C_BLOCKING_CHECKS=%d FAILURES=%d\n", checks, failures);
   return failures ? 1 : 0;
 }

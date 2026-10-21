@@ -210,10 +210,10 @@ PassResult LoopUnrollPass::run(Function& function, PassContext& context) {
     std::vector<Value*> indices;
     Value* previous = ind.phi;
     for (size_t k = 1; k < unroll; ++k) {
-      BasicBlock* link = module.createBlock(&function);
-      Instruction* placeholder = createUnreachable({});
-      module.ownInst(placeholder);
-      link->addInst(placeholder);
+      BasicBlock* link = cfg.createBlock(&function);
+      if (link == nullptr)
+        return [] { PassResult p; p.status = PassStatus::Failed;
+                    p.diagnostic = "loop-unroll: chain block rejected"; return p; }();
       chain.push_back(link);
       Instruction* ik = createBin(Opcode::Add, previous,
                                   module.getIntConst(typePool().i32(), ind.step), {});
@@ -270,14 +270,11 @@ PassResult LoopUnrollPass::run(Function& function, PassContext& context) {
     }
     // Tail: one final body execution when the pair loop leaves an odd remainder.
     // The even case enters TH with i >= bound and exits without executing TB.
-    BasicBlock* tailHeader = module.createBlock(&function);
-    BasicBlock* tailBody = module.createBlock(&function);
-    Instruction* thPlaceholder = createUnreachable({});
-    module.ownInst(thPlaceholder);
-    tailHeader->addInst(thPlaceholder);
-    Instruction* tbPlaceholder = createUnreachable({});
-    module.ownInst(tbPlaceholder);
-    tailBody->addInst(tbPlaceholder);
+    BasicBlock* tailHeader = cfg.createBlock(&function);
+    BasicBlock* tailBody = cfg.createBlock(&function);
+    if (tailHeader == nullptr || tailBody == nullptr)
+      return [] { PassResult p; p.status = PassStatus::Failed;
+                  p.diagnostic = "loop-unroll: tail block rejected"; return p; }();
     if (cfg.redirectEdge(ind.phi->parent(), 1, tailHeader, {}) !=
         MutationResult::Applied)
       return [] { PassResult p; p.status = PassStatus::Failed;

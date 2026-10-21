@@ -125,10 +125,76 @@ void testRetainedSecondSuccessor() {
             rs->terminator()->numSuccs() == 2 && rphi->numOperands() == 2,
         "redundant retained incoming leaves CFG and phi unchanged");
 }
+
+void testCreateBlockOwnership() {
+  Module m;
+  const Type* i32 = typePool().i32();
+  Function* f = m.createFunction("create_block", i32);
+  BasicBlock* entry = m.createBlock(f);
+  add(m, entry, createRet(m.getIntConst(i32, 0), {}));
+  m.rebuildCFG();
+  m.rebuildUseDef();
+  check(verifyFlatModule(m).empty(), "create-block base fixture verifies");
+
+  IRMutator mutator(m);
+  CFGEditor cfg(mutator);
+  const size_t blocksBefore = m.ownedBlocks().size();
+  const IRRevision moduleBefore = m.revision();
+  const IRRevision functionBefore = f->revision();
+  BasicBlock* created = cfg.createBlock(f);
+  check(created != nullptr && created->parent() == f &&
+            created->ownerModule() == &m && m.ownsBlock(created) &&
+            m.ownedBlocks().size() == blocksBefore + 1 &&
+            f->blockCount() == 2 && created->size() == 1 &&
+            created->terminator() != nullptr &&
+            created->terminator()->op() == Opcode::Unreachable,
+        "create-block makes an owned unreachable block");
+  check(verifyFlatModule(m).empty(), "created unreachable block verifies");
+  check(m.revision().any == moduleBefore.any + 1 &&
+            m.revision().cfg == moduleBefore.cfg + 1 &&
+            m.revision().dataFlow == moduleBefore.dataFlow + 1 &&
+            f->revision().any == functionBefore.any + 1 &&
+            f->revision().cfg == functionBefore.cfg + 1 &&
+            f->revision().dataFlow == functionBefore.dataFlow + 1 &&
+            mutator.summary().operations == 1 &&
+            hasMutation(mutator.summary().kinds, MutationKind::CFG) &&
+            hasMutation(mutator.summary().kinds, MutationKind::DataFlow) &&
+            mutator.summary().affectedFunctions.size() == 1 &&
+            mutator.summary().affectedFunctions.count(f) == 1,
+        "create-block commits one CFG/data-flow mutation");
+
+  const size_t stableBlocks = m.ownedBlocks().size();
+  const IRRevision stableModule = m.revision();
+  const IRRevision stableFunction = f->revision();
+  check(cfg.createBlock(nullptr) == nullptr &&
+            m.ownedBlocks().size() == stableBlocks &&
+            m.revision().any == stableModule.any &&
+            f->revision().any == stableFunction.any,
+        "null create-block function is rejected without mutation");
+
+  Module foreign;
+  Function* foreignFunction = foreign.createFunction("foreign", i32);
+  const size_t foreignBlocks = foreign.ownedBlocks().size();
+  check(cfg.createBlock(foreignFunction) == nullptr &&
+            m.ownedBlocks().size() == stableBlocks &&
+            foreign.ownedBlocks().size() == foreignBlocks &&
+            m.revision().any == stableModule.any &&
+            f->revision().any == stableFunction.any,
+        "cross-module create-block function is rejected atomically");
+
+  Function* declaration = m.createFunction("declaration", i32);
+  const size_t declarationBlocks = m.ownedBlocks().size();
+  const uint64_t declarationRevision = m.revision().any;
+  check(cfg.createBlock(declaration) == nullptr && declaration->isDeclaration() &&
+            m.ownedBlocks().size() == declarationBlocks &&
+            m.revision().any == declarationRevision,
+        "declaration create-block function is rejected atomically");
+}
 }  // namespace
 int main() {
   testAddPhiEdge();
   testRetainedSecondSuccessor();
+  testCreateBlockOwnership();
   std::printf("S24B_CFG_CHECKS=%d FAILURES=%d\n", checks, failures);
   return failures ? 1 : 0;
 }

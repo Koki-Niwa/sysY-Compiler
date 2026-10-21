@@ -1,0 +1,14 @@
+int g;
+int main() {
+  int i = 0;
+  int j = 0;
+  while (i < 512) {
+    j = 0;
+    while (j < 512) {
+      g = g + i * j;
+      j = j + 1;
+    }
+    i = i + 1;
+  }
+  return g;
+}

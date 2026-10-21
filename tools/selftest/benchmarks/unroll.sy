@@ -1,0 +1,9 @@
+int g;
+int main() {
+  int i = 0;
+  while (i < 2000000) {
+    g = g + i;
+    i = i + 1;
+  }
+  return g;
+}

@@ -36,7 +36,7 @@ std::string helpText() {
       "  --opt=s20          licm + strength-reduce + dce（flat-ir / llvm-ir）\n"
       "  --opt=s24          loop tiling（flat-ir / llvm-ir）\n"
       "  --opt=s24b         blocked reduction/map（flat-ir / llvm-ir）\n"
-      "  --opt=s24c         canonical output-stationary blocking（matmul/1-D stencil）\n"
+      "  --opt=s24c         canonical output-stationary blocking（matmul/1-D stencil/flattened 2-D conv）\n"
       "  --opt=s25          plan-sized loop unrolling（flat-ir / llvm-ir）\n"
       "  -O0 / -O1          LLVM IR 优化级别（默认 O0；-O1 启用安全的标量提升）\n"
       "  --optimize         -O1 的别名（tools/run_tests.sh 使用长选项名）\n"

@@ -71,6 +71,17 @@ BasicBlock* skipTrampolines(BasicBlock* block) {
   }
   return block;
 }
+bool singleBr(BasicBlock* block) {
+  return block != nullptr && block->size() == 1 &&
+         block->terminator() != nullptr &&
+         block->terminator()->op() == Opcode::Br &&
+         block->terminator()->numSuccs() == 1;
+}
+bool predecessors(BasicBlock* block, std::initializer_list<BasicBlock*> expected) {
+  return block != nullptr && block->preds().size() == expected.size() &&
+         std::set<BasicBlock*>(block->preds().begin(), block->preds().end()) ==
+             std::set<BasicBlock*>(expected);
+}
 BasicBlock* onlyPredOtherThan(const BasicBlock* block, const BasicBlock* other) {
   if (block == nullptr) return nullptr;
   BasicBlock* result = nullptr;
@@ -217,6 +228,36 @@ bool matchConv(const Function& function, ConvNest& nest) {
     if (outerPre == nullptr || innerPre == nullptr || kiPre == nullptr ||
         kjPre == nullptr)
       continue;
+    // The new J edge enters KI directly and supplies zero seeds, so the old KI
+    // preheader must be a pure trampoline. Other preheaders remain live but the
+    // rewrite still requires the exact predecessor/latch roles below.
+    if (!singleBr(kiPre) || jLatch->size() != 2 || kjLatch->size() != 2 ||
+        !predecessors(outer, {outerPre, outerLatch}) ||
+        !predecessors(inner, {innerPre, jLatch}) ||
+        !predecessors(ki, {kiPre, kiLatch}) ||
+        !predecessors(kj, {kjPre, kjLatch}) ||
+        !predecessors(body, {kj}) ||
+        !predecessors(kjLatch, {body}) ||
+        !predecessors(kx, {ki}) ||
+        !predecessors(jLatch, {kx}))
+      continue;
+    bool exitHasPhi = false;
+    for (Instruction* inst : exit->insts())
+      if (inst->op() == Opcode::Phi) exitHasPhi = true;
+    if (exitHasPhi) continue;
+    // Retained instructions may only refer to retained definitions or the two
+    // outer/inner induction phis that are rewritten.
+    std::set<BasicBlock*> retained{ki, kj, body, kjLatch, kiLatch, kx};
+    bool closed = true;
+    for (BasicBlock* block : retained) {
+      for (Instruction* inst : block->insts())
+        for (Value* operand : inst->operands())
+          if (operand != nullptr && operand->isInst() && operand != outerPhi &&
+              operand != innerPhi &&
+              !retained.count(static_cast<Instruction*>(operand)->parent()))
+            closed = false;
+    }
+    if (!closed) continue;
     int64_t outerBound = 0, innerBound = 0, kiBound = 0, kjBound = 0;
     if (!matchInduction(outerPhi, outer->at(1), outerBound, outerPre, outerLatch) ||
         !matchInduction(innerPhi, inner->at(1), innerBound, innerPre, jLatch) ||
@@ -240,6 +281,12 @@ bool matchConv(const Function& function, ConvNest& nest) {
         update->numOperands() != 2 ||
         (update->operand(0) != accKj && update->operand(1) != accKj))
       continue;
+    bool accClosed = true;
+    for (const Use& use : accKi->uses())
+      if (use.user != accKj && use.user != store) accClosed = false;
+    for (const Use& use : accKj->uses())
+      if (use.user != accKi && use.user != update) accClosed = false;
+    if (!accClosed) continue;
     if (!canonicalStore(store, outerPhi, innerPhi,
                         static_cast<size_t>(outerBound),
                         static_cast<size_t>(innerBound)))

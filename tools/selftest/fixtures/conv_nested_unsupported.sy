@@ -1,0 +1,25 @@
+int in[66][66];
+int w[3][3];
+int out[64][64];
+int main() {
+  int i = 0;
+  while (i < 64) {
+    int j = 0;
+    while (j < 64) {
+      int acc = 0;
+      int ki = 0;
+      while (ki < 3) {
+        int kj = 0;
+        while (kj < 3) {
+          acc = acc + in[i + ki][j + kj] * w[ki][kj];
+          kj = kj + 1;
+        }
+        ki = ki + 1;
+      }
+      out[i][j] = acc;
+      j = j + 1;
+    }
+    i = i + 1;
+  }
+  return out[0][0];
+}

@@ -263,6 +263,12 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
       $<TARGET_FILE:compiler>
       "${CMAKE_CURRENT_SOURCE_DIR}/tools/selftest/fixtures/conv_offset.sy")
   set_tests_properties(test_conv_equivalence PROPERTIES TIMEOUT 120)
+  add_test(NAME test_unsupported_conv
+    COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/tools/selftest/unsupported_conv.py"
+      $<TARGET_FILE:compiler>
+      "${CMAKE_CURRENT_SOURCE_DIR}/tools/selftest/fixtures/conv_nested_unsupported.sy")
+  set_tests_properties(test_unsupported_conv PROPERTIES TIMEOUT 120)
   add_test(NAME test_unroll_equivalence
     COMMAND "${Python3_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/tools/selftest/unroll_equivalence.py"

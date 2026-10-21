@@ -11,6 +11,7 @@ structured core -> ir, support
 structured bridge -> frontend (only IRGenInternal.h and IRGenImpl.h)
 frontend -> support
 ir -> support
+mir -> nothing in the compiler (B01 core; not yet linked to the CLI)
 support -> nothing in the compiler
 ```
 

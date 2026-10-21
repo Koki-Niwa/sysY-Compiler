@@ -15,6 +15,7 @@ ALLOWED = {
     'main': {'support', 'frontend', 'ir', 'structured', 'opt'},
     'analysis': {'support', 'ir'},
     'opt': {'support', 'ir', 'analysis'},
+    'mir': set(),
 }
 BRIDGES = {'structured/IRGenInternal.h', 'structured/IRGenImpl.h'}
 EXTENSIONS = {'.h', '.cpp', '.inc'}

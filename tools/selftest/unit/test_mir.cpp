@@ -150,6 +150,20 @@ int main() {
   check(dlive.edgeLive[{1, 3}] == std::set<uint32_t>{1} &&
             dlive.edgeLive[{2, 3}] == std::set<uint32_t>{2},
         "phi operands are live only on their predecessor edge");
+  Allocation alloc = greedyColor(graph, 2);
+  check(alloc.color[1] >= 0 && alloc.color[2] >= 0 &&
+            alloc.color[1] != alloc.color[2] && !alloc.spilled[1] &&
+            !alloc.spilled[2],
+        "two-color allocation separates interfering registers");
+  Allocation one = greedyColor(graph, 1);
+  check((one.spilled[1] != one.spilled[2]) &&
+            (one.spilled[1] || one.spilled[2]),
+        "one-color allocation spills exactly one interfering register");
+  InterferenceGraph independent = buildInterference(
+      m.functions[0], analyzeLiveness(m.functions[0]));
+  Allocation shared = greedyColor(independent, 1);
+  check(!shared.spilled[1] && !shared.spilled[2],
+        "non-interfering registers may share one color");
   Module rich;
   rich.name = "rich";
   Function rf;

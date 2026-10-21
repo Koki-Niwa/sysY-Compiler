@@ -97,5 +97,14 @@ struct InterferenceGraph {
   std::vector<std::set<uint32_t>> neighbors;
 };
 InterferenceGraph buildInterference(const Function& function, const Liveness& liveness);
+// Deterministic greedy coloring of virtual-register interference. Color 0 is
+// unused; registers with no available color are marked spilled. No spill code
+// or target register assignment is emitted in this prototype.
+struct Allocation {
+  std::vector<int> color;   // indexed by virtual id; -1 = spilled/unused
+  std::vector<bool> spilled;
+  size_t colors = 0;
+};
+Allocation greedyColor(const InterferenceGraph& graph, size_t maxColors);
 }}  // namespace sysy::mir
 #endif

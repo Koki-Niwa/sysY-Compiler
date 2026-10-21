@@ -424,3 +424,36 @@ InterferenceGraph buildInterference(const Function& function,
   return graph;
 }
 }}  // namespace sysy::mir
+
+namespace sysy { namespace mir {
+Allocation greedyColor(const InterferenceGraph& graph, size_t maxColors) {
+  Allocation result;
+  const size_t count = graph.neighbors.size();
+  result.color.assign(count, -1);
+  result.spilled.assign(count, false);
+  std::vector<uint32_t> order;
+  for (uint32_t id = 1; id < count; ++id) order.push_back(id);
+  std::sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) {
+    if (graph.neighbors[a].size() != graph.neighbors[b].size())
+      return graph.neighbors[a].size() > graph.neighbors[b].size();
+    return a < b;
+  });
+  for (uint32_t id : order) {
+    std::vector<bool> used(maxColors, false);
+    for (uint32_t neighbor : graph.neighbors[id])
+      if (neighbor < count && result.color[neighbor] >= 0 &&
+          static_cast<size_t>(result.color[neighbor]) < maxColors)
+        used[result.color[neighbor]] = true;
+    int chosen = -1;
+    for (size_t color = 0; color < maxColors; ++color)
+      if (!used[color]) { chosen = static_cast<int>(color); break; }
+    if (chosen < 0) {
+      result.spilled[id] = true;
+    } else {
+      result.color[id] = chosen;
+      result.colors = std::max(result.colors, static_cast<size_t>(chosen + 1));
+    }
+  }
+  return result;
+}
+}}  // namespace sysy::mir

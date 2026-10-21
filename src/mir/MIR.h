@@ -58,6 +58,9 @@ struct Module {
 };
 // Deterministic, human-readable dump. Round-trip parsing is a later B01 slice.
 std::string dump(const Module& module);
+// Parse the deterministic dump format above. Returns nullopt and a diagnostic
+// on malformed text; the verifier is not run implicitly.
+std::optional<Module> parse(const std::string& text, std::string* error = nullptr);
 // Return one message per violating instruction/block; empty means valid.
 std::vector<std::string> verify(const Module& module);
 }}  // namespace sysy::mir

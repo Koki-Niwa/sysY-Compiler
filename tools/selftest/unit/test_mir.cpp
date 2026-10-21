@@ -41,6 +41,14 @@ int main() {
   check(verify(m).empty(), "well-formed MIR verifies");
   std::string text = dump(m);
   check(text == dump(m), "MIR dump is deterministic");
+  auto parsed = parse(text);
+  check(parsed.has_value(), "MIR dump parses back");
+  check(parsed && dump(*parsed) == text, "MIR dump->parse->dump is byte-identical");
+  check(parsed && verify(*parsed).empty(), "parsed MIR verifies");
+  std::string error;
+  check(!parse("mir t\nfunc f frame=0\nB0:\n  nope r1:i32\n", &error).has_value() &&
+            !error.empty(),
+        "unknown opcode is rejected");
   check(text.find("B0:") != std::string::npos &&
             text.find("add r2:i32 r1:i32 r1:i32") != std::string::npos,
         "MIR dump has blocks and typed registers");

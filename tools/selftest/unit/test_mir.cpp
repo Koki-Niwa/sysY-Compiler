@@ -87,6 +87,13 @@ int main() {
   bad.functions[0].blocks[0].instructions[0].mem =
       MemOperand{true, Reg{0, Type::I32, RegClass::GPR}, 0, 4, 2, true};
   check(verify(bad).empty(), "RegMask and volatile/alias memory facts are accepted");
+  Liveness live = analyzeLiveness(m.functions[0]);
+  check(live.liveIn.size() == 2 && live.liveOut.size() == 2,
+        "liveness has one entry per block");
+  check(live.liveIn[0].empty() && live.liveOut[0].count(1),
+        "definition is live-out of its block and not live-in");
+  check(live.liveIn[1].count(1) && live.liveOut[1].empty(),
+        "entry use is live-in but return leaves nothing live-out");
   Module rich;
   rich.name = "rich";
   Function rf;

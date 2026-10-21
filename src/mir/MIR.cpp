@@ -592,3 +592,56 @@ std::optional<Module> parse(const std::string& text, std::string* error) {
 }
 
 }}  // namespace sysy::mir
+
+namespace sysy { namespace mir {
+Liveness analyzeLiveness(const Function& function) {
+  Liveness result;
+  const size_t count = function.blocks.size();
+  result.liveIn.resize(count);
+  result.liveOut.resize(count);
+  std::vector<std::set<uint32_t>> use(count), def(count);
+  for (size_t b = 0; b < count; ++b) {
+    for (const Instr& inst : function.blocks[b].instructions) {
+      for (const Operand& operand : inst.operands)
+        if (operand.kind == OperandKind::Reg && !def[b].count(operand.reg.id))
+          use[b].insert(operand.reg.id);
+      if (inst.mem.valid && inst.mem.base.id != 0 &&
+          !def[b].count(inst.mem.base.id))
+        use[b].insert(inst.mem.base.id);
+      if (inst.def) def[b].insert(inst.def->id);
+    }
+  }
+  auto successors = [&](size_t b) {
+    std::vector<size_t> targets;
+    const Block& block = function.blocks[b];
+    if (block.instructions.empty()) return targets;
+    const Instr& term = block.instructions.back();
+    if (term.opcode == Opcode::Br && term.operands.size() == 1)
+      targets.push_back(term.operands[0].index);
+    if (term.opcode == Opcode::CondBr && term.operands.size() == 3) {
+      targets.push_back(term.operands[1].index);
+      targets.push_back(term.operands[2].index);
+    }
+    return targets;
+  };
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    for (size_t b = count; b-- > 0;) {
+      std::set<uint32_t> out;
+      for (size_t target : successors(b))
+        if (target < count) out.insert(result.liveIn[target].begin(),
+                                       result.liveIn[target].end());
+      std::set<uint32_t> in = use[b];
+      for (uint32_t id : out)
+        if (!def[b].count(id)) in.insert(id);
+      if (out != result.liveOut[b] || in != result.liveIn[b]) {
+        result.liveOut[b] = std::move(out);
+        result.liveIn[b] = std::move(in);
+        changed = true;
+      }
+    }
+  }
+  return result;
+}
+}}  // namespace sysy::mir

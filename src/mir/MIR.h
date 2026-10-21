@@ -4,6 +4,7 @@
 #define SYSY_MIR_MIR_H
 #include <cstdint>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 namespace sysy { namespace mir {
@@ -79,5 +80,12 @@ std::string dump(const Module& module);
 std::optional<Module> parse(const std::string& text, std::string* error = nullptr);
 // Return one message per violating instruction/block; empty means valid.
 std::vector<std::string> verify(const Module& module);
+// Block-boundary liveness over virtual-register ids. Phi operands are treated
+// as block uses in this first slice; edge-sensitive liveness is later work.
+struct Liveness {
+  std::vector<std::set<uint32_t>> liveIn;
+  std::vector<std::set<uint32_t>> liveOut;
+};
+Liveness analyzeLiveness(const Function& function);
 }}  // namespace sysy::mir
 #endif

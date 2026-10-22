@@ -311,5 +311,5 @@ if(SYSY_STATIC)
   endif()
 endif()
 
-add_library(sysy_mir STATIC src/mir/MIR.cpp src/mir/MIRParser.cpp src/mir/MIRDump.cpp)
+add_library(sysy_mir STATIC src/mir/MIR.cpp src/mir/MIRParser.cpp src/mir/MIRDump.cpp src/mir/MIRSpillPlan.cpp)
 target_include_directories(sysy_mir PUBLIC src)

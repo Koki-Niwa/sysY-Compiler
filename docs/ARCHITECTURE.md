@@ -42,6 +42,7 @@ the retained artifacts and relevant interpreter self-test sources.
 | `interpreter/` | direct execution of Sema-annotated AST as a reference oracle; owns values, storage, control flow, and runtime I/O | `Interpreter.h`, `Interpreter.cpp` |
 | `structured/` | regions, loop/access structure, AST-to-IR bridge, structured verification | `StructuredIR`, `StructuredVerifier`, `IRGen`, `IRGenInternal.h` |
 | `ir/` | flat values, blocks, instructions, CFG/SSA data, verification, and LLVM text emission | `Module`, `Function`, `BasicBlock`, `Instruction`, verifier, `IREmitter` |
+| `mir/` | standalone machine-IR prototype, reader/verifier, liveness and allocation experiments | [`MIR.md`](MIR.md), `mir/MIR.h` |
 | `opt/` | flat-IR transformations over verified modules | `Mem2Reg` |
 | `support/` | diagnostics, source files/locations, neutral catalogs | `Diagnostic`, `SourceFile`, `RuntimeLib` |
 | `main/` | command-line mode selection and artifact policy | `main.cpp`, emitter entry point |
@@ -320,7 +321,18 @@ and complete matrix arithmetic equality for square and two-axis tail cases.
 The dedicated `matmul_bench.py` measures the complete opt-in pipeline through
 native Clang -O0, records per-case samples and compile resources, and checks
 all C cells after every call. It does not isolate DCE/canonicalization costs or
-establish A53/BOOM/cache benefits. Convolution and own-backend runtime are open.
+establish A53/BOOM/cache benefits. Own-backend runtime remains open.
+
+`ConvBlockingPass` also handles the canonical nested-K reduction used by the
+3x3 and 5x7 convolution fixtures. It retains both K loops and each output's
+reduction order. Before mutation, the outer preheader must have exactly one
+unconditional successor, the matched outer header. A conditional preheader is
+declined unchanged in either branch orientation; selecting successor zero
+without this proof is invalid. The pass retains the existing requirements for
+canonical output addresses, read-only inputs, closed retained operands, clean
+latches, no live-outs and a phi-free exit. Shape rejection returns NoChange;
+an unexpected editor failure after rewriting begins aborts the pipeline. This
+remains a bounded fixture-supported transform, not general convolution lowering.
 
 ## S25a Unroll planning (CLOSED / PASS)
 

@@ -29,6 +29,8 @@ optimizations without claiming an immediate runtime gain.
 - For backend, target-cost, RA, scheduling, or middle/backend feedback work,
   also read [`docs/BACKEND-PERFORMANCE-PLAN.md`](docs/BACKEND-PERFORMANCE-PLAN.md);
   RA/scheduler experiments use [`docs/RA-LAB.md`](docs/RA-LAB.md).
+- For the standalone MIR prototype, read its current API and failure contracts
+  in [`docs/MIR.md`](docs/MIR.md).
 - Check includes with `python3 tools/selftest/check_architecture.py --root .`.
   Run the complete current gate with `bash tools/verify.sh --stage S06`.
   `tools/gate/*.sh` are sourced modules, not standalone entry points.
@@ -44,6 +46,7 @@ opt -> analysis, ir, support
 analysis -> ir, support
 frontend -> support
 ir -> support
+mir -> nothing in the compiler (standalone prototype)
 support -> nothing in the compiler
 ```
 

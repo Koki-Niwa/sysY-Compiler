@@ -1,4 +1,4 @@
-#include "mir/MIR.h"
+#include "mir/MIRInternal.h"
 #include <sstream>
 #include <string>
 namespace sysy { namespace mir {
@@ -16,22 +16,6 @@ const char* classPrefix(RegClass cls) { return cls == RegClass::GPR ? "r" : "f";
 std::string regName(const Reg& reg) {
   return std::string(classPrefix(reg.cls)) + std::to_string(reg.id) + ":" +
          typeName(reg.type);
-}
-const char* opcodeName(Opcode opcode) {
-  switch (opcode) {
-    case Opcode::Add: return "add";
-    case Opcode::Sub: return "sub";
-    case Opcode::Mul: return "mul";
-    case Opcode::Div: return "div";
-    case Opcode::Copy: return "copy";
-    case Opcode::Load: return "load";
-    case Opcode::Store: return "store";
-    case Opcode::Br: return "br";
-    case Opcode::CondBr: return "condbr";
-    case Opcode::Ret: return "ret";
-    case Opcode::Phi: return "phi";
-  }
-  return "?";
 }
 std::string operandName(const Operand& operand) {
   switch (operand.kind) {
@@ -56,7 +40,8 @@ std::string dump(const Module& module) {
     for (const Block& block : function.blocks) {
       out << "B" << block.id << ":\n";
       for (const Instr& inst : block.instructions) {
-        out << "  " << opcodeName(inst.opcode);
+        const detail::OpcodeDescriptor* descriptor = detail::opcodeDescriptor(inst.opcode);
+        out << "  " << (descriptor == nullptr ? "?" : descriptor->spelling);
         if (inst.def) out << " " << regName(*inst.def);
         for (const Operand& operand : inst.operands)
           out << " " << operandName(operand);

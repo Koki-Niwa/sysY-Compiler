@@ -77,6 +77,11 @@ bool singleBr(BasicBlock* block) {
          block->terminator()->op() == Opcode::Br &&
          block->terminator()->numSuccs() == 1;
 }
+bool jumpsTo(BasicBlock* block, BasicBlock* target) {
+  const Instruction* term = block == nullptr ? nullptr : block->terminator();
+  return term != nullptr && term->op() == Opcode::Br &&
+         term->numSuccs() == 1 && term->succ(0) == target;
+}
 bool predecessors(BasicBlock* block, std::initializer_list<BasicBlock*> expected) {
   return block != nullptr && block->preds().size() == expected.size() &&
          std::set<BasicBlock*>(block->preds().begin(), block->preds().end()) ==
@@ -232,6 +237,7 @@ bool matchConv(const Function& function, ConvNest& nest) {
     // preheader must be a pure trampoline. Other preheaders remain live but the
     // rewrite still requires the exact predecessor/latch roles below.
     if (!singleBr(kiPre) || jLatch->size() != 2 || kjLatch->size() != 2 ||
+        !jumpsTo(outerPre, outer) ||
         !predecessors(outer, {outerPre, outerLatch}) ||
         !predecessors(inner, {innerPre, jLatch}) ||
         !predecessors(ki, {kiPre, kiLatch}) ||

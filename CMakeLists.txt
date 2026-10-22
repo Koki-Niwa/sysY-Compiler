@@ -271,6 +271,12 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
       $<TARGET_FILE:compiler>
       "${CMAKE_CURRENT_SOURCE_DIR}/tools/selftest/fixtures/conv_nested_const.sy")
   set_tests_properties(test_conv_nested_equivalence PROPERTIES TIMEOUT 120)
+  add_test(NAME test_conv_conditional
+    COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/tools/selftest/conv_conditional.py"
+      $<TARGET_FILE:compiler>
+      "${CMAKE_CURRENT_SOURCE_DIR}/tools/selftest/fixtures/conv_blocking_conditional.flat")
+  set_tests_properties(test_conv_conditional PROPERTIES TIMEOUT 60)
   add_test(NAME test_unroll_equivalence
     COMMAND "${Python3_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/tools/selftest/unroll_equivalence.py"
@@ -311,5 +317,13 @@ if(SYSY_STATIC)
   endif()
 endif()
 
-add_library(sysy_mir STATIC src/mir/MIR.cpp src/mir/MIRParser.cpp src/mir/MIRDump.cpp src/mir/MIRSpillPlan.cpp)
+add_library(sysy_mir STATIC
+  src/mir/MIR.cpp
+  src/mir/MIROpcode.cpp
+  src/mir/MIRVerifier.cpp
+  src/mir/MIRLiveness.cpp
+  src/mir/MIRSpill.cpp
+  src/mir/MIRParser.cpp
+  src/mir/MIRDump.cpp
+  src/mir/MIRSpillPlan.cpp)
 target_include_directories(sysy_mir PUBLIC src)

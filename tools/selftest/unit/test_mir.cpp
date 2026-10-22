@@ -93,7 +93,7 @@ int main() {
       RegMask{RegClass::FPR, 0x3});
   bad.functions[0].blocks[0].instructions[0].mem =
       MemOperand{true, Reg{0, Type::I32, RegClass::GPR}, 0, 4, 2, true};
-  check(verify(bad).empty(), "RegMask and volatile/alias memory facts are accepted");
+  check(!verify(bad).empty(), "memory on a non-memory opcode is rejected");
   Liveness live = analyzeLiveness(m.functions[0]);
   check(live.liveIn.size() == 2 && live.liveOut.size() == 2,
         "liveness has one entry per block");
@@ -257,6 +257,96 @@ int main() {
   }
   check(copyCount == 1 && usesSource,
         "coalesced destination uses are rewritten to the source");
+  Module single;
+  single.name = "single";
+  Function sf;
+  sf.name = "f";
+  Block sb;
+  sb.id = 0;
+  Instr sret;
+  sret.opcode = Opcode::Ret;
+  sret.operands.push_back(Operand::makeReg(Reg{3, Type::I32, RegClass::GPR}));
+  sb.instructions = {copy(1, 3), copy(2, 5), add(3, 1, 2), sret};
+  sf.blocks = {sb};
+  single.functions.push_back(sf);
+  auto singleGraph = buildInterference(single.functions[0],
+                                       analyzeLiveness(single.functions[0]));
+  check(singleGraph.neighbors[1].count(2) && singleGraph.neighbors[2].count(1),
+        "in-block simultaneously live values interfere");
+
+  Module loop;
+  loop.name = "loop";
+  Function lf;
+  lf.name = "f";
+  Block lb0;
+  lb0.id = 0;
+  lb0.instructions = {copy(2, 1), copy(4, 0), br(1)};
+  Block lb1;
+  lb1.id = 1;
+  Instr selfPhi;
+  selfPhi.opcode = Opcode::Phi;
+  selfPhi.def = Reg{1, Type::I32, RegClass::GPR};
+  selfPhi.operands = {Operand::makeReg(Reg{2, Type::I32, RegClass::GPR}),
+                       Operand::makeBlock(0),
+                       Operand::makeReg(Reg{1, Type::I32, RegClass::GPR}),
+                       Operand::makeBlock(1)};
+  lb1.instructions = {selfPhi, condbr(4, 2, 1)};
+  Block lb2;
+  lb2.id = 2;
+  Instr lret;
+  lret.opcode = Opcode::Ret;
+  lret.operands.push_back(Operand::makeReg(Reg{1, Type::I32, RegClass::GPR}));
+  lb2.instructions = {lret};
+  lf.blocks = {lb0, lb1, lb2};
+  loop.functions.push_back(lf);
+  check(verify(loop).empty(), "self-backedge phi fixture verifies");
+  Allocation loopAlloc;
+  loopAlloc.color = {0, -1, 0};
+  loopAlloc.spilled = {false, true, false};
+  SpillPlan loopPlan = planSpills(loopAlloc);
+  size_t loopErrors = 0;
+  check(rewriteSpills(loop.functions[0], loopPlan, &loopErrors) &&
+            loopErrors == 0,
+        "self-backedge phi spill rewrite succeeds without invalidating vectors");
+  check(verify(loop).empty(), "self-backedge spill output verifies");
+
+  Function collision = m.functions[0];
+  collision.frameSlots = 1;
+  size_t collisionErrors = 0;
+  const std::string collisionBefore = dump([&] {
+    Module copy; copy.name = "c"; copy.functions.push_back(collision); return copy;
+  }());
+  check(!rewriteSpills(collision, spillPlan, &collisionErrors) &&
+            collisionErrors > 0,
+        "spill rewrite rejects existing frameSlots before mutation");
+  check(dump([&] {
+    Module copy; copy.name = "c"; copy.functions.push_back(collision); return copy;
+  }()) == collisionBefore,
+        "rejected spill rewrite leaves the function unchanged");
+
+  Module badFrame = m;
+  Instr badLoad;
+  badLoad.opcode = Opcode::Load;
+  badLoad.def = Reg{9, Type::I32, RegClass::GPR};
+  badLoad.mem.valid = true;
+  badLoad.mem.frameBase = true;
+  badLoad.mem.frame = 999;
+  badLoad.mem.size = 4;
+  badFrame.functions[0].blocks[0].instructions.insert(
+      badFrame.functions[0].blocks[0].instructions.end() - 1, badLoad);
+  check(!verify(badFrame).empty(), "frame memory index without frame space is rejected");
+  Module badOperands = m;
+  Instr emptyAdd;
+  emptyAdd.opcode = Opcode::Add;
+  emptyAdd.def = Reg{9, Type::I32, RegClass::GPR};
+  badOperands.functions[0].blocks[0].instructions.insert(
+      badOperands.functions[0].blocks[0].instructions.end() - 1, emptyAdd);
+  check(!verify(badOperands).empty(), "zero-operand add is rejected");
+  std::string parseError;
+  check(!parse("mir t\nfunc f frame=0\nB0:\n  load r1:i32 mem[frame0+0:999999999999999999999]\n  ret r1:i32\n",
+                &parseError).has_value(),
+        "oversized memory size is rejected without throwing");
+
   Module rich;
   rich.name = "rich";
   Function rf;

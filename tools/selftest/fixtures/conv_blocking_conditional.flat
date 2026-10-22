@@ -1,0 +1,59 @@
+@O = global [64 x [64 x i32]] zeroinitializer @line 1
+define i32 @main() {
+  %100 = i32 0 @line 2
+  %101 = i32 64 @line 2
+  %102 = i32 3 @line 2
+  %103 = i32 1 @line 2
+  %104 = ptr[[64 x [64 x i32]]] @O
+L0:
+  %105 = icmp eq i32 %100, %100 @line 4
+  br i1 %105, label L1, label L14 @line 4
+L1:
+  %0 = phi i32 [(%100 L0), (%14 L13)] @line 5
+  %1 = icmp slt i32 %0, %101 @line 5
+  br i1 %1, label L2, label L14 @line 5
+L2:
+  br L3 @line 6
+L3:
+  %2 = phi i32 [(%100 L2), (%15 L12)] @line 7
+  %3 = icmp slt i32 %2, %101 @line 7
+  br i1 %3, label L4, label L13 @line 7
+L4:
+  br L5 @line 8
+L5:
+  %4 = phi i32 [(%100 L4), (%16 L10)] @line 9
+  %5 = phi i32 [(%100 L4), (%9 L10)] @line 9
+  %7 = icmp slt i32 %4, %102 @line 9
+  br i1 %7, label L6, label L11 @line 9
+L6:
+  br L7 @line 10
+L7:
+  %8 = phi i32 [(%100 L6), (%13 L9)] @line 11
+  %9 = phi i32 [(%5 L6), (%11 L9)] @line 11
+  %10 = icmp slt i32 %8, %103 @line 11
+  br i1 %10, label L8, label L10 @line 11
+L8:
+  %11 = add i32 %9, %100 @line 12
+  br L9 @line 12
+L9:
+  %13 = add i32 %8, %103 @line 13
+  br L7 @line 13
+L10:
+  %16 = add i32 %4, %103 @line 14
+  br L5 @line 14
+L11:
+  %17 = sext i32 %0 to i64 @line 15
+  %18 = getelementptr [64 x i32], ptr[[64 x [64 x i32]]] %104, i64 %17 @line 15
+  %19 = sext i32 %2 to i64 @line 15
+  %20 = getelementptr i32, ptr[[64 x i32]] %18, i64 %19 @line 15
+  store i32 %5, ptr[i32] %20 @line 15
+  br L12 @line 15
+L12:
+  %15 = add i32 %2, %103 @line 16
+  br L3 @line 16
+L13:
+  %14 = add i32 %0, %103 @line 17
+  br L1 @line 17
+L14:
+  ret i32 %100 @line 18
+}

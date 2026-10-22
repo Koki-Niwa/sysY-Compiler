@@ -552,3 +552,55 @@ bool rewriteSpills(Function& function, const SpillPlan& plan,
   return true;
 }
 }}  // namespace sysy::mir
+
+namespace sysy { namespace mir {
+bool coalesceCopies(Function& function, const Allocation& allocation,
+                    size_t* errorCount) {
+  if (errorCount) *errorCount = 0;
+  auto fail = [&]() {
+    if (errorCount) ++*errorCount;
+    return false;
+  };
+  for (Block& block : function.blocks) {
+    for (size_t index = 0; index < block.instructions.size();) {
+      Instr& inst = block.instructions[index];
+      if (inst.opcode != Opcode::Copy || !inst.def ||
+          inst.operands.size() != 1 ||
+          inst.operands[0].kind != OperandKind::Reg) {
+        ++index;
+        continue;
+      }
+      const Reg source = inst.operands[0].reg;
+      const Reg destination = *inst.def;
+      if (source.id == 0 || destination.id == 0 ||
+          source.id == destination.id ||
+          source.type != destination.type || source.cls != destination.cls)
+        return fail();
+      if (static_cast<size_t>(source.id) >= allocation.color.size() ||
+          static_cast<size_t>(destination.id) >= allocation.color.size())
+        return fail();
+      const int sourceColor = allocation.color[source.id];
+      const int destinationColor = allocation.color[destination.id];
+      if (sourceColor < 0 || sourceColor != destinationColor ||
+          (static_cast<size_t>(source.id) < allocation.spilled.size() &&
+           allocation.spilled[source.id]) ||
+          (static_cast<size_t>(destination.id) < allocation.spilled.size() &&
+           allocation.spilled[destination.id])) {
+        ++index;
+        continue;
+      }
+      for (Block& useBlock : function.blocks) {
+        for (Instr& use : useBlock.instructions) {
+          for (Operand& operand : use.operands)
+            if (operand.kind == OperandKind::Reg && operand.reg == destination)
+              operand.reg = source;
+          if (use.mem.valid && !use.mem.frameBase && use.mem.base == destination)
+            use.mem.base = source;
+        }
+      }
+      block.instructions.erase(block.instructions.begin() + index);
+    }
+  }
+  return true;
+}
+}}  // namespace sysy::mir

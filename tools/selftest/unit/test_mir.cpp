@@ -221,6 +221,42 @@ int main() {
     }
   check(phiLoads > 0 && phiStores > 0,
         "phi spill rewrite emits loads and a def store");
+  Module coalesceModule;
+  coalesceModule.name = "coalesce";
+  Function cf;
+  cf.name = "f";
+  Block cb;
+  cb.id = 0;
+  Instr move;
+  move.opcode = Opcode::Copy;
+  move.def = Reg{2, Type::I32, RegClass::GPR};
+  move.operands.push_back(Operand::makeReg(Reg{1, Type::I32, RegClass::GPR}));
+  Instr cadd = add(3, 2, 2);
+  Instr cret;
+  cret.opcode = Opcode::Ret;
+  cret.operands.push_back(Operand::makeReg(Reg{3, Type::I32, RegClass::GPR}));
+  cb.instructions = {copy(1, 7), move, cadd, cret};
+  cf.blocks = {cb};
+  coalesceModule.functions.push_back(cf);
+  Allocation coalesceAlloc;
+  coalesceAlloc.color = {0, 0, 0, 0};
+  coalesceAlloc.spilled = {false, false, false, false};
+  size_t coalesceErrors = 0;
+  check(coalesceCopies(coalesceModule.functions[0], coalesceAlloc,
+                       &coalesceErrors) && coalesceErrors == 0,
+        "copy coalescing rewrite succeeds on equal colors");
+  check(verify(coalesceModule).empty(), "coalesced MIR verifies");
+  bool usesSource = false;
+  size_t copyCount = 0;
+  for (const Instr& inst : coalesceModule.functions[0].blocks[0].instructions) {
+    if (inst.opcode == Opcode::Copy) ++copyCount;
+    if (inst.opcode == Opcode::Add && inst.operands.size() == 2 &&
+        inst.operands[0].kind == OperandKind::Reg &&
+        inst.operands[0].reg.id == 1 && inst.operands[1].reg.id == 1)
+      usesSource = true;
+  }
+  check(copyCount == 1 && usesSource,
+        "coalesced destination uses are rewritten to the source");
   Module rich;
   rich.name = "rich";
   Function rf;

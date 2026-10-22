@@ -109,6 +109,10 @@ struct Allocation {
 };
 Allocation greedyColor(const InterferenceGraph& graph, size_t maxColors,
                       const std::vector<std::pair<uint32_t, uint32_t>>& moves = {});
+// Remove a Copy when source and destination received the same color and rewrite
+// all destination uses to the source. No target register assignment is done.
+bool coalesceCopies(Function& function, const Allocation& allocation,
+                    size_t* errorCount = nullptr);
 // Map spilled virtual ids to frame slots. No load/store rewrite is performed.
 struct SpillPlan {
   std::vector<int> slot;              // virtual id -> frame id, -1 if not spilled

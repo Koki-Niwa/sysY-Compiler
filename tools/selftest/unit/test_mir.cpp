@@ -164,6 +164,13 @@ int main() {
   Allocation shared = greedyColor(independent, 1);
   check(!shared.spilled[1] && !shared.spilled[2],
         "non-interfering registers may share one color");
+  Allocation coalesced = greedyColor(independent, 2, {{1, 2}});
+  check(coalesced.color[1] == coalesced.color[2] && !coalesced.spilled[1] &&
+            !coalesced.spilled[2],
+        "copy move coalesces non-interfering registers");
+  Allocation notCoalesced = greedyColor(graph, 2, {{1, 2}});
+  check(notCoalesced.color[1] != notCoalesced.color[2],
+        "copy move cannot coalesce interfering registers");
   SpillPlan spillPlan = planSpills(one, 8, 8);
   const size_t spilledId = one.spilled[1] ? 1 : 2;
   check(spillPlan.slot[spilledId] >= 0 &&

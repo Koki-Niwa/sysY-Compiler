@@ -107,7 +107,8 @@ struct Allocation {
   std::vector<bool> spilled;
   size_t colors = 0;
 };
-Allocation greedyColor(const InterferenceGraph& graph, size_t maxColors);
+Allocation greedyColor(const InterferenceGraph& graph, size_t maxColors,
+                      const std::vector<std::pair<uint32_t, uint32_t>>& moves = {});
 // Map spilled virtual ids to frame slots. No load/store rewrite is performed.
 struct SpillPlan {
   std::vector<int> slot;              // virtual id -> frame id, -1 if not spilled

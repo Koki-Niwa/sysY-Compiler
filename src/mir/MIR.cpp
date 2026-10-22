@@ -355,7 +355,8 @@ InterferenceGraph buildInterference(const Function& function,
 }}  // namespace sysy::mir
 
 namespace sysy { namespace mir {
-Allocation greedyColor(const InterferenceGraph& graph, size_t maxColors) {
+Allocation greedyColor(const InterferenceGraph& graph, size_t maxColors,
+                       const std::vector<std::pair<uint32_t, uint32_t>>& moves) {
   Allocation result;
   const size_t count = graph.neighbors.size();
   result.color.assign(count, -1);
@@ -367,6 +368,12 @@ Allocation greedyColor(const InterferenceGraph& graph, size_t maxColors) {
       return graph.neighbors[a].size() > graph.neighbors[b].size();
     return a < b;
   });
+  std::vector<std::vector<uint32_t>> preferred(count);
+  for (const auto& move : moves) {
+    if (move.first >= count || move.second >= count) continue;
+    preferred[move.first].push_back(move.second);
+    preferred[move.second].push_back(move.first);
+  }
   for (uint32_t id : order) {
     std::vector<bool> used(maxColors, false);
     for (uint32_t neighbor : graph.neighbors[id])
@@ -374,8 +381,16 @@ Allocation greedyColor(const InterferenceGraph& graph, size_t maxColors) {
           static_cast<size_t>(result.color[neighbor]) < maxColors)
         used[result.color[neighbor]] = true;
     int chosen = -1;
-    for (size_t color = 0; color < maxColors; ++color)
-      if (!used[color]) { chosen = static_cast<int>(color); break; }
+    for (uint32_t partner : preferred[id])
+      if (partner < count && result.color[partner] >= 0 &&
+          static_cast<size_t>(result.color[partner]) < maxColors &&
+          !used[result.color[partner]]) {
+        chosen = result.color[partner];
+        break;
+      }
+    if (chosen < 0)
+      for (size_t color = 0; color < maxColors; ++color)
+        if (!used[color]) { chosen = static_cast<int>(color); break; }
     if (chosen < 0) {
       result.spilled[id] = true;
     } else {

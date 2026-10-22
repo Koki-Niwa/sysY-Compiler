@@ -194,6 +194,26 @@ int main() {
   check(spilledParsed && dump(*spilledParsed) == spilledText &&
             verify(*spilledParsed).empty(),
         "frame-based spill memory round-trips through dump/parse");
+  Allocation phiAlloc;
+  phiAlloc.spilled = {false, false, false, true};
+  SpillPlan phiPlan = planSpills(phiAlloc);
+  Function phiSpilled = diamond.functions[0];
+  size_t phiErrors = 0;
+  check(rewriteSpills(phiSpilled, phiPlan, &phiErrors) && phiErrors == 0,
+        "phi def spill rewrite succeeds");
+  Module phiModule;
+  phiModule.name = "phispill";
+  phiModule.functions.push_back(phiSpilled);
+  check(verify(phiModule).empty() && !phiSpilled.frameObjects.empty(),
+        "phi spill rewrite produces verified MIR with frame objects");
+  size_t phiLoads = 0, phiStores = 0;
+  for (const Block& block : phiSpilled.blocks)
+    for (const Instr& inst : block.instructions) {
+      if (inst.opcode == Opcode::Load) ++phiLoads;
+      if (inst.opcode == Opcode::Store) ++phiStores;
+    }
+  check(phiLoads > 0 && phiStores > 0,
+        "phi spill rewrite emits loads and a def store");
   Module rich;
   rich.name = "rich";
   Function rf;

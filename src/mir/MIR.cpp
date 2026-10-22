@@ -515,10 +515,55 @@ bool rewriteSpills(Function& function, const SpillPlan& plan,
     mem.size = size;
     return mem;
   };
+  // Phi operands are live on predecessor edges: load a spilled value in the
+  // predecessor before its terminator and replace the phi operand with the
+  // fresh load result.
+  for (Block& block : function.blocks) {
+    for (Instr& inst : block.instructions) {
+      if (inst.opcode != Opcode::Phi) continue;
+      for (size_t pair = 0; pair + 1 < inst.operands.size(); pair += 2) {
+        Operand& value = inst.operands[pair];
+        const Operand& edge = inst.operands[pair + 1];
+        if (value.kind != OperandKind::Reg || edge.kind != OperandKind::Block ||
+            value.reg.id == 0 ||
+            static_cast<size_t>(value.reg.id) >= plan.slot.size() ||
+            plan.slot[value.reg.id] < 0)
+          continue;
+        if (edge.index >= function.blocks.size()) return fail();
+        Block& predecessor = function.blocks[edge.index];
+        if (predecessor.instructions.empty()) return fail();
+        const uint32_t size = sizeOf(value.reg.type);
+        if (size == 0) return fail();
+        Instr load;
+        load.opcode = Opcode::Load;
+        load.def = Reg{nextReg++, value.reg.type, value.reg.cls};
+        load.mem = frameMem(static_cast<uint32_t>(plan.slot[value.reg.id]), size);
+        value.reg = *load.def;
+        predecessor.instructions.insert(predecessor.instructions.end() - 1,
+                                        std::move(load));
+      }
+    }
+  }
   for (Block& block : function.blocks) {
     std::vector<Instr> rewritten;
     for (Instr inst : block.instructions) {
-      if (inst.opcode == Opcode::Phi) return fail();
+      if (inst.opcode == Opcode::Phi) {
+        if (inst.def && inst.def->id != 0 &&
+            static_cast<size_t>(inst.def->id) < plan.slot.size() &&
+            plan.slot[inst.def->id] >= 0) {
+          const uint32_t size = sizeOf(inst.def->type);
+          if (size == 0) return fail();
+          rewritten.push_back(inst);
+          Instr store;
+          store.opcode = Opcode::Store;
+          store.operands.push_back(Operand::makeReg(*inst.def));
+          store.mem = frameMem(static_cast<uint32_t>(plan.slot[inst.def->id]), size);
+          rewritten.push_back(std::move(store));
+        } else {
+          rewritten.push_back(inst);
+        }
+        continue;
+      }
       auto emitLoad = [&](const Reg& original) -> std::optional<Reg> {
         if (original.id == 0 || static_cast<size_t>(original.id) >= plan.slot.size() ||
             plan.slot[original.id] < 0)
